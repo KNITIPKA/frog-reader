@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window theme shown before Compose takes over (splash + first frame).
+         All real theming happens in Compose (MaterialExpressiveTheme + dynamic color). -->
+    <style name="Theme.FrogReader" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:enableOnBackInvokedCallback">true</item>
+    </style>
+</resources>

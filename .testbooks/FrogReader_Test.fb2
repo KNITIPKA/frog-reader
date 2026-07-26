@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
+<description>
+  <title-info>
+    <genre>sf</genre>
+    <author><first-name>Тест</first-name><middle-name>Тестович</middle-name><last-name>Тестов</last-name></author>
+    <book-title>Пыточная камера вёрстки (FB2)</book-title>
+    <annotation><p>Каждый абзац этой книги описывает, как он должен выглядеть.</p></annotation>
+    <coverpage><image l:href="#cover.png"/></coverpage>
+    <lang>ru</lang>
+  </title-info>
+</description>
+<body>
+<title><p>Пыточная камера вёрстки</p><p>полное издание</p></title>
+<epigraph>
+<p>Этот эпиграф всей книги должен быть курсивом и сдвинут вправо.</p>
+<text-author>Автор Эпиграфа</text-author>
+</epigraph>
+
+<section>
+<title><p>Глава 1. Инлайн-стили</p></title>
+<p>Заголовок выше должен быть крупным, жирным и по центру. Этот абзац — обычный, с красной строки.</p>
+<p>Курсив: <emphasis>так выглядит emphasis</emphasis>. Жирный: <strong>так выглядит strong</strong>. Вместе: <strong><emphasis>жирный курсив</emphasis></strong>.</p>
+<p>Зачёркнутый: <strikethrough>этот текст зачёркнут</strikethrough>. Моноширинный: <code>code_example()</code>.</p>
+<p>Индексы: вода — H<sub>2</sub>O, а икс в квадрате — x<sup>2</sup>.</p>
+<p>Сноска номер один<a l:href="#n1" type="note">[1]</a> должна быть маленькой циферкой сверху, по ней можно тапнуть. И вторая<a l:href="#n2" type="note">[2]</a> тоже.</p>
+<p>Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. Это специально длинный абзац для проверки пагинации и переносов: он должен спокойно разрезаться на страницы, не теряя ни слова, и слова на границе страницы не должны обрубаться посередине. </p>
+</section>
+
+<section>
+<title><p>Глава 2. Блочные элементы</p></title>
+<epigraph>
+<p>Эпиграф главы: курсив, сдвинут вправо,</p>
+<p>из двух строк.</p>
+<text-author>Подпись у правого края</text-author>
+</epigraph>
+<p>Ниже цитата — она должна быть курсивом с отступом слева:</p>
+<cite>
+<p>Это текст цитаты. Он с отступом и курсивом.</p>
+<text-author>Автор Цитаты</text-author>
+</cite>
+<p>Ниже стихотворение — с отступом, построчно:</p>
+<poem>
+<title><p>Тестовый стих</p></title>
+<stanza>
+<v>Первая строка строфы,</v>
+<v>вторая строка строфы,</v>
+<v>третья — и хватит.</v>
+</stanza>
+<stanza>
+<v>Вторая строфа отделена</v>
+<v>от первой промежутком.</v>
+</stanza>
+<text-author>Поэт Поэтович</text-author>
+</poem>
+<subtitle>* * *</subtitle>
+<p>Подзаголовок выше («звёздочки») должен быть по центру и жирным. После этого абзаца идут ДВЕ пустые строки — между сценами должен быть заметный вертикальный зазор.</p>
+<empty-line/>
+<empty-line/>
+<p>Эта сцена начинается после пустых строк. Ниже картинка (оранжевая с полосками):</p>
+<image l:href="#pic.png"/>
+<p>Ниже таблица — она превращается в строки текста:</p>
+<table>
+<tr><td>Ячейка 1</td><td>Ячейка 2</td><td>Ячейка 3</td></tr>
+<tr><td>Второй ряд</td><td>тоже</td><td>виден</td></tr>
+</table>
+</section>
+
+<section>
+<title><p>Часть I. Вложенные секции</p></title>
+<epigraph><p>Эпиграф части — курсивом, справа.</p></epigraph>
+<section>
+<title><p>Глава 3</p><p>Двухстрочное название</p></title>
+<p>Эта глава вложена в «Часть I». В меню оглавления она должна называться «Часть I Глава 3» с названием, а её заголовок здесь — из двух строк.</p>
+<section><p>Это сцена без названия внутри главы 3 — просто текст, никакого заголовка.</p></section>
+</section>
+<section>
+<title><p>Глава 4. Обычная вложенная</p></title>
+<p>Вторая глава внутри части. Проверка, что главы из частей не слипаются.</p>
+</section>
+</section>
+
+<section>
+<title><p>Глава 5. Сломанные сущности</p></title>
+<p>Этот файл ломает XML: тут есть HTML-сущности&nbsp;&mdash; вот такие&hellip; И &laquo;кавычки-ёлочки&raquo; через сущности. Если ты это читаешь &mdash; починка битых файлов работает.</p>
+<p>А тут голый амперсанд: Тор & Локи. Строгий парсер на нём падает, ремонтный — нет.</p>
+</section>
+</body>
+
+<body name="notes">
+<section id="n1"><title><p>1</p></title><p>Это первая сноска. Она открывается снизу при тапе на циферку.</p><p>У неё даже два абзаца.</p></section>
+<section id="n2"><title><p>2</p></title><p>Вторая сноска, короткая.</p></section>
+</body>
+
+<binary id="cover.png" content-type="image/png">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</binary>
+<binary id="pic.png" content-type="image/png">iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAACbklEQVR4nO3cMQ3AMBAEwYcTiIEYEAaROpU5pLFWGmkAXLPtzXNfQNQcXwD8JmAIEzCECRjCBAxhAoYwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iAIUzAECZgCBMwhM33LiBKwBAmYAgTMIQJGMIEDGEChjABQ5iAIUzAECZgCBMwhAkYwgQMYQKGMAFDmIAhTMAQJmAIEzCEObWDMAFDmIAhTMAQJmAIEzCECRjCBAxhAoYwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iAIUzAEObUDsIEDGEChjABQ5iAIUzAECZgCBMwhAkYwgQMYQKGMAFDmIAhTMAQJmAIEzCECRjCBAxhAoYwAUOYUzsIEzCECRjCBAxhAoYwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iAIUzAECZgCBMwhAkYwgQMYU7tIEzAECZgCBMwhAkYwgQMYQKGMAFDmIAhTMAQJmAIEzCECRjCBAxhAoYwAUOYgCFMwBAmYAgTMIQ5tYMwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iAIUzAECZgCBMwhAkYwgQMYQKGMAFDmIAhTMAQ5tQOwgQMYQKGMAFDmIAhTMAQJmAIEzCECRjCBAxhAoYwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5hTOwgTMIQJGMIEDGEChjABQ5iAIUzAECZgCBMwhAkYwgQMYQKGMAFDmIAhTMAQJmAIEzCECRjCBAxhTu0gTMAQJmAIEzCECRjCBAxhAoYwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iAIUzAECZgCBMwhG1LaJSXB3XjbQAAAABJRU5ErkJggg==</binary>
+</FictionBook>

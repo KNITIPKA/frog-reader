@@ -1,0 +1,187 @@
+<resources>
+    <string name="app_name">Frog Reader</string>
+
+    <!-- Library screen -->
+    <string name="library_title">Library</string>
+    <string name="library_empty_title">No books yet</string>
+    <string name="library_empty_subtitle">Add your first EPUB, FB2 or MOBI book and it will appear here.</string>
+    <string name="library_add_book">Add book</string>
+    <string name="library_importing">Adding…</string>
+    <string name="library_imported">“%1$s” added to your library</string>
+    <string name="library_import_failed">Couldn\'t add this book. It may be damaged or not an EPUB, FB2 or MOBI file.</string>
+    <string name="library_import_failed_drm">This book is copy-protected (DRM) and can\'t be opened.</string>
+    <string name="library_delete_title">Remove book?</string>
+    <string name="library_delete_message">“%1$s” and its reading progress will be removed.</string>
+    <string name="library_delete_confirm">Remove</string>
+    <string name="library_delete_cancel">Cancel</string>
+    <string name="library_book_cover">Cover of “%1$s”</string>
+
+    <!-- Reader screen -->
+    <string name="reader_error_title">Couldn\'t open this book</string>
+    <string name="reader_error_message">The file may be damaged or missing.</string>
+    <string name="reader_back">Back</string>
+    <string name="reader_contents">Contents</string>
+    <string name="reader_settings">Reading settings</string>
+    <string name="reader_chapter_n">Chapter %1$d</string>
+    <string name="reader_font_size">Font size</string>
+    <string name="reader_line_height">Line spacing</string>
+    <string name="reader_font">Font</string>
+    <string name="reader_font_literata">Literata</string>
+    <string name="reader_font_serif">Serif</string>
+    <string name="reader_font_sans">Sans</string>
+    <string name="reader_theme">Background</string>
+    <string name="reader_justify">Justify text</string>
+    <string name="reader_mode">Reading mode</string>
+    <string name="reader_mode_scroll">Scroll</string>
+    <string name="reader_mode_pages">Pages</string>
+    <string name="reader_hyphenation">Hyphenation</string>
+    <string name="reader_page_of">Page %1$d of %2$d</string>
+    <string name="reader_bookmark">Bookmark</string>
+    <string name="reader_bookmarks">Bookmarks</string>
+    <string name="reader_quotes">Quotes</string>
+    <string name="reader_bookmarks_empty">No bookmarks yet. Tap “Bookmark this page” above to save your place.</string>
+    <string name="reader_bookmark_here">Bookmark this page</string>
+    <string name="reader_bookmark_remove_here">Remove bookmark from this page</string>
+    <string name="reader_search">Search</string>
+    <string name="reader_search_placeholder">Words or page number</string>
+    <string name="reader_search_hint">Search the whole book —\ntype a few letters, a phrase\nor a page number</string>
+    <string name="reader_search_matches">%1$d matches</string>
+    <string name="reader_search_one_match">1 match</string>
+    <string name="reader_search_truncated">showing first %1$d</string>
+    <string name="reader_search_empty">Nothing found for “%1$s”</string>
+    <string name="reader_search_go_to_page">Go to page %1$d</string>
+    <string name="reader_search_of_pages">of %1$d in this book</string>
+    <string name="reader_search_pages_range">This book has %1$d pages</string>
+    <string name="reader_search_clear">Clear</string>
+    <string name="reader_quotes_empty">No quotes yet. Long-press text while reading, then choose “Quote”.</string>
+    <string name="reader_remove">Remove</string>
+    <string name="reader_note_title">Note</string>
+    <string name="reader_hide_footnotes">Hide footnotes</string>
+    <string name="reader_hide_footnotes_subtitle">Remove [1]-style markers from the text</string>
+    <string name="reader_section_book_design">Book design</string>
+    <string name="reader_set_by_book">Set by the book</string>
+    <string name="reader_font_from_book">Publisher\'s formatting</string>
+    <string name="reader_fonts_in_book">Fonts inside this book</string>
+    <string name="reader_drop_caps">Decorated initials</string>
+    <string name="reader_drop_caps_subtitle">Large opening letters where the book draws them</string>
+    <string name="reader_invert_images">Auto-invert pictures</string>
+    <string name="reader_invert_images_subtitle">Invert scans automatically in the dark theme</string>
+    <string name="reader_book_styles">Publisher\'s formatting</string>
+    <string name="reader_book_styles_subtitle">Fonts, alignment and spacing as designed in the book</string>
+    <string name="selection_copy">Copy</string>
+    <string name="selection_quote">Quote</string>
+    <string name="selection_select_all">Select all</string>
+
+    <!-- Book details -->
+    <string name="details_menu">Details</string>
+    <string name="details_series">Series</string>
+    <string name="details_genres">Genres</string>
+    <string name="details_translators">Translated by</string>
+    <string name="details_publisher">Publisher</string>
+    <string name="details_year">Year</string>
+    <string name="details_isbn">ISBN</string>
+    <string name="details_language">Language</string>
+    <string name="details_format">Format</string>
+    <string name="details_added">Added</string>
+    <string name="details_time_read">Time read</string>
+    <string name="details_time_hm">%1$d h %2$d min</string>
+    <string name="details_time_m">%1$d min</string>
+    <string name="details_description">Annotation</string>
+
+    <!-- Edit book -->
+    <string name="library_menu_edit">Edit</string>
+    <string name="edit_book_title">Edit book</string>
+    <string name="edit_field_title">Title</string>
+    <string name="edit_field_author">Author</string>
+    <string name="edit_change_cover">Change cover</string>
+    <string name="edit_save">Save</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_version">Version %1$s</string>
+    <string name="settings_section_appearance">Appearance</string>
+    <string name="settings_app_theme">App theme</string>
+    <string name="selection_translate">Translate</string>
+    <string name="reader_track_chapter">Chapter</string>
+    <string name="reader_track_book">Book</string>
+    <string name="reader_percent_left">left</string>
+    <string name="reader_theme_light">Light</string>
+    <string name="reader_theme_beige">Beige</string>
+    <string name="reader_theme_dark">Dark</string>
+    <string name="reader_brightness">Brightness</string>
+    <string name="reader_brightness_auto">Auto</string>
+    <string name="reader_font_size_pt">%1$d pt</string>
+    <string name="reader_section_page_anim">Page-turn animation</string>
+    <string name="reader_font_custom">Custom</string>
+    <string name="reader_fonts_title">Custom fonts</string>
+    <string name="reader_font_add">Add font</string>
+    <string name="reader_font_delete">Delete</string>
+    <string name="reader_fonts_empty">Fonts you add will appear here and stay available for every book.</string>
+    <string name="reader_section_text_layout">Text &amp; layout</string>
+    <string name="reader_section_pages_nav">Pages &amp; navigation</string>
+    <string name="reader_section_device">Device</string>
+    <string name="reader_section_margins">Side margins</string>
+    <string name="reader_margins_narrow">Narrow</string>
+    <string name="reader_margins_normal">Normal</string>
+    <string name="reader_margins_wide">Wide</string>
+    <string name="reader_anim_slide">Slide</string>
+    <string name="reader_anim_cascade">Cascade</string>
+    <string name="reader_anim_curl">Page curl</string>
+    <string name="reader_section_reading">Reading</string>
+    <string name="reader_section_screen">Screen &amp; controls</string>
+    <string name="reader_haptics">Haptic feedback</string>
+    <string name="reader_volume_keys">Turn pages with volume keys</string>
+    <string name="settings_theme_white">White</string>
+    <string name="settings_theme_beige">Beige</string>
+    <string name="settings_theme_oled">OLED</string>
+    <string name="settings_section_reading">Reading</string>
+    <string name="settings_keep_screen_on">Keep screen on</string>
+    <string name="settings_keep_screen_on_subtitle">The screen won\'t dim while you read</string>
+    <string name="settings_volume_keys">Volume-key page turning</string>
+    <string name="settings_volume_keys_subtitle">Volume down — next page, volume up — previous</string>
+    <string name="settings_section_feedback">Feedback</string>
+    <string name="settings_haptics">Vibration</string>
+    <string name="settings_haptics_subtitle">Gentle haptic feedback across the app</string>
+    <string name="settings_section_privacy">Privacy</string>
+
+    <!-- Reader: chapter pages / completion -->
+    <string name="reader_chapter_new_page">Chapters start on a new page</string>
+    <string name="reader_show_chapter_pages">Count pages within chapter</string>
+    <string name="reader_chapter_pages_left">%1$d pages left in chapter</string>
+    <string name="reader_chapter_last_page">Last page of the chapter</string>
+    <string name="completion_title">Book finished! 🎉</string>
+    <string name="completion_started">Started on %1$s</string>
+    <string name="completion_days">It took you %1$d days</string>
+    <string name="completion_one_day">Finished in a single day</string>
+    <string name="completion_time">Total reading time: %1$s</string>
+    <string name="duration_h_m">%1$d h %2$d min</string>
+    <string name="duration_m">%1$d min</string>
+    <string name="duration_less_min">less than a minute</string>
+
+    <!-- Stats screen -->
+    <string name="stats_title">Reading</string>
+    <string name="stats_of_goal">of %1$d min goal</string>
+    <string name="stats_streak">%1$d-day streak</string>
+    <string name="stats_streak_one">1-day streak</string>
+    <string name="stats_streak_hint">Days with at least %1$d minutes of reading</string>
+    <string name="stats_goal_label">Daily goal</string>
+    <string name="stats_goal_minutes">%1$d min</string>
+    <string name="stats_last_days">Last 14 days</string>
+    <string name="stats_total_time">Total reading time</string>
+    <string name="stats_books_finished">Books finished</string>
+
+    <!-- App settings / lock -->
+    <string name="library_app_settings">App settings</string>
+    <string name="app_lock_title">Lock app with fingerprint</string>
+    <string name="app_lock_subtitle">Require unlock every time you open the app</string>
+    <string name="app_lock_unavailable">Set up a fingerprint or screen lock on this device first</string>
+    <string name="lock_prompt_title">Unlock Frog Reader</string>
+    <string name="lock_locked_title">Frog Reader is locked</string>
+    <string name="lock_unlock">Unlock</string>
+
+    <!-- Widget -->
+    <string name="widget_label">Continue reading</string>
+    <string name="widget_description">Jump back into your current book</string>
+    <string name="widget_empty">No books yet — tap to open Frog Reader</string>
+    <string name="widget_percent">%1$d%% read</string>
+</resources>

@@ -1,0 +1,11 @@
+# Add project specific R8 rules here.
+# AGP will combine all keep rule files in src/main/keepRules to pass to R8
+#
+# For more details, see
+#   https://d.android.com/r/tools/r8/keep-rules
+
+# Room (used by WorkManager, which Glance widgets depend on) instantiates its
+# generated *_Impl database classes reflectively.
+-keep class * extends androidx.room.RoomDatabase {
+    <init>();
+}
