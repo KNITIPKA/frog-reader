@@ -1,13 +1,19 @@
 package com.example.frogreader
 
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContract
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.Spring
@@ -16,6 +22,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,11 +34,18 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -38,25 +53,45 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.example.frogreader.data.AppTheme
 import com.example.frogreader.ui.library.LibraryScreen
 import com.example.frogreader.ui.lock.LockScreen
 import com.example.frogreader.ui.lock.LockViewModel
+import com.example.frogreader.ui.nav.FloatingNavBar
 import com.example.frogreader.ui.nav.LibraryRoute
 import com.example.frogreader.ui.nav.LocalNavAnimatedVisibilityScope
 import com.example.frogreader.ui.nav.LocalSharedTransitionScope
+import com.example.frogreader.ui.nav.NavTab
 import com.example.frogreader.ui.nav.ReaderRoute
 import com.example.frogreader.ui.nav.SettingsRoute
 import com.example.frogreader.ui.nav.StatsRoute
+import com.example.frogreader.ui.nav.TrackerRoute
 import com.example.frogreader.ui.reader.ReaderScreen
 import com.example.frogreader.ui.settings.SettingsScreen
 import com.example.frogreader.ui.stats.StatsScreen
 import com.example.frogreader.ui.theme.FrogReaderTheme
 import com.example.frogreader.ui.theme.isDark
-import androidx.core.view.WindowCompat
+import com.example.frogreader.ui.tracker.TrackerScreen
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+
+private class OpenSupportedBooksContract : ActivityResultContract<Array<String>, Uri?>() {
+    override fun createIntent(context: Context, input: Array<String>): Intent {
+        return Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, input)
+        }
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
+        return if (resultCode == Activity.RESULT_OK) intent?.data else null
+    }
+}
 
 /** Swallows all haptics when vibration is disabled in the app settings. */
 private object NoOpHapticFeedback : HapticFeedback {
@@ -163,62 +198,196 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 HandleIncomingIntents(navController)
 
+                val currentBackStackEntry by navController.currentBackStackEntryAsState()
+                val currentRoute = currentBackStackEntry?.destination?.route
+
+                val isTopLevelRoute = currentRoute?.contains("LibraryRoute") == true ||
+                    currentRoute?.contains("TrackerRoute") == true
+
                 val springSpec = spring<Float>(
                     dampingRatio = Spring.DampingRatioLowBouncy,
                     stiffness = Spring.StiffnessMediumLow,
                 )
-                NavHost(
-                    navController = navController,
-                    startDestination = LibraryRoute,
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    NavHost(
+                        navController = navController,
+                        startDestination = LibraryRoute,
                     enterTransition = {
-                        fadeIn(springSpec) + scaleIn(
-                            initialScale = 0.92f,
-                            animationSpec = springSpec,
-                            transformOrigin = TransformOrigin.Center,
-                        )
+                        val initial = initialState.destination.route
+                        val target = targetState.destination.route
+                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("TrackerRoute") == true) &&
+                            (target?.contains("LibraryRoute") == true || target?.contains("TrackerRoute") == true)
+
+                        if (isTabTransition) {
+                            val goingRight = target?.contains("TrackerRoute") == true
+                            slideInHorizontally(
+                                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                                initialOffsetX = { width -> if (goingRight) width else -width },
+                            ) + fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+                        } else {
+                            fadeIn(springSpec) + scaleIn(
+                                initialScale = 0.92f,
+                                animationSpec = springSpec,
+                                transformOrigin = TransformOrigin.Center,
+                            )
+                        }
                     },
-                    exitTransition = { fadeOut(springSpec) },
-                    popEnterTransition = { fadeIn(springSpec) },
+                    exitTransition = {
+                        val initial = initialState.destination.route
+                        val target = targetState.destination.route
+                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("TrackerRoute") == true) &&
+                            (target?.contains("LibraryRoute") == true || target?.contains("TrackerRoute") == true)
+
+                        if (isTabTransition) {
+                            val goingRight = target?.contains("TrackerRoute") == true
+                            slideOutHorizontally(
+                                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                                targetOffsetX = { width -> if (goingRight) -width else width },
+                            ) + fadeOut(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+                        } else {
+                            fadeOut(springSpec)
+                        }
+                    },
+                    popEnterTransition = {
+                        val initial = initialState.destination.route
+                        val target = targetState.destination.route
+                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("TrackerRoute") == true) &&
+                            (target?.contains("LibraryRoute") == true || target?.contains("TrackerRoute") == true)
+
+                        if (isTabTransition) {
+                            val goingRight = target?.contains("TrackerRoute") == true
+                            slideInHorizontally(
+                                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                                initialOffsetX = { width -> if (goingRight) width else -width },
+                            ) + fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+                        } else {
+                            fadeIn(springSpec)
+                        }
+                    },
                     popExitTransition = {
-                        fadeOut(springSpec) + scaleOut(
-                            targetScale = 0.94f,
-                            animationSpec = springSpec,
-                        )
+                        val initial = initialState.destination.route
+                        val target = targetState.destination.route
+                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("TrackerRoute") == true) &&
+                            (target?.contains("LibraryRoute") == true || target?.contains("TrackerRoute") == true)
+
+                        if (isTabTransition) {
+                            val goingRight = target?.contains("TrackerRoute") == true
+                            slideOutHorizontally(
+                                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                                targetOffsetX = { width -> if (goingRight) -width else width },
+                            ) + fadeOut(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+                        } else {
+                            fadeOut(springSpec) + scaleOut(
+                                targetScale = 0.94f,
+                                animationSpec = springSpec,
+                            )
+                        }
                     },
-                ) {
-                    composable<LibraryRoute> {
-                        CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
-                            LibraryScreen(
-                                onOpenBook = { book ->
-                                    navController.navigate(ReaderRoute(book.id))
-                                },
-                                onOpenSettings = { navController.navigate(SettingsRoute) },
-                                onOpenStats = { navController.navigate(StatsRoute) },
-                            )
+                    ) {
+                        composable<LibraryRoute> {
+                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+                                LibraryScreen(
+                                    onOpenBook = { book ->
+                                        navController.navigate(ReaderRoute(book.id))
+                                    },
+                                    onOpenSettings = { navController.navigate(SettingsRoute) },
+                                    onOpenStats = { navController.navigate(StatsRoute) },
+                                )
+                            }
+                        }
+
+                        composable<TrackerRoute> {
+                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+                                TrackerScreen(
+                                    onOpenSettings = { navController.navigate(SettingsRoute) },
+                                    onOpenStats = { navController.navigate(StatsRoute) },
+                                )
+                            }
+                        }
+
+                        composable<ReaderRoute> { entry ->
+                            val route = entry.toRoute<ReaderRoute>()
+                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+                                ReaderScreen(
+                                    bookId = route.bookId,
+                                    onBack = { navController.popBackStack() },
+                                )
+                            }
+                        }
+
+                        composable<SettingsRoute> {
+                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+                                SettingsScreen(onBack = { navController.popBackStack() })
+                            }
+                        }
+
+                        composable<StatsRoute> {
+                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+                                StatsScreen(onBack = { navController.popBackStack() })
+                            }
                         }
                     }
 
-                    composable<ReaderRoute> { entry ->
-                        val route = entry.toRoute<ReaderRoute>()
-                        CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
-                            ReaderScreen(
-                                bookId = route.bookId,
-                                onBack = { navController.popBackStack() },
-                            )
-                        }
-                    }
+                val context = LocalContext.current
+                val scope = rememberCoroutineScope()
+                var isImportingBook by remember { mutableStateOf(false) }
+                var showImportSheet by remember { mutableStateOf(false) }
 
-                    composable<SettingsRoute> {
-                        CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
-                            SettingsScreen(onBack = { navController.popBackStack() })
+                val filePicker = rememberLauncherForActivityResult(
+                    OpenSupportedBooksContract(),
+                ) { uri ->
+                    if (uri != null) {
+                        val app = context.applicationContext as FrogReaderApp
+                        scope.launch {
+                            isImportingBook = true
+                            runCatching { app.bookRepository.importBook(uri) }
+                            isImportingBook = false
                         }
                     }
+                }
 
-                    composable<StatsRoute> {
-                        CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
-                            StatsScreen(onBack = { navController.popBackStack() })
-                        }
+                if (showImportSheet) {
+                    com.example.frogreader.ui.library.ImportBookSheet(
+                        onDismiss = { showImportSheet = false },
+                        onImportUri = { uri ->
+                            val app = context.applicationContext as FrogReaderApp
+                            scope.launch {
+                                isImportingBook = true
+                                runCatching { app.bookRepository.importBook(uri) }
+                                isImportingBook = false
+                            }
+                        },
+                        onOpenSystemPicker = {
+                            if (!isImportingBook) filePicker.launch(com.example.frogreader.data.parser.BookParsers.SUPPORTED_MIME_TYPES)
+                        },
+                    )
+                }
+
+                if (isTopLevelRoute) {
+                    val selectedTab = if (currentRoute?.contains("TrackerRoute") == true) {
+                        NavTab.TRACKER
+                    } else {
+                        NavTab.LIBRARY
                     }
+                    FloatingNavBar(
+                        selectedTab = selectedTab,
+                        onTabSelected = { tab ->
+                            val targetRoute: Any = when (tab) {
+                                NavTab.LIBRARY -> LibraryRoute
+                                NavTab.TRACKER -> TrackerRoute
+                            }
+                            navController.navigate(targetRoute) {
+                                popUpTo(LibraryRoute) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        onAddBook = { showImportSheet = true },
+                        importing = isImportingBook,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    )
+                }
                 }
             }
         }

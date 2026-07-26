@@ -26,6 +26,10 @@ enum class PageTurnAnimation { SLIDE, CASCADE, PAGE_CURL }
 /** One theme for the whole app (every screen and the reading surface). */
 enum class AppTheme { WHITE, SEPIA, OLED }
 
+/** Library card grid or list view mode. */
+@kotlinx.serialization.Serializable
+enum class LibraryViewMode { GRID, LIST }
+
 /** Settings of the reading surface (font, layout, mode). */
 @kotlinx.serialization.Serializable
 data class ReaderSettings(
@@ -76,6 +80,7 @@ data class AppSettings(
     val autoInvertImages: Boolean = true,
     /** Daily reading goal in minutes (for the stats screen). */
     val dailyGoalMinutes: Int = 30,
+    val viewMode: LibraryViewMode = LibraryViewMode.GRID,
 )
 
 private val Context.settingsDataStore by preferencesDataStore(name = "reader_settings")
@@ -108,6 +113,7 @@ class SettingsRepository(private val context: Context) {
         val appLock = booleanPreferencesKey("app_lock")
         val autoInvertImages = booleanPreferencesKey("auto_invert_images")
         val dailyGoal = androidx.datastore.preferences.core.intPreferencesKey("daily_goal_minutes")
+        val libraryViewMode = stringPreferencesKey("library_view_mode")
     }
 
     val settings: Flow<ReaderSettings> =
@@ -115,6 +121,15 @@ class SettingsRepository(private val context: Context) {
 
     val appSettings: Flow<AppSettings> =
         context.settingsDataStore.data.map { it.readAppSettings() }
+
+    val libraryViewMode: Flow<LibraryViewMode> =
+        context.settingsDataStore.data.map { prefs ->
+            enumOrDefault(prefs[Keys.libraryViewMode], LibraryViewMode.GRID)
+        }
+
+    suspend fun setLibraryViewMode(mode: LibraryViewMode) {
+        updateApp { it.copy(viewMode = mode) }
+    }
 
     suspend fun update(transform: (ReaderSettings) -> ReaderSettings) {
         context.settingsDataStore.edit { prefs ->
@@ -149,6 +164,7 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.appLock] = updated.appLock
             prefs[Keys.autoInvertImages] = updated.autoInvertImages
             prefs[Keys.dailyGoal] = updated.dailyGoalMinutes
+            prefs[Keys.libraryViewMode] = updated.viewMode.name
         }
     }
 
@@ -186,6 +202,7 @@ class SettingsRepository(private val context: Context) {
             appLock = this[Keys.appLock] ?: defaults.appLock,
             autoInvertImages = this[Keys.autoInvertImages] ?: defaults.autoInvertImages,
             dailyGoalMinutes = this[Keys.dailyGoal] ?: defaults.dailyGoalMinutes,
+            viewMode = enumOrDefault(this[Keys.libraryViewMode], defaults.viewMode),
         )
     }
 

@@ -17,6 +17,9 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import java.io.File
 
+import com.example.frogreader.data.LibraryViewMode
+import com.example.frogreader.data.SettingsRepository
+
 sealed interface LibraryMessage {
     data class Imported(val title: String) : LibraryMessage
     data object ImportFailed : LibraryMessage
@@ -25,14 +28,40 @@ sealed interface LibraryMessage {
 
 class LibraryViewModel(
     private val repository: BookRepository,
+    private val settingsRepository: SettingsRepository? = null,
 ) : ViewModel() {
 
     val books: StateFlow<List<Book>> = repository.books
+
+    private val _viewMode = MutableStateFlow(LibraryViewMode.GRID)
+    val viewMode: StateFlow<LibraryViewMode> = _viewMode.asStateFlow()
+
+    fun setViewMode(mode: LibraryViewMode) {
+        _viewMode.value = mode
+        settingsRepository?.let { settings ->
+            viewModelScope.launch {
+                runCatching { settings.setLibraryViewMode(mode) }
+            }
+        }
+    }
+
+    fun toggleViewMode() {
+        setViewMode(if (_viewMode.value == LibraryViewMode.GRID) LibraryViewMode.LIST else LibraryViewMode.GRID)
+    }
 
     init {
         // One background sweep per app start (the library screen is the
         // entry point): drop caches orphaned by failed imports.
         viewModelScope.launch { runCatching { repository.cleanOrphanCaches() } }
+        if (settingsRepository != null) {
+            viewModelScope.launch {
+                runCatching {
+                    settingsRepository.libraryViewMode.collect { mode ->
+                        _viewMode.value = mode
+                    }
+                }
+            }
+        }
     }
 
     fun updateBookDetails(bookId: String, title: String, author: String?, newCoverUri: Uri?) {
@@ -76,7 +105,7 @@ class LibraryViewModel(
         val Factory = viewModelFactory {
             initializer {
                 val app = this[APPLICATION_KEY] as FrogReaderApp
-                LibraryViewModel(app.bookRepository)
+                LibraryViewModel(app.bookRepository, app.settingsRepository)
             }
         }
     }

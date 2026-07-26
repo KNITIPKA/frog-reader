@@ -16,3 +16,8 @@ local.properties
 .idea/
 .artifacts/
 .claude/
+.agents/
+.kotlin/
+PROJECT.md
+TEST_INFRA.md
+TEST_READY.md

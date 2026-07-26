@@ -6,6 +6,9 @@ import kotlinx.serialization.Serializable
 data object LibraryRoute
 
 @Serializable
+data object TrackerRoute
+
+@Serializable
 data class ReaderRoute(val bookId: String)
 
 @Serializable

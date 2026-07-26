@@ -76,6 +76,9 @@ dependencies {
     // Real XML pull parser for JVM unit tests (Android provides its own at runtime).
     testImplementation(libs.kxml2)
     testImplementation(libs.xmlpull)
+    testImplementation("org.mockito:mockito-core:5.11.0")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }

@@ -15,6 +15,9 @@
     <string name="library_delete_confirm">Remove</string>
     <string name="library_delete_cancel">Cancel</string>
     <string name="library_book_cover">Cover of “%1$s”</string>
+    <string name="library_continue_reading">Continue Reading</string>
+    <string name="view_mode_grid">Grid view</string>
+    <string name="view_mode_list">List view</string>
 
     <!-- Reader screen -->
     <string name="reader_error_title">Couldn\'t open this book</string>
@@ -184,4 +187,27 @@
     <string name="widget_description">Jump back into your current book</string>
     <string name="widget_empty">No books yet — tap to open Frog Reader</string>
     <string name="widget_percent">%1$d%% read</string>
+
+    <!-- Navigation & Tracker -->
+    <string name="nav_library">Library</string>
+    <string name="nav_tracker">Book Tracker</string>
+    <string name="tracker_title">Book Tracker</string>
+    <string name="tracker_empty_title">Book Tracker</string>
+    <string name="tracker_empty_subtitle">Track your reading goals, reading lists, and progress here. Coming soon!</string>
+
+    <!-- Import books screen -->
+    <string name="import_title">Add books</string>
+    <string name="import_scanning">Scanning books…</string>
+    <string name="import_found_count">Books found on device: %1$d</string>
+    <string name="import_found_in_folders">Books in selected folders: %1$d</string>
+    <string name="import_button_folder">+ Folder</string>
+    <string name="import_button_explorer">Explorer</string>
+    <string name="import_search_placeholder">Search title or author…</string>
+    <string name="import_empty_title">No new books found on device</string>
+    <string name="import_empty_subtitle">Tap "+ Folder" above to select a folder with books</string>
+    <string name="import_empty_search">No matching books found</string>
+    <string name="import_select_folder">Select books folder</string>
+    <string name="import_add_book">Add</string>
+    <string name="import_author_unknown">Author unknown</string>
+    <string name="import_remove_folder">Remove folder</string>
 </resources>

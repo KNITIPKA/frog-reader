@@ -13,6 +13,18 @@ import java.util.zip.ZipFile
 /** Entry point: format detection, storage normalization and parser dispatch. */
 object BookParsers {
 
+    /** Exact MIME types for supported book formats (EPUB, FB2, MOBI). */
+    val SUPPORTED_MIME_TYPES = arrayOf(
+        "application/epub+zip",
+        "application/x-fictionbook+xml",
+        "application/x-fictionbook",
+        "application/x-mobipocket-ebook",
+        "application/x-mobi",
+        "application/vnd.amazon.mobi8-ebook",
+        "application/xml",
+        "text/xml",
+    )
+
     /**
      * Detects the format of a freshly copied file and moves it into [targetDir]
      * under a normalized name. Zipped FB2 files (`.fb2.zip`) are unpacked so the

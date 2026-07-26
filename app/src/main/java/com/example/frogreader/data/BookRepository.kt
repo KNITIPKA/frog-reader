@@ -14,6 +14,7 @@ import com.example.frogreader.data.parser.BookParsers
 import com.example.frogreader.widget.ContinueReadingWidget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -27,7 +28,7 @@ import java.util.UUID
  * Owns the library: imported book files, extracted covers/images and the JSON
  * index in the app's private storage. All heavy work runs on Dispatchers.IO.
  */
-class BookRepository(private val context: Context) {
+open class BookRepository(private val context: Context? = null) {
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -35,23 +36,24 @@ class BookRepository(private val context: Context) {
         encodeDefaults = true
     }
 
-    private val indexFile = File(context.filesDir, "library.json")
-    private val booksDir = File(context.filesDir, "books")
-    private val coversDir = File(context.filesDir, "covers")
-    private val imagesDir = File(context.filesDir, "images")
+    private val indexFile by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "library.json") }
+    private val booksDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "books") }
+    private val coversDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "covers") }
+    private val imagesDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "images") }
 
     private val indexMutex = Mutex()
-    private val _books = MutableStateFlow(readIndex())
-    val books = _books.asStateFlow()
+    private val _books by lazy { MutableStateFlow(readIndex()) }
+    open val books: StateFlow<List<Book>> get() = _books.asStateFlow()
 
-    fun coverFileFor(book: Book): File? =
+    open fun coverFileFor(book: Book): File? =
         book.coverFileName?.let { File(coversDir, it) }?.takeIf { it.exists() }
 
-    suspend fun importBook(uri: Uri): Book = withContext(Dispatchers.IO) {
+    open suspend fun importBook(uri: Uri): Book = withContext(Dispatchers.IO) {
+        val c = context ?: throw IOException("Cannot open the selected file")
         val id = UUID.randomUUID().toString()
-        val temp = File.createTempFile("import-", null, context.cacheDir)
+        val temp = File.createTempFile("import-", null, c.cacheDir)
         try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
+            c.contentResolver.openInputStream(uri)?.use { input ->
                 temp.outputStream().use { input.copyTo(it) }
             } ?: throw IOException("Cannot open the selected file")
 
@@ -99,27 +101,34 @@ class BookRepository(private val context: Context) {
         }
     }
 
-    suspend fun deleteBook(bookId: String) = withContext(Dispatchers.IO) {
+    open suspend fun deleteBook(bookId: String) = withContext(Dispatchers.IO) {
         val book = _books.value.firstOrNull { it.id == bookId } ?: return@withContext
         updateIndex { books -> books.filterNot { it.id == bookId } }
         File(booksDir, book.fileName).delete()
         book.coverFileName?.let { File(coversDir, it).delete() }
         File(imagesDir, book.id).deleteRecursively()
-        File(File(context.filesDir, "pagination"), "$bookId.json").delete()
+        val c = context
+        if (c != null) {
+            File(File(c.filesDir, "pagination"), "$bookId.json").delete()
+        }
     }
 
-    suspend fun loadContent(book: Book): BookContent = withContext(Dispatchers.IO) {
+    open suspend fun loadContent(book: Book): BookContent = withContext(Dispatchers.IO) {
         val file = File(booksDir, book.fileName)
         if (!file.exists()) throw IOException("Book file is missing")
         BookParsers.parseContent(file, book.format, File(imagesDir, book.id))
     }
 
-    /** Stamps the first-opened time once. */
-    suspend fun markStarted(bookId: String) {
+    /** Stamps the first-opened time once and updates lastOpenedAtMillis. */
+    open suspend fun markStarted(bookId: String) {
+        val now = System.currentTimeMillis()
         updateIndex { books ->
             books.map { book ->
-                if (book.id == bookId && book.startedAtMillis == null) {
-                    book.copy(startedAtMillis = System.currentTimeMillis())
+                if (book.id == bookId) {
+                    book.copy(
+                        startedAtMillis = book.startedAtMillis ?: now,
+                        lastOpenedAtMillis = now,
+                    )
                 } else {
                     book
                 }
@@ -128,7 +137,7 @@ class BookRepository(private val context: Context) {
     }
 
     /** Stamps the finished time once (reader reached the end). */
-    suspend fun markFinished(bookId: String) {
+    open suspend fun markFinished(bookId: String) {
         updateIndex { books ->
             books.map { book ->
                 if (book.id == bookId && book.finishedAtMillis == null) {
@@ -140,7 +149,7 @@ class BookRepository(private val context: Context) {
         }
     }
 
-    suspend fun addReadingSeconds(bookId: String, seconds: Long) {
+    open suspend fun addReadingSeconds(bookId: String, seconds: Long) {
         if (seconds <= 0) return
         updateIndex { books ->
             books.map { book ->
@@ -154,13 +163,13 @@ class BookRepository(private val context: Context) {
     }
 
     /** Stores the book's own reading settings (see Book.readerSettings). */
-    suspend fun saveReaderSettings(bookId: String, settings: ReaderSettings) {
+    open suspend fun saveReaderSettings(bookId: String, settings: ReaderSettings) {
         updateIndex { books ->
             books.map { if (it.id == bookId) it.copy(readerSettings = settings) else it }
         }
     }
 
-    suspend fun saveProgress(bookId: String, progress: ReadingProgress) {
+    open suspend fun saveProgress(bookId: String, progress: ReadingProgress) {
         updateIndex { books ->
             books.map { book ->
                 if (book.id == bookId) {
@@ -172,7 +181,7 @@ class BookRepository(private val context: Context) {
         }
     }
 
-    fun bookById(bookId: String): Book? = _books.value.firstOrNull { it.id == bookId }
+    open fun bookById(bookId: String): Book? = _books.value.firstOrNull { it.id == bookId }
 
     /**
      * Deletes per-book caches whose book no longer exists (leftovers of
@@ -180,7 +189,7 @@ class BookRepository(private val context: Context) {
      * are derived data, re-created on the next open. books/ and covers/ are
      * originals and are never touched.
      */
-    suspend fun cleanOrphanCaches() = withContext(Dispatchers.IO) {
+    open suspend fun cleanOrphanCaches() = withContext(Dispatchers.IO) {
         // A corrupt library.json reads as an empty list — don't wipe the
         // (regenerable, but expensive) caches on that failure mode.
         if (indexFile.exists() && _books.value.isEmpty()) return@withContext
@@ -188,23 +197,28 @@ class BookRepository(private val context: Context) {
         imagesDir.listFiles()?.forEach { dir ->
             if (dir.isDirectory && dir.name !in ids) dir.deleteRecursively()
         }
-        File(context.filesDir, "pagination").listFiles()?.forEach { file ->
-            if (file.extension == "json" && file.nameWithoutExtension !in ids) file.delete()
+        val c = context
+        if (c != null) {
+            File(c.filesDir, "pagination").listFiles()?.forEach { file ->
+                if (file.extension == "json" && file.nameWithoutExtension !in ids) file.delete()
+            }
         }
     }
 
     /** Updates title/author and optionally replaces the cover with [newCoverUri]. */
-    suspend fun updateBookDetails(
+    open suspend fun updateBookDetails(
         bookId: String,
         title: String,
         author: String?,
         newCoverUri: Uri?,
     ) = withContext(Dispatchers.IO) {
+        val c = context
         val newCoverFileName = newCoverUri?.let { uri ->
+            if (c == null) throw IOException("Cannot read the selected image")
             coversDir.mkdirs()
             // A fresh file name each time so image caches don't show stale art.
             val name = "$bookId-${System.currentTimeMillis()}.img"
-            context.contentResolver.openInputStream(uri)?.use { input ->
+            c.contentResolver.openInputStream(uri)?.use { input ->
                 File(coversDir, name).outputStream().use { input.copyTo(it) }
             } ?: throw IOException("Cannot read the selected image")
             name
@@ -272,6 +286,7 @@ class BookRepository(private val context: Context) {
     private fun readIndex(): List<Book> = runCatching {
         if (indexFile.exists()) {
             json.decodeFromString<LibraryIndex>(indexFile.readText()).books
+                .sortedByDescending { it.lastOpenedAtMillis ?: it.addedAtMillis }
         } else {
             emptyList()
         }
@@ -281,15 +296,16 @@ class BookRepository(private val context: Context) {
         withContext(Dispatchers.IO) {
             indexMutex.withLock {
                 val updated = transform(_books.value)
+                    .sortedByDescending { it.lastOpenedAtMillis ?: it.addedAtMillis }
                 _books.value = updated
                 indexFile.writeText(json.encodeToString(LibraryIndex(updated)))
             }
             // Keep the home-screen widget in sync with the library.
-            runCatching { ContinueReadingWidget().updateAll(context) }
+            runCatching { context?.let { ContinueReadingWidget().updateAll(it) } }
         }
 
     private fun displayNameFor(uri: Uri): String? = runCatching {
-        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+        context?.contentResolver?.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { cursor ->
                 if (cursor.moveToFirst()) cursor.getString(0) else null
             }
