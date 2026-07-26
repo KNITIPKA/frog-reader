@@ -8,7 +8,7 @@
 
 **FrogReader** is a feature-rich, high-performance, open-source e-book reader for Android built with 100% Kotlin and Jetpack Compose. It features a fully custom format parsing engine (EPUB, FB2, MOBI/KF8/PalmDoc), advanced CSS styling, embedded font decompression, flexible reading modes, and extensive reader customization.
 
-> 📥 **Quick Download**: Anyone can download and install the latest APK file directly from [GitHub Releases](https://github.com/KNITIPKA/frog-reader/releases/latest) or **[Download Frog Reader v1.1.0 APK](https://github.com/KNITIPKA/frog-reader/releases/download/v1.1.0/frog-reader-v1.1.0.apk)**.
+> 📥 **Quick Download**: Anyone can download and install the latest APK file directly from [GitHub Releases](https://github.com/KNITIPKA/frog-reader/releases/latest) or **[Download Frog Reader v1.47 APK](https://github.com/KNITIPKA/frog-reader/releases/download/v1.47/frog-reader-v1.47.apk)**.
 
 ---
 
