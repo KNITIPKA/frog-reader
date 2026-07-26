@@ -57,6 +57,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.example.frogreader.data.AppTheme
+import com.example.frogreader.data.BookRepository
 import com.example.frogreader.ui.library.LibraryScreen
 import com.example.frogreader.ui.lock.LockScreen
 import com.example.frogreader.ui.lock.LockViewModel
@@ -75,6 +76,7 @@ import com.example.frogreader.ui.stats.StatsScreen
 import com.example.frogreader.ui.theme.FrogReaderTheme
 import com.example.frogreader.ui.theme.isDark
 import com.example.frogreader.ui.tracker.TrackerScreen
+import com.example.frogreader.widget.ContinueReadingWidget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -151,6 +153,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         pendingIntents.value = intent
     }
 
@@ -404,12 +407,10 @@ class MainActivity : ComponentActivity() {
                 pendingIntents.value = null
                 val app = application as FrogReaderApp
 
-                val widgetBookId = incoming.getStringExtra(EXTRA_OPEN_BOOK_ID)
+                val targetBookId = processIntentForNavigation(incoming, app.bookRepository)
                 when {
-                    widgetBookId != null -> {
-                        if (app.bookRepository.bookById(widgetBookId) != null) {
-                            navController.navigate(ReaderRoute(widgetBookId))
-                        }
+                    targetBookId != null -> {
+                        navController.navigate(ReaderRoute(targetBookId))
                     }
 
                     incoming.action == Intent.ACTION_VIEW && incoming.data != null -> {
@@ -431,11 +432,32 @@ class MainActivity : ComponentActivity() {
                             }
                     }
                 }
+
+                incoming.action = null
+                this@MainActivity.intent?.action = null
             }
         }
     }
 
     companion object {
         const val EXTRA_OPEN_BOOK_ID = "open_book_id"
+
+        fun processIntentForNavigation(
+            incoming: Intent,
+            bookRepository: BookRepository,
+        ): String? {
+            if (incoming.action != ContinueReadingWidget.ACTION_OPEN_BOOK) {
+                return null
+            }
+            val widgetBookId = incoming.getStringExtra(EXTRA_OPEN_BOOK_ID)
+            if (widgetBookId.isNullOrBlank()) {
+                return null
+            }
+            val book = bookRepository.bookById(widgetBookId)
+            if (book == null) {
+                return null
+            }
+            return widgetBookId
+        }
     }
 }

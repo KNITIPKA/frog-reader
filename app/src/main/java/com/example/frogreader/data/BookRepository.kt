@@ -19,10 +19,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.UUID
+
+class LibraryIndexCorruptedException(
+    message: String,
+    cause: Throwable? = null,
+) : IOException(message, cause)
 
 /**
  * Owns the library: imported book files, extracted covers/images and the JSON
@@ -36,13 +45,25 @@ open class BookRepository(private val context: Context? = null) {
         encodeDefaults = true
     }
 
+    private val indexLock = Any()
+    @Volatile private var isIndexCorrupted = false
+
     private val indexFile by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "library.json") }
+    private val bakFile by lazy { File(indexFile.parentFile ?: File("build/tmp/test_files"), "library.json.bak") }
+    private val tmpFile by lazy { File(indexFile.parentFile ?: File("build/tmp/test_files"), "library.json.tmp") }
     private val booksDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "books") }
     private val coversDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "covers") }
     private val imagesDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "images") }
 
-    private val indexMutex = Mutex()
-    private val _books by lazy { MutableStateFlow(readIndex()) }
+    private val _books by lazy {
+        MutableStateFlow(
+            try {
+                readIndex()
+            } catch (e: LibraryIndexCorruptedException) {
+                emptyList()
+            }
+        )
+    }
     open val books: StateFlow<List<Book>> get() = _books.asStateFlow()
 
     open fun coverFileFor(book: Book): File? =
@@ -192,7 +213,7 @@ open class BookRepository(private val context: Context? = null) {
     open suspend fun cleanOrphanCaches() = withContext(Dispatchers.IO) {
         // A corrupt library.json reads as an empty list — don't wipe the
         // (regenerable, but expensive) caches on that failure mode.
-        if (indexFile.exists() && _books.value.isEmpty()) return@withContext
+        if (isIndexCorrupted || (indexFile.exists() && _books.value.isEmpty())) return@withContext
         val ids = _books.value.mapTo(HashSet()) { it.id }
         imagesDir.listFiles()?.forEach { dir ->
             if (dir.isDirectory && dir.name !in ids) dir.deleteRecursively()
@@ -283,22 +304,94 @@ open class BookRepository(private val context: Context? = null) {
 
     // ---------------------------------------------------------------- index
 
-    private fun readIndex(): List<Book> = runCatching {
-        if (indexFile.exists()) {
-            json.decodeFromString<LibraryIndex>(indexFile.readText()).books
-                .sortedByDescending { it.lastOpenedAtMillis ?: it.addedAtMillis }
-        } else {
-            emptyList()
+    internal fun readIndex(): List<Book> = synchronized(indexLock) {
+        if (!indexFile.exists()) {
+            if (bakFile.exists()) {
+                val bakBooks = parseIndexFile(bakFile)
+                if (bakBooks != null) {
+                    runCatching { bakFile.copyTo(indexFile, overwrite = true) }
+                    isIndexCorrupted = false
+                    return@synchronized bakBooks
+                } else {
+                    isIndexCorrupted = true
+                    throw LibraryIndexCorruptedException("library.json is missing and library.json.bak is corrupted.")
+                }
+            } else {
+                isIndexCorrupted = false
+                return@synchronized emptyList()
+            }
         }
-    }.getOrDefault(emptyList())
+
+        val mainBooks = parseIndexFile(indexFile)
+        if (mainBooks != null) {
+            isIndexCorrupted = false
+            return@synchronized mainBooks
+        }
+
+        if (bakFile.exists()) {
+            val bakBooks = parseIndexFile(bakFile)
+            if (bakBooks != null) {
+                runCatching { bakFile.copyTo(indexFile, overwrite = true) }
+                isIndexCorrupted = false
+                return@synchronized bakBooks
+            }
+        }
+
+        isIndexCorrupted = true
+        throw LibraryIndexCorruptedException("Both library.json and library.json.bak are corrupted or unreadable.")
+    }
+
+    private fun parseIndexFile(file: File): List<Book>? {
+        if (!file.exists() || file.length() == 0L) return null
+        return try {
+            val text = file.readText()
+            if (text.isBlank()) return null
+            if (!text.contains("\"books\"")) return null
+            val index = json.decodeFromString<LibraryIndex>(text)
+            index.books.sortedByDescending { it.lastOpenedAtMillis ?: it.addedAtMillis }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     private suspend fun updateIndex(transform: (List<Book>) -> List<Book>) =
         withContext(Dispatchers.IO) {
-            indexMutex.withLock {
-                val updated = transform(_books.value)
+            synchronized(indexLock) {
+                val currentBooks = _books.value
+                if (isIndexCorrupted) {
+                    throw LibraryIndexCorruptedException("Cannot update library index because the index on disk is corrupted.")
+                }
+                val updated = transform(currentBooks)
                     .sortedByDescending { it.lastOpenedAtMillis ?: it.addedAtMillis }
                 _books.value = updated
-                indexFile.writeText(json.encodeToString(LibraryIndex(updated)))
+
+                val parentDir = indexFile.parentFile ?: File("build/tmp/test_files")
+                parentDir.mkdirs()
+
+                val jsonString = json.encodeToString(LibraryIndex(updated))
+                FileOutputStream(tmpFile).use { fos ->
+                    fos.write(jsonString.toByteArray(Charsets.UTF_8))
+                    fos.flush()
+                    fos.fd.sync()
+                }
+
+                if (indexFile.exists() && indexFile.length() > 0) {
+                    indexFile.copyTo(bakFile, overwrite = true)
+                }
+
+                try {
+                    Files.move(
+                        tmpFile.toPath(),
+                        indexFile.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING
+                    )
+                } catch (e: Exception) {
+                    if (!tmpFile.renameTo(indexFile)) {
+                        tmpFile.copyTo(indexFile, overwrite = true)
+                        tmpFile.delete()
+                    }
+                }
             }
             // Keep the home-screen widget in sync with the library.
             runCatching { context?.let { ContinueReadingWidget().updateAll(it) } }

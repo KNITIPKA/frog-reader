@@ -27,6 +27,7 @@ import androidx.glance.text.TextStyle
 import com.example.frogreader.FrogReaderApp
 import com.example.frogreader.MainActivity
 import com.example.frogreader.R
+import com.example.frogreader.data.model.Book
 import kotlin.math.roundToInt
 
 class ContinueReadingWidgetReceiver : GlanceAppWidgetReceiver() {
@@ -43,11 +44,7 @@ class ContinueReadingWidget : GlanceAppWidget() {
 
         provideContent {
             GlanceTheme {
-                val openIntent = Intent(context, MainActivity::class.java).apply {
-                    action = ACTION_OPEN_BOOK
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    book?.let { putExtra(MainActivity.EXTRA_OPEN_BOOK_ID, it.id) }
-                }
+                val openIntent = createOpenIntent(context, book)
 
                 Column(
                     verticalAlignment = Alignment.CenterVertically,
@@ -105,5 +102,19 @@ class ContinueReadingWidget : GlanceAppWidget() {
 
     companion object {
         const val ACTION_OPEN_BOOK = "com.example.frogreader.OPEN_BOOK"
+
+        fun createOpenIntent(
+            context: Context,
+            book: Book?,
+            intent: Intent = Intent(context, MainActivity::class.java),
+        ): Intent {
+            return intent.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (book != null) {
+                    action = ACTION_OPEN_BOOK
+                    putExtra(MainActivity.EXTRA_OPEN_BOOK_ID, book.id)
+                }
+            }
+        }
     }
 }
