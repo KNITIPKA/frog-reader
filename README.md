@@ -1,12 +1,12 @@
 # FrogReader 🐸📖
 
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0+-7F52FF.svg?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
-[![Android](https://img.shields.io/badge/Android-SDK%2036+-3DDC84.svg?style=for-the-badge&logo=android&logoColor=white)](https://developer.android.com/)
+[![Android](https://img.shields.io/badge/Android-SDK%2026+-3DDC84.svg?style=for-the-badge&logo=android&logoColor=white)](https://developer.android.com/)
 [![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4.svg?style=for-the-badge&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![Download APK](https://img.shields.io/github/v/release/KNITIPKA/frog-reader?color=brightgreen&label=Download%20APK&style=for-the-badge&logo=android)](https://github.com/KNITIPKA/frog-reader/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-**FrogReader** is a feature-rich, high-performance, open-source e-book reader for Android built with 100% Kotlin and Jetpack Compose. It features a fully custom format parsing engine (EPUB, FB2, MOBI/KF8/PalmDoc), advanced CSS styling, embedded font decompression, flexible reading modes, and extensive reader customization.
+**FrogReader** is a feature-rich, high-performance, open-source e-book reader for Android built with 100% Kotlin and Jetpack Compose. It features a fully custom format parsing engine (EPUB, FB2, MOBI/KF8/PalmDoc), advanced CSS styling, embedded font decompression, flexible reading modes, and extensive reader customization with broad compatibility (**Android 8.0+ / minSdk 26**, covering >98% of active devices worldwide).
 
 > 📥 **Quick Download**: Anyone can download and install the latest APK file directly from [GitHub Releases](https://github.com/KNITIPKA/frog-reader/releases/latest) or **[Download Frog Reader v1.47 APK](https://github.com/KNITIPKA/frog-reader/releases/download/v1.47/frog-reader-v1.47.apk)**.
 
@@ -81,7 +81,7 @@ FrogReader/
 
 ### Prerequisites
 - **Android Studio**: Ladybug (2024.2.1+) or newer
-- **Android SDK**: Compile SDK 36 (Android 15+)
+- **Android SDK**: `minSdk 26` (Android 8.0 Oreo+), `targetSdk 36`, `compileSdk 37`
 - **JDK**: Java 11 / 17
 
 ### Building from Source
