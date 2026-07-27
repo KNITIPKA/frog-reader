@@ -62,11 +62,15 @@ fun SettingsScreen(
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     val biometricsAvailable = remember {
-        val manager = context.getSystemService(BiometricManager::class.java)
-        manager?.canAuthenticate(
-            BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                BiometricManager.Authenticators.DEVICE_CREDENTIAL,
-        ) == BiometricManager.BIOMETRIC_SUCCESS
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val manager = context.getSystemService(BiometricManager::class.java)
+            manager?.canAuthenticate(
+                BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                    BiometricManager.Authenticators.DEVICE_CREDENTIAL,
+            ) == BiometricManager.BIOMETRIC_SUCCESS
+        } else {
+            false
+        }
     }
 
     Scaffold(

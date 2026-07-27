@@ -23,7 +23,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.frogreader"
-        minSdk = 36
+        minSdk = 26
         targetSdk = 36
         versionCode = (versionProps.getProperty("code") ?: "1").toInt()
         versionName = versionProps.getProperty("name") ?: "1.0"

@@ -36,6 +36,10 @@ fun LockScreen(onUnlocked: () -> Unit) {
     val context = LocalContext.current
 
     fun authenticate() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+            onUnlocked()
+            return
+        }
         val prompt = BiometricPrompt.Builder(context)
             .setTitle(context.getString(R.string.lock_prompt_title))
             .setAllowedAuthenticators(
