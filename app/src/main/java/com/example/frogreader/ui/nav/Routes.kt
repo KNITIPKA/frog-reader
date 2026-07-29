@@ -5,6 +5,14 @@ import kotlinx.serialization.Serializable
 @Serializable
 data object LibraryRoute
 
+/**
+ * Kept alongside [TrackerRoute] and [StatsRoute], which are no longer reachable
+ * from the UI: the second tab now leads to [ProfileRoute], and the tracker and
+ * stats screens will be folded into Profile when it is built.
+ */
+@Serializable
+data object ProfileRoute
+
 @Serializable
 data object TrackerRoute
 

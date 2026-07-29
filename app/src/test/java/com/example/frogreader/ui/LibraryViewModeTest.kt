@@ -39,6 +39,7 @@ class LibraryViewModeTest {
     fun testDefaultViewModeIsGrid() = runTest {
         val repo = mock(BookRepository::class.java)
         org.mockito.BDDMockito.given(repo.books).willReturn(kotlinx.coroutines.flow.MutableStateFlow(emptyList()))
+        org.mockito.BDDMockito.given(repo.shelves).willReturn(kotlinx.coroutines.flow.MutableStateFlow(emptyList()))
         val viewModel = LibraryViewModel(repo)
         assertEquals(LibraryViewMode.GRID, viewModel.viewMode.value)
     }
@@ -47,6 +48,7 @@ class LibraryViewModeTest {
     fun testSetViewModeUpdatesState() = runTest {
         val repo = mock(BookRepository::class.java)
         org.mockito.BDDMockito.given(repo.books).willReturn(kotlinx.coroutines.flow.MutableStateFlow(emptyList()))
+        org.mockito.BDDMockito.given(repo.shelves).willReturn(kotlinx.coroutines.flow.MutableStateFlow(emptyList()))
         val viewModel = LibraryViewModel(repo)
 
         viewModel.setViewMode(LibraryViewMode.LIST)
@@ -60,6 +62,7 @@ class LibraryViewModeTest {
     fun testToggleViewModeSwitchesBetweenGridAndList() = runTest {
         val repo = mock(BookRepository::class.java)
         org.mockito.BDDMockito.given(repo.books).willReturn(kotlinx.coroutines.flow.MutableStateFlow(emptyList()))
+        org.mockito.BDDMockito.given(repo.shelves).willReturn(kotlinx.coroutines.flow.MutableStateFlow(emptyList()))
         val viewModel = LibraryViewModel(repo)
 
         assertEquals(LibraryViewMode.GRID, viewModel.viewMode.value)
@@ -104,6 +107,7 @@ class LibraryViewModeTest {
     fun testSettingsRepositoryViewModeCollection() = runTest {
         val repo = mock(BookRepository::class.java)
         org.mockito.BDDMockito.given(repo.books).willReturn(kotlinx.coroutines.flow.MutableStateFlow(emptyList()))
+        org.mockito.BDDMockito.given(repo.shelves).willReturn(kotlinx.coroutines.flow.MutableStateFlow(emptyList()))
         val settingsRepo = mock(com.example.frogreader.data.SettingsRepository::class.java)
         val modeFlow = kotlinx.coroutines.flow.MutableStateFlow(LibraryViewMode.LIST)
         org.mockito.BDDMockito.given(settingsRepo.libraryViewMode).willReturn(modeFlow)
@@ -118,6 +122,7 @@ class LibraryViewModeTest {
     fun testSetViewModePersistsToSettingsRepository() = runTest {
         val repo = mock(BookRepository::class.java)
         org.mockito.BDDMockito.given(repo.books).willReturn(kotlinx.coroutines.flow.MutableStateFlow(emptyList()))
+        org.mockito.BDDMockito.given(repo.shelves).willReturn(kotlinx.coroutines.flow.MutableStateFlow(emptyList()))
         val settingsRepo = mock(com.example.frogreader.data.SettingsRepository::class.java)
         val modeFlow = kotlinx.coroutines.flow.MutableStateFlow(LibraryViewMode.GRID)
         org.mockito.BDDMockito.given(settingsRepo.libraryViewMode).willReturn(modeFlow)

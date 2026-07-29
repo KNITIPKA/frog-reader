@@ -18,6 +18,23 @@
     <string name="library_continue_reading">Continue Reading</string>
     <string name="view_mode_grid">Grid view</string>
     <string name="view_mode_list">List view</string>
+    <!-- Redesigned library screen -->
+    <string name="library_search_hint">Search your library</string>
+    <string name="library_search_clear">Clear search</string>
+    <string name="library_search_empty">Nothing matched your search.</string>
+    <string name="library_all_books">All books</string>
+    <string name="library_drag_hint">Drag one onto another</string>
+    <string name="library_read_label">read</string>
+    <string name="library_pages_left_in_chapter">%1$d pages left in chapter</string>
+    <string name="library_percent_left">%1$d%% left</string>
+    <string name="library_status_reading">reading</string>
+    <string name="library_status_not_started">not started</string>
+    <string name="library_menu_info">Info</string>
+    <!-- Shelves -->
+    <string name="shelf_unnamed">New shelf</string>
+    <string name="shelf_name_hint">Shelf name</string>
+    <string name="shelf_books_count">%1$d books</string>
+    <string name="shelf_panel_hint">%1$d books · drag one out of the folder to put it back on the grid</string>
 
     <!-- Reader screen -->
     <string name="reader_error_title">Couldn\'t open this book</string>
@@ -193,6 +210,8 @@
     <!-- Navigation & Tracker -->
     <string name="nav_library">Library</string>
     <string name="nav_tracker">Book Tracker</string>
+    <string name="nav_profile">Profile</string>
+    <string name="profile_work_in_progress">Work in progress</string>
     <string name="tracker_title">Book Tracker</string>
     <string name="tracker_empty_title">Book Tracker</string>
     <string name="tracker_empty_subtitle">Track your reading goals, reading lists, and progress here. Coming soon!</string>

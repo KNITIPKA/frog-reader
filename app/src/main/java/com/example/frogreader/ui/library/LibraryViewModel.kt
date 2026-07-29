@@ -11,9 +11,12 @@ import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.model.Book
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -32,6 +35,25 @@ class LibraryViewModel(
 ) : ViewModel() {
 
     val books: StateFlow<List<Book>> = repository.books
+
+    /**
+     * The grid's single source of truth: loose books and shelves in one order.
+     * Kept separate from [books], which the widget and stats still read raw.
+     */
+    val entries: StateFlow<List<LibraryEntry>> =
+        combine(repository.books, repository.shelves, ::buildEntries)
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = buildEntries(repository.books.value, repository.shelves.value),
+            )
+
+    private val _query = MutableStateFlow("")
+    val query: StateFlow<String> = _query.asStateFlow()
+
+    fun setQuery(value: String) {
+        _query.value = value
+    }
 
     private val _viewMode = MutableStateFlow(LibraryViewMode.GRID)
     val viewMode: StateFlow<LibraryViewMode> = _viewMode.asStateFlow()
@@ -99,6 +121,33 @@ class LibraryViewModel(
 
     fun deleteBook(book: Book) {
         viewModelScope.launch { repository.deleteBook(book.id) }
+    }
+
+    // --------------------------------------------------------------- shelves
+
+    /**
+     * A book was dropped onto another book. The TARGET goes first: the new
+     * shelf inherits its position so it appears exactly where the target was.
+     * Emits the new shelf id so the screen can open it for renaming.
+     */
+    fun createShelf(draggedBookId: String, targetBookId: String, onCreated: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            runCatching { repository.createShelf(listOf(targetBookId, draggedBookId)) }
+                .getOrNull()
+                ?.let { onCreated(it.id) }
+        }
+    }
+
+    fun addToShelf(shelfId: String, bookId: String) {
+        viewModelScope.launch { runCatching { repository.addToShelf(shelfId, bookId) } }
+    }
+
+    fun removeFromShelf(shelfId: String, bookId: String) {
+        viewModelScope.launch { runCatching { repository.removeFromShelf(shelfId, bookId) } }
+    }
+
+    fun renameShelf(shelfId: String, name: String) {
+        viewModelScope.launch { runCatching { repository.renameShelf(shelfId, name) } }
     }
 
     companion object {

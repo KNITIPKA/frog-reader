@@ -113,6 +113,7 @@ class MainScreenM3ExpressiveStressTest {
     fun testRapidViewModeToggleClicks() = runTest {
         val repo = mock(BookRepository::class.java)
         given(repo.books).willReturn(MutableStateFlow(emptyList()))
+        given(repo.shelves).willReturn(MutableStateFlow(emptyList()))
         val settingsRepo = mock(SettingsRepository::class.java)
         given(settingsRepo.libraryViewMode).willReturn(MutableStateFlow(LibraryViewMode.GRID))
 

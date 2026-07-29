@@ -5,6 +5,7 @@ import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.ScannedBookFile
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
+import com.example.frogreader.data.model.Shelf
 import com.example.frogreader.data.model.ReadingProgress
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -41,8 +42,17 @@ class TestBookRepository(
     private val _testBooks = MutableStateFlow(initialBooks)
     override val books: StateFlow<List<Book>> get() = _testBooks.asStateFlow()
 
+    // Own flow on purpose: falling through to the real lazy would read the
+    // shared build/tmp/test_files/library.json that the repository tests write.
+    private val _testShelves = MutableStateFlow(emptyList<Shelf>())
+    override val shelves: StateFlow<List<Shelf>> get() = _testShelves.asStateFlow()
+
     fun setBooks(list: List<Book>) {
         _testBooks.value = list
+    }
+
+    fun setShelves(list: List<Shelf>) {
+        _testShelves.value = list
     }
 
     override suspend fun cleanOrphanCaches() {
@@ -57,6 +67,9 @@ class TestBookRepository(
 
     override suspend fun deleteBook(bookId: String) {
         _testBooks.value = _testBooks.value.filterNot { it.id == bookId }
+        _testShelves.value = _testShelves.value
+            .map { shelf -> shelf.copy(bookIds = shelf.bookIds - bookId) }
+            .filter { it.bookIds.size >= 2 }
     }
 }
 
