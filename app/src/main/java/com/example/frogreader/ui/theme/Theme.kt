@@ -4,17 +4,26 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MotionScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import com.example.frogreader.data.AppTheme
 
 /**
  * App-wide theme: Material 3 Expressive with the springy motion scheme.
- * White and OLED keep dynamic (Material You) accents from the wallpaper;
- * Sepia uses a curated warm palette so nothing clashes with the paper tone.
+ *
+ * The three palettes are FIXED (Light / Beige / Midnight) and come straight from
+ * the library design mock. Material You (dynamicLightColorScheme /
+ * dynamicDarkColorScheme) is deliberately not used: the screens are drawn on
+ * this specific green palette, and wallpaper-derived accents would not match.
+ * As a bonus this drops an unguarded API 31 call from a minSdk 26 app.
+ *
+ * Hex literals live ONLY in this file — composables read
+ * `MaterialTheme.colorScheme.*` or [LocalFrogColors].
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -22,67 +31,255 @@ fun FrogReaderTheme(
     theme: AppTheme,
     content: @Composable () -> Unit,
 ) {
-    val context = LocalContext.current
-    val colorScheme = when (theme) {
-        AppTheme.WHITE -> dynamicLightColorScheme(context)
-        AppTheme.SEPIA -> sepiaColorScheme(dynamicLightColorScheme(context))
-        AppTheme.OLED -> oledColorScheme(dynamicDarkColorScheme(context))
+    val colorScheme = colorSchemeFor(theme)
+    val extras = when (theme) {
+        AppTheme.WHITE -> LightExtraColors
+        AppTheme.SEPIA -> BeigeExtraColors
+        AppTheme.OLED -> MidnightExtraColors
     }
 
-    MaterialExpressiveTheme(
-        colorScheme = colorScheme,
-        motionScheme = MotionScheme.expressive(),
-        content = content,
-    )
+    CompositionLocalProvider(LocalFrogColors provides extras) {
+        MaterialExpressiveTheme(
+            colorScheme = colorScheme,
+            motionScheme = MotionScheme.expressive(),
+            content = content,
+        )
+    }
 }
 
 /** True when the theme needs light status-bar icons. */
 fun AppTheme.isDark(): Boolean = this == AppTheme.OLED
 
-/** Warm paper tones over the dynamic scheme; accents become book-leather browns. */
-private fun sepiaColorScheme(base: ColorScheme): ColorScheme = base.copy(
-    primary = Color(0xFF8B5E2A),
-    onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFEDD9B4),
-    onPrimaryContainer = Color(0xFF453723),
-    inversePrimary = Color(0xFFD9B98A),
-    secondary = Color(0xFF7E6E52),
-    onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFEADCBF),
-    onSecondaryContainer = Color(0xFF453723),
-    tertiary = Color(0xFF6E5A3A),
-    onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFE9DAB9),
-    onTertiaryContainer = Color(0xFF443519),
-    background = Color(0xFFF4E9D3),
-    onBackground = Color(0xFF453723),
-    surface = Color(0xFFF4E9D3),
-    onSurface = Color(0xFF453723),
-    surfaceVariant = Color(0xFFE7D8B8),
-    onSurfaceVariant = Color(0xFF7E6E52),
-    surfaceTint = Color(0xFF8B5E2A),
-    inverseSurface = Color(0xFF453723),
-    inverseOnSurface = Color(0xFFF4E9D3),
-    outline = Color(0xFF9C8B6C),
-    outlineVariant = Color(0xFFD9C9A8),
-    surfaceBright = Color(0xFFFBF3E2),
-    surfaceDim = Color(0xFFE0D2B4),
-    surfaceContainerLowest = Color(0xFFFBF3E2),
-    surfaceContainerLow = Color(0xFFF6ECD8),
-    surfaceContainer = Color(0xFFEFE3C9),
-    surfaceContainerHigh = Color(0xFFEADCBF),
-    surfaceContainerHighest = Color(0xFFE4D4B4),
+/**
+ * The palette of a theme that is not necessarily the active one. Needed by the
+ * reader, which paints its page from these roles and also previews all three
+ * themes side by side in its settings sheet — so it cannot just read the
+ * ambient `MaterialTheme.colorScheme`.
+ */
+fun colorSchemeFor(theme: AppTheme): ColorScheme = when (theme) {
+    AppTheme.WHITE -> LightColorScheme
+    AppTheme.SEPIA -> BeigeColorScheme
+    AppTheme.OLED -> MidnightColorScheme
+}
+
+/** The name shown in the theme picker — the stored enum names never change. */
+val AppTheme.displayNameRes: Int
+    get() = when (this) {
+        AppTheme.WHITE -> com.example.frogreader.R.string.theme_light
+        AppTheme.SEPIA -> com.example.frogreader.R.string.theme_beige
+        AppTheme.OLED -> com.example.frogreader.R.string.theme_midnight
+    }
+
+val AppTheme.descriptionRes: Int
+    get() = when (this) {
+        AppTheme.WHITE -> com.example.frogreader.R.string.theme_light_note
+        AppTheme.SEPIA -> com.example.frogreader.R.string.theme_beige_note
+        AppTheme.OLED -> com.example.frogreader.R.string.theme_midnight_note
+    }
+
+/** The two halves of the 44dp swatch in the theme picker: surface / accent. */
+val AppTheme.swatch: Pair<Color, Color>
+    get() = when (this) {
+        AppTheme.WHITE -> Color(0xFFF7FBF7) to Color(0xFF2A6A47)
+        AppTheme.SEPIA -> Color(0xFFF3E7D2) to Color(0xFF7E5326)
+        AppTheme.OLED -> Color(0xFF000000) to Color(0xFF7BD69B)
+    }
+
+// ------------------------------------------------------------ extra colors
+
+/**
+ * Colors the mock uses that have no role in [ColorScheme]. Kept in a
+ * CompositionLocal instead of being derived from `colorScheme` because several
+ * of them are not derivable: Beige's `folder` is an umber wash, not the primary
+ * at low alpha, and its `chip` sits a shade off `surfaceContainerHigh`.
+ */
+@Immutable
+data class FrogExtraColors(
+    /** Top / bottom of the library header gradient. */
+    val headerTop: Color,
+    val headerBottom: Color,
+    /** Search field and gear button sitting on the colored header. */
+    val glass: Color,
+    /** Progress track and the hero's ⋮ button. */
+    val chip: Color,
+    /** The "85%" badge on a cover. */
+    val pill: Color,
+    /** The "+N" tile in a shelf's spine strip. */
+    val pill60: Color,
+    /** Veil drawn over a book that is currently being dragged. */
+    val lift: Color,
+    /** The floating nav bar pill. */
+    val nav: Color,
+    /** Shelf background, and the progress fill of a list row. */
+    val folder: Color,
+    /** Text on the colored header. */
+    val ink: Color,
+    /** Secondary text and icons on the colored header. */
+    val ink2: Color,
 )
 
-/** Pure-black surfaces for OLED; dynamic accents stay untouched. */
-private fun oledColorScheme(base: ColorScheme): ColorScheme = base.copy(
+private val LightExtraColors = FrogExtraColors(
+    headerTop = Color(0xFFA5DDBB),
+    headerBottom = Color(0xFFE1F5E8),
+    glass = Color.White.copy(alpha = 0.55f),
+    chip = Color(0xFFDFE9E1),
+    pill = Color.White.copy(alpha = 0.94f),
+    pill60 = Color.White.copy(alpha = 0.62f),
+    lift = Color(0xFFF7FBF7).copy(alpha = 0.82f),
+    nav = Color(0xFFDFE9E1),
+    folder = Color(0xFF2A6A47).copy(alpha = 0.13f),
+    ink = Color(0xFF101A13),
+    ink2 = Color(0xFF3D4F42),
+)
+
+private val BeigeExtraColors = FrogExtraColors(
+    headerTop = Color(0xFFE7D3AC),
+    headerBottom = Color(0xFFF1E4CC),
+    glass = Color.White.copy(alpha = 0.50f),
+    chip = Color(0xFFEBDFC4),
+    pill = Color(0xFFFBF4E6).copy(alpha = 0.94f),
+    pill60 = Color(0xFFFBF4E6).copy(alpha = 0.60f),
+    lift = Color(0xFFFBF4E6).copy(alpha = 0.82f),
+    nav = Color(0xFFE9DBC0),
+    folder = Color(0xFFBEA06E).copy(alpha = 0.40f),
+    ink = Color(0xFF2E2416),
+    ink2 = Color(0xFF4C3E29),
+)
+
+private val MidnightExtraColors = FrogExtraColors(
+    headerTop = Color(0xFF131A14),
+    headerBottom = Color(0xFF000000),
+    glass = Color.White.copy(alpha = 0.08f),
+    chip = Color(0xFF191D19),
+    pill = Color(0xFF191D19).copy(alpha = 0.94f),
+    pill60 = Color(0xFF191D19).copy(alpha = 0.60f),
+    lift = Color(0xFF1E241E).copy(alpha = 0.84f),
+    nav = Color(0xFF181C18),
+    folder = Color(0xFF7BD69B).copy(alpha = 0.14f),
+    ink = Color(0xFFE8EDE7),
+    ink2 = Color(0xFFB9C2B8),
+)
+
+val LocalFrogColors = staticCompositionLocalOf { LightExtraColors }
+
+// --------------------------------------------------------------- palettes
+
+/** Light — warm white, forest green accents. Stored as [AppTheme.WHITE]. */
+private val LightColorScheme: ColorScheme = lightColorScheme(
+    primary = Color(0xFF2A6A47),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFC3EBD2),
+    onPrimaryContainer = Color(0xFF06281A),
+    inversePrimary = Color(0xFF8FD3AC),
+    secondary = Color(0xFF4F6354),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFD2E8D8),
+    onSecondaryContainer = Color(0xFF0C2417),
+    tertiary = Color(0xFF3A6470),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFBEE9F7),
+    onTertiaryContainer = Color(0xFF001F27),
+    background = Color(0xFFF7FBF7),
+    onBackground = Color(0xFF131C15),
+    surface = Color(0xFFF7FBF7),
+    onSurface = Color(0xFF131C15),
+    surfaceVariant = Color(0xFFDDE6DE),
+    onSurfaceVariant = Color(0xFF5C6B5F),
+    surfaceTint = Color(0xFF2A6A47),
+    inverseSurface = Color(0xFF2A322B),
+    inverseOnSurface = Color(0xFFEEF3EE),
+    error = Color(0xFF8C4030),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFFFDAD3),
+    onErrorContainer = Color(0xFF3A0A02),
+    outline = Color(0xFF6F7F72),
+    outlineVariant = Color(0xFFB3C4B6),
+    scrim = Color(0xFF000000),
+    surfaceBright = Color(0xFFFFFFFF),
+    surfaceDim = Color(0xFFD8E1D9),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFF2F7F2),
+    surfaceContainer = Color(0xFFEDF3EE),
+    surfaceContainerHigh = Color(0xFFDFE9E1),
+    surfaceContainerHighest = Color(0xFFD9E3DB),
+)
+
+/** Beige — warm paper, umber accents. Stored as [AppTheme.SEPIA]. */
+private val BeigeColorScheme: ColorScheme = lightColorScheme(
+    primary = Color(0xFF7E5326),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFE9D6B2),
+    onPrimaryContainer = Color(0xFF3E2E1A),
+    inversePrimary = Color(0xFFE0BC8C),
+    secondary = Color(0xFF6E5C42),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFEFE0C4),
+    onSecondaryContainer = Color(0xFF2A2013),
+    tertiary = Color(0xFF5A5A33),
+    onTertiary = Color(0xFFFFFFFF),
+    tertiaryContainer = Color(0xFFE2E2B6),
+    onTertiaryContainer = Color(0xFF1B1B00),
+    background = Color(0xFFF3E7D2),
+    onBackground = Color(0xFF3B2F1E),
+    surface = Color(0xFFF3E7D2),
+    onSurface = Color(0xFF3B2F1E),
+    surfaceVariant = Color(0xFFE5D6B8),
+    onSurfaceVariant = Color(0xFF7C6B51),
+    surfaceTint = Color(0xFF7E5326),
+    inverseSurface = Color(0xFF38301F),
+    inverseOnSurface = Color(0xFFF7EEDC),
+    error = Color(0xFF9A3B2C),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFFFDAD3),
+    onErrorContainer = Color(0xFF3A0A02),
+    outline = Color(0xFF8E7A5C),
+    outlineVariant = Color(0xFFCDB894),
+    scrim = Color(0xFF000000),
+    surfaceBright = Color(0xFFFBF4E6),
+    surfaceDim = Color(0xFFDCCFB5),
+    surfaceContainerLowest = Color(0xFFFBF4E6),
+    surfaceContainerLow = Color(0xFFF5EBD7),
+    surfaceContainer = Color(0xFFF7EEDC),
+    surfaceContainerHigh = Color(0xFFE9DBC0),
+    surfaceContainerHighest = Color(0xFFE3D3B6),
+)
+
+/** Midnight — true black, mint green accents. Stored as [AppTheme.OLED]. */
+private val MidnightColorScheme: ColorScheme = darkColorScheme(
+    primary = Color(0xFF7BD69B),
+    onPrimary = Color(0xFF06140B),
+    primaryContainer = Color(0xFF7BD69B),
+    onPrimaryContainer = Color(0xFF06140B),
+    inversePrimary = Color(0xFF2A6A47),
+    secondary = Color(0xFFA9C9B3),
+    onSecondary = Color(0xFF14301F),
+    secondaryContainer = Color(0xFF2B4636),
+    onSecondaryContainer = Color(0xFFC5E5CE),
+    tertiary = Color(0xFFA0CFD8),
+    onTertiary = Color(0xFF00363E),
+    tertiaryContainer = Color(0xFF1E4C55),
+    onTertiaryContainer = Color(0xFFBCEBF4),
     background = Color(0xFF000000),
+    onBackground = Color(0xFFE8EDE7),
     surface = Color(0xFF000000),
+    onSurface = Color(0xFFE8EDE7),
+    surfaceVariant = Color(0xFF2A332B),
+    onSurfaceVariant = Color(0xFF8D998C),
+    surfaceTint = Color(0xFF7BD69B),
+    inverseSurface = Color(0xFFE8EDE7),
+    inverseOnSurface = Color(0xFF1A1F1A),
+    error = Color(0xFFFF9E93),
+    onError = Color(0xFF5A1408),
+    errorContainer = Color(0xFF7A2A1C),
+    onErrorContainer = Color(0xFFFFDAD3),
+    outline = Color(0xFF56655A),
+    outlineVariant = Color(0xFF354036),
+    scrim = Color(0xFF000000),
+    surfaceBright = Color(0xFF262B26),
     surfaceDim = Color(0xFF000000),
-    surfaceBright = Color(0xFF222226),
-    surfaceContainerLowest = Color(0xFF000000),
-    surfaceContainerLow = Color(0xFF0C0C0E),
-    surfaceContainer = Color(0xFF121214),
-    surfaceContainerHigh = Color(0xFF1A1A1D),
-    surfaceContainerHighest = Color(0xFF222226),
+    surfaceContainerLowest = Color(0xFF121612),
+    surfaceContainerLow = Color(0xFF0A0C0A),
+    surfaceContainer = Color(0xFF101310),
+    surfaceContainerHigh = Color(0xFF191D19),
+    surfaceContainerHighest = Color(0xFF222722),
 )

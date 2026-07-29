@@ -134,9 +134,14 @@
     <string name="reader_section_screen">Screen &amp; controls</string>
     <string name="reader_haptics">Haptic feedback</string>
     <string name="reader_volume_keys">Turn pages with volume keys</string>
-    <string name="settings_theme_white">White</string>
-    <string name="settings_theme_beige">Beige</string>
-    <string name="settings_theme_oled">OLED</string>
+    <!-- Theme picker sheet. The stored AppTheme enum names never change. -->
+    <string name="theme_sheet_title">Theme</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_light_note">Warm white, forest green accents</string>
+    <string name="theme_beige">Beige</string>
+    <string name="theme_beige_note">Warm paper, umber accents</string>
+    <string name="theme_midnight">Midnight</string>
+    <string name="theme_midnight_note">True black, mint green accents</string>
     <string name="settings_section_reading">Reading</string>
     <string name="settings_keep_screen_on">Keep screen on</string>
     <string name="settings_keep_screen_on_subtitle">The screen won\'t dim while you read</string>
