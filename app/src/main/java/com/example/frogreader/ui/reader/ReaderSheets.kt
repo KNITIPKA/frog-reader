@@ -567,10 +567,12 @@ fun ReaderSettingsControls(
         // Theme
         val themes = AppTheme.entries
         ChipRow(
+            // Same names the settings sheet uses; the reader had its own
+            // "Light / Beige / Dark" wording for the very same three themes.
             options = listOf(
-                stringResource(R.string.reader_theme_light),
-                stringResource(R.string.reader_theme_beige),
-                stringResource(R.string.reader_theme_dark),
+                stringResource(R.string.theme_light),
+                stringResource(R.string.theme_beige),
+                stringResource(R.string.theme_midnight),
             ),
             selectedIndex = themes.indexOf(appSettings.theme),
             colors = colors,

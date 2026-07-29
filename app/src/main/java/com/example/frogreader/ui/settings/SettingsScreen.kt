@@ -1,6 +1,7 @@
 package com.example.frogreader.ui.settings
 
 import android.hardware.biometrics.BiometricManager
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,9 +12,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Palette
@@ -26,18 +29,18 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -48,7 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.frogreader.R
-import com.example.frogreader.data.AppTheme
+import com.example.frogreader.ui.theme.displayNameRes
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -57,9 +60,9 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = viewModel(factory = SettingsViewModel.Factory),
 ) {
     val settings by viewModel.appSettings.collectAsStateWithLifecycle()
-    val haptics = LocalHapticFeedback.current
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    var showThemeSheet by remember { mutableStateOf(false) }
 
     val biometricsAvailable = remember {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
@@ -101,43 +104,38 @@ fun SettingsScreen(
         ) {
             SectionHeader(stringResource(R.string.settings_section_appearance))
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Theme lives in its own sheet now — the same composable the
+            // library's gear can raise later.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .clickable { showThemeSheet = true }
+                    .padding(vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Icon(
                     Icons.Rounded.Palette,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                 )
                 Spacer(Modifier.width(16.dp))
-                Text(
-                    stringResource(R.string.settings_app_theme),
-                    style = MaterialTheme.typography.bodyLarge,
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                AppTheme.entries.forEachIndexed { index, theme ->
-                    SegmentedButton(
-                        selected = settings.theme == theme,
-                        onClick = {
-                            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                            viewModel.update { it.copy(theme = theme) }
-                        },
-                        shape = SegmentedButtonDefaults.itemShape(
-                            index = index,
-                            count = AppTheme.entries.size,
-                        ),
-                    ) {
-                        Text(
-                            stringResource(
-                                when (theme) {
-                                    AppTheme.WHITE -> R.string.settings_theme_white
-                                    AppTheme.SEPIA -> R.string.settings_theme_beige
-                                    AppTheme.OLED -> R.string.settings_theme_oled
-                                },
-                            ),
-                        )
-                    }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.settings_app_theme),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Text(
+                        stringResource(settings.theme.displayNameRes),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
+                Icon(
+                    Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             SectionHeader(stringResource(R.string.settings_section_reading))
@@ -212,6 +210,14 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(48.dp))
         }
+    }
+
+    if (showThemeSheet) {
+        ThemePickerSheet(
+            current = settings.theme,
+            onPick = { theme -> viewModel.update { it.copy(theme = theme) } },
+            onDismiss = { showThemeSheet = false },
+        )
     }
 }
 

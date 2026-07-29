@@ -12,6 +12,15 @@ data class ReadingProgress(
     val elementIndex: Int = 0,
     val scrollOffset: Int = 0,
     val fraction: Float = 0f,
+    /**
+     * Pages left in the current chapter at the last save, for the library's
+     * hero card. -1 = unknown: the reader only paginates in paged mode, so in
+     * scroll mode (the default) there are no pages to count and the card falls
+     * back to showing the remaining percentage.
+     */
+    val pagesLeftInChapter: Int = -1,
+    /** Pages in the whole book at the last pagination; 0 = unknown. */
+    val totalPages: Int = 0,
 )
 
 /** A saved reading position with a short text preview. */
@@ -72,7 +81,54 @@ data class Book(
     val language: String? = null,
 )
 
+/**
+ * A named group of books that lives in the same grid as the books themselves.
+ * A book belongs to at most one shelf, and shelves never nest.
+ */
+@Serializable
+data class Shelf(
+    val id: String,
+    /** Blank = never named; the UI renders a localized placeholder. */
+    val name: String = "",
+    /**
+     * Members, in display order. `bookIds[0]` is the ANCHOR — the book that was
+     * dropped onto when the shelf was created.
+     */
+    val bookIds: List<String> = emptyList(),
+    val createdAtMillis: Long,
+    /**
+     * Ordering timestamp in the same space as a book's
+     * `lastOpenedAtMillis ?: addedAtMillis`, seeded from the drop target so a
+     * new shelf lands exactly in that book's grid slot. `createdAtMillis`
+     * cannot be used for this: it is by construction the largest timestamp in
+     * the library, so the shelf would always jump to the top-left.
+     * 0 = written by an older build, fall back to [createdAtMillis].
+     */
+    val sortKey: Long = 0L,
+)
+
 @Serializable
 data class LibraryIndex(
     val books: List<Book> = emptyList(),
+    /**
+     * Defaulted on purpose: a `library.json` written before shelves existed
+     * must keep decoding. Declaring this without a default would make
+     * kotlinx.serialization throw MissingFieldException on every legacy file,
+     * which BookRepository would read as "corrupted" — i.e. an empty library.
+     */
+    val shelves: List<Shelf> = emptyList(),
 )
+
+/**
+ * Stable key for one grid slot, matching the UI's `LibraryEntry.id`. Prefixed
+ * so a book id and a shelf id can never collide.
+ */
+fun bookOrderKey(bookId: String): String = "b:$bookId"
+
+fun shelfOrderKey(shelfId: String): String = "s:$shelfId"
+
+/** Where a book sits in the library's single descending stream. */
+val Book.sortTs: Long get() = lastOpenedAtMillis ?: addedAtMillis
+
+/** Where a shelf sits in that same stream. */
+val Shelf.sortTs: Long get() = if (sortKey != 0L) sortKey else createdAtMillis

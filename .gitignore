@@ -16,3 +16,8 @@ local.properties
 .idea/
 .artifacts/
 .kotlin/
+
+# Scratch directories left behind by AI coding agents (working notes, not source)
+.agents/
+.gemini/
+.aider*

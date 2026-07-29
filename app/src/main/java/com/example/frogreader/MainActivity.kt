@@ -68,10 +68,12 @@ import com.example.frogreader.ui.nav.LocalSharedTransitionScope
 import com.example.frogreader.ui.nav.NavTab
 import com.example.frogreader.ui.nav.ReaderRoute
 import com.example.frogreader.ui.nav.SettingsRoute
+import com.example.frogreader.ui.nav.ProfileRoute
 import com.example.frogreader.ui.nav.StatsRoute
 import com.example.frogreader.ui.nav.TrackerRoute
 import com.example.frogreader.ui.reader.ReaderScreen
 import com.example.frogreader.ui.settings.SettingsScreen
+import com.example.frogreader.ui.profile.ProfileScreen
 import com.example.frogreader.ui.stats.StatsScreen
 import com.example.frogreader.ui.theme.FrogReaderTheme
 import com.example.frogreader.ui.theme.isDark
@@ -205,7 +207,7 @@ class MainActivity : ComponentActivity() {
                 val currentRoute = currentBackStackEntry?.destination?.route
 
                 val isTopLevelRoute = currentRoute?.contains("LibraryRoute") == true ||
-                    currentRoute?.contains("TrackerRoute") == true
+                    currentRoute?.contains("ProfileRoute") == true
 
                 val springSpec = spring<Float>(
                     dampingRatio = Spring.DampingRatioLowBouncy,
@@ -219,11 +221,11 @@ class MainActivity : ComponentActivity() {
                     enterTransition = {
                         val initial = initialState.destination.route
                         val target = targetState.destination.route
-                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("TrackerRoute") == true) &&
-                            (target?.contains("LibraryRoute") == true || target?.contains("TrackerRoute") == true)
+                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("ProfileRoute") == true) &&
+                            (target?.contains("LibraryRoute") == true || target?.contains("ProfileRoute") == true)
 
                         if (isTabTransition) {
-                            val goingRight = target?.contains("TrackerRoute") == true
+                            val goingRight = target?.contains("ProfileRoute") == true
                             slideInHorizontally(
                                 animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
                                 initialOffsetX = { width -> if (goingRight) width else -width },
@@ -239,11 +241,11 @@ class MainActivity : ComponentActivity() {
                     exitTransition = {
                         val initial = initialState.destination.route
                         val target = targetState.destination.route
-                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("TrackerRoute") == true) &&
-                            (target?.contains("LibraryRoute") == true || target?.contains("TrackerRoute") == true)
+                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("ProfileRoute") == true) &&
+                            (target?.contains("LibraryRoute") == true || target?.contains("ProfileRoute") == true)
 
                         if (isTabTransition) {
-                            val goingRight = target?.contains("TrackerRoute") == true
+                            val goingRight = target?.contains("ProfileRoute") == true
                             slideOutHorizontally(
                                 animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
                                 targetOffsetX = { width -> if (goingRight) -width else width },
@@ -255,11 +257,11 @@ class MainActivity : ComponentActivity() {
                     popEnterTransition = {
                         val initial = initialState.destination.route
                         val target = targetState.destination.route
-                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("TrackerRoute") == true) &&
-                            (target?.contains("LibraryRoute") == true || target?.contains("TrackerRoute") == true)
+                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("ProfileRoute") == true) &&
+                            (target?.contains("LibraryRoute") == true || target?.contains("ProfileRoute") == true)
 
                         if (isTabTransition) {
-                            val goingRight = target?.contains("TrackerRoute") == true
+                            val goingRight = target?.contains("ProfileRoute") == true
                             slideInHorizontally(
                                 animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
                                 initialOffsetX = { width -> if (goingRight) width else -width },
@@ -271,11 +273,11 @@ class MainActivity : ComponentActivity() {
                     popExitTransition = {
                         val initial = initialState.destination.route
                         val target = targetState.destination.route
-                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("TrackerRoute") == true) &&
-                            (target?.contains("LibraryRoute") == true || target?.contains("TrackerRoute") == true)
+                        val isTabTransition = (initial?.contains("LibraryRoute") == true || initial?.contains("ProfileRoute") == true) &&
+                            (target?.contains("LibraryRoute") == true || target?.contains("ProfileRoute") == true)
 
                         if (isTabTransition) {
-                            val goingRight = target?.contains("TrackerRoute") == true
+                            val goingRight = target?.contains("ProfileRoute") == true
                             slideOutHorizontally(
                                 animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
                                 targetOffsetX = { width -> if (goingRight) -width else width },
@@ -295,8 +297,13 @@ class MainActivity : ComponentActivity() {
                                         navController.navigate(ReaderRoute(book.id))
                                     },
                                     onOpenSettings = { navController.navigate(SettingsRoute) },
-                                    onOpenStats = { navController.navigate(StatsRoute) },
                                 )
+                            }
+                        }
+
+                        composable<ProfileRoute> {
+                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+                                ProfileScreen()
                             }
                         }
 
@@ -368,8 +375,8 @@ class MainActivity : ComponentActivity() {
                 }
 
                 if (isTopLevelRoute) {
-                    val selectedTab = if (currentRoute?.contains("TrackerRoute") == true) {
-                        NavTab.TRACKER
+                    val selectedTab = if (currentRoute?.contains("ProfileRoute") == true) {
+                        NavTab.PROFILE
                     } else {
                         NavTab.LIBRARY
                     }
@@ -378,7 +385,7 @@ class MainActivity : ComponentActivity() {
                         onTabSelected = { tab ->
                             val targetRoute: Any = when (tab) {
                                 NavTab.LIBRARY -> LibraryRoute
-                                NavTab.TRACKER -> TrackerRoute
+                                NavTab.PROFILE -> ProfileRoute
                             }
                             navController.navigate(targetRoute) {
                                 popUpTo(LibraryRoute) { saveState = true }
