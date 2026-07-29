@@ -359,13 +359,61 @@ class ReaderViewModel(
         } else {
             (firstVisibleIndex.toFloat() / (ready.items.size - 1)).coerceIn(0f, 1f)
         }
+        val chapter = ready.chapterAt(firstVisibleIndex)
+        val pageCounts = pageCountsFor(ready, chapter, firstVisibleIndex)
         val progress = ReadingProgress(
-            chapterIndex = ready.chapterAt(firstVisibleIndex),
+            chapterIndex = chapter,
             elementIndex = firstVisibleIndex,
             scrollOffset = scrollOffset,
             fraction = fraction,
+            pagesLeftInChapter = pageCounts.first,
+            totalPages = pageCounts.second,
         )
         viewModelScope.launch { repository.saveProgress(bookId, progress) }
+    }
+
+    /**
+     * (pages left in [chapter], pages in the book) for the library's hero card,
+     * or (-1, 0) when there is nothing to count — scroll mode never paginates,
+     * and a partial pass only covers the chapter being read.
+     *
+     * Called on every scroll save, so both lookups are binary searches: `pages`
+     * is sorted by [BookPage.firstItemIndex] and can run to thousands of entries.
+     */
+    private fun pageCountsFor(
+        ready: ReaderState.Ready,
+        chapter: Int,
+        firstVisibleIndex: Int,
+    ): Pair<Int, Int> {
+        val holder = _pagination.value ?: return -1 to 0
+        if (holder.partial) return -1 to 0
+        val pages = holder.pages
+        if (pages.isEmpty()) return -1 to 0
+
+        val currentPage = lastPageStartingAtOrBefore(pages, firstVisibleIndex)
+        val chapterEnd = ready.chapterStarts.getOrNull(chapter + 1) ?: ready.items.size
+        // The chapter's last page is the last one that starts before the next
+        // chapter does; `chapterEnd - 1` turns "before" into "at or before".
+        val lastPageOfChapter = lastPageStartingAtOrBefore(pages, chapterEnd - 1)
+
+        return (lastPageOfChapter - currentPage).coerceAtLeast(0) to pages.size
+    }
+
+    /** Index of the last page whose first item is at or before [flatIndex]. */
+    private fun lastPageStartingAtOrBefore(pages: List<BookPage>, flatIndex: Int): Int {
+        var low = 0
+        var high = pages.size - 1
+        var found = 0
+        while (low <= high) {
+            val mid = (low + high) ushr 1
+            if (pages[mid].firstItemIndex <= flatIndex) {
+                found = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+        return found
     }
 
     // ------------------------------------------------------------- stats

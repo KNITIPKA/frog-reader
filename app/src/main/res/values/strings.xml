@@ -108,9 +108,6 @@
     <string name="reader_track_chapter">Chapter</string>
     <string name="reader_track_book">Book</string>
     <string name="reader_percent_left">left</string>
-    <string name="reader_theme_light">Light</string>
-    <string name="reader_theme_beige">Beige</string>
-    <string name="reader_theme_dark">Dark</string>
     <string name="reader_brightness">Brightness</string>
     <string name="reader_brightness_auto">Auto</string>
     <string name="reader_font_size_pt">%1$d pt</string>
