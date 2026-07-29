@@ -3,12 +3,27 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0+-7F52FF.svg?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Android](https://img.shields.io/badge/Android-SDK%2026+-3DDC84.svg?style=for-the-badge&logo=android&logoColor=white)](https://developer.android.com/)
 [![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4.svg?style=for-the-badge&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
-[![Download APK](https://img.shields.io/github/v/release/KNITIPKA/frog-reader?color=brightgreen&label=Download%20APK&style=for-the-badge&logo=android)](https://github.com/KNITIPKA/frog-reader/releases/latest)
+[![Download APK](https://img.shields.io/github/v/release/KNITIPKA/frog-reader?include_prereleases&color=orange&label=Download%20Alpha%20APK&style=for-the-badge&logo=android)](https://github.com/KNITIPKA/frog-reader/releases/latest)
+[![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange.svg?style=for-the-badge)](https://github.com/KNITIPKA/frog-reader/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-**FrogReader** is a feature-rich, high-performance, open-source e-book reader for Android built with 100% Kotlin and Jetpack Compose. It features a fully custom format parsing engine (EPUB, FB2, MOBI/KF8/PalmDoc), advanced CSS styling, embedded font decompression, flexible reading modes, and extensive reader customization with broad compatibility (**Android 8.0+ / minSdk 26**, covering >98% of active devices worldwide).
+> ### ⚠️ This project is in **alpha**
+>
+> It is under active development and not finished. Expect bugs, unpolished screens and
+> changes that break between versions. Builds are debug-signed and not on Google Play.
+> Try it if that sounds fine to you — and please report what breaks.
 
-> 📥 **Quick Download**: Anyone can download and install the latest APK file directly from [GitHub Releases](https://github.com/KNITIPKA/frog-reader/releases/latest) or **[Download Frog Reader v1.47 APK](https://github.com/KNITIPKA/frog-reader/releases/download/v1.47/frog-reader-v1.47.apk)**.
+**FrogReader** is an open-source e-book reader for Android, built with 100% Kotlin and Jetpack
+Compose. It has a fully custom format parsing engine (EPUB, FB2, MOBI/KF8/PalmDoc), a CSS
+resolver, embedded font decompression, paged and scrolling reading modes, and extensive reader
+customization. Runs on **Android 8.0+ (minSdk 26)**.
+
+> 📥 **Download**: grab the latest alpha APK from
+> **[GitHub Releases](https://github.com/KNITIPKA/frog-reader/releases/latest)**
+> — the file is named `frog-reader-<version>-alpha.apk`.
+>
+> The current build is ~71 MB because it is an unminified debug APK; that is not the size of
+> the finished app.
 
 ---
 
@@ -33,7 +48,7 @@
 - **Custom Fonts**: Choose Literata, Serif, Sans-Serif, or import your own custom `.ttf` / `.otf` font files.
 - **Night / OLED Image Inversion**: Invert diagram & scan colors automatically in dark/OLED themes so bright white scan images don't glare at night.
 - **Footnote Handling**: Inline footnote popups or clean footnote stripping (`hideFootnotes`).
-- **Themes & Margins**: White, Sepia, and OLED themes; customizable page margins, font sizes, and line heights.
+- **Themes & Margins**: Light, Beige and Midnight themes, shared by the library and the reading surface; customizable page margins, font sizes, and line heights.
 - **Page-Turn Animations**: Configurable transitions (Slide, Cascade, Page Curl).
 
 ### ⚡ Metrics, Search & Navigation
@@ -41,8 +56,13 @@
 - **Interactive Tools**: Full-text book search with live match previews, chapter TOC sheet, text selection, and quote saving toolbar.
 - **Dynamic Pagination**: Custom page-breaking engine with `PaginationCache` for instantly smooth page turns.
 
+### 📚 Library
+- **Shelves**: drag one book onto another to group them; open a shelf to rename it or pull a book back out.
+- **Grid & List Views**: three-column cover grid or a compact list with inline reading progress.
+- **Live Search**: filters by title and author as you type, and looks inside shelves.
+
 ### 🔐 App Security & Widgets
-- **PIN Lock Screen**: Secure your book library with optional PIN lock protection.
+- **App Lock**: Optional biometric / device-credential lock on the library (Android 10+).
 - **Reading Analytics Dashboard**: Track daily reading time, set daily reading goals (in minutes), and view reading history.
 - **Home Screen Widget**: Jetpack Glance AppWidget to jump directly back into "Continue Reading".
 
@@ -114,6 +134,9 @@ To run tests:
 ## 🤝 Contributing
 
 Contributions are welcome! Check out [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on bug reporting and pull requests.
+
+Because the project is in alpha, **bug reports are the most useful contribution right now** —
+especially with the book that triggered the problem, if you can share it.
 
 ---
 
