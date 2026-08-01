@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- All app colors come from the Compose theme at runtime. The one
+         exception is the splash background: the system draws that starting
+         window before any app code runs, so it can only come from a static
+         resource. These two are the surfaces of the themes most likely to be
+         behind them — Beige on a light phone, Midnight on a dark one — and the
+         window underneath is repainted with the user's ACTUAL theme in
+         onCreate, so a mismatch is a crossfade rather than a flash. -->
+    <color name="splash_background">#F3E7D2</color>
+</resources>

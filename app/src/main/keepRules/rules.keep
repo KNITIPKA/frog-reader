@@ -1,0 +1,33 @@
+# Add project specific R8 rules here.
+# AGP will combine all keep rule files in src/main/keepRules to pass to R8
+#
+# For more details, see
+#   https://d.android.com/r/tools/r8/keep-rules
+
+# Room (used by WorkManager, which Glance widgets depend on) instantiates its
+# generated *_Impl database classes reflectively.
+-keep class * extends androidx.room.RoomDatabase {
+    <init>();
+}
+
+# WorkManager builds InputMergers by class name. R8 keeps the classes — the
+# library's own consumer rules do that — but strips their no-argument
+# constructors, because nothing in the app ever calls one:
+#   E WM-InputMerger: java.lang.InstantiationException:
+#   androidx.work.OverwritingInputMerger has no zero argument constructor
+# Glance schedules every widget update through WorkManager, so this fired on
+# each launch of a release build and the widget stopped refreshing.
+-keep class * extends androidx.work.InputMerger {
+    <init>();
+}
+-keep class * extends androidx.work.ListenableWorker {
+    <init>(...);
+}
+
+# kotlinx.serialization looks the generated serializer up by name. The library
+# ships consumer rules, but library.json holds OUR model classes; losing their
+# serializers would be a far worse failure than a stale widget.
+-keepclassmembers class com.example.frogreader.data.model.** {
+    *** Companion;
+    kotlinx.serialization.KSerializer serializer(...);
+}
