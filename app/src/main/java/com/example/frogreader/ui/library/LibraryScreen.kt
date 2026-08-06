@@ -6,7 +6,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateFloatAsState
@@ -201,6 +203,11 @@ private const val ShelfPopFrom = 0.62f
 /** Scale the open-folder panel grows out of its tile from. */
 private const val PanelCollapsedScale = 0.78f
 
+/** Material fade-through, applied to the entries when the view mode changes. */
+private const val ModeSwapOutMillis = 90
+private const val ModeSwapInMillis = 210
+private const val ModeSwapScale = 0.92f
+
 /**
  * The arrival animation for [shelfId], or a flat `1f` for every folder that has
  * been there all along — so the modifier chain is the same shape either way and
@@ -327,6 +334,36 @@ fun LibraryScreen(
     val pop = remember { ShelfPopState() }
     val gridState = rememberLazyGridState()
 
+    // Toggling the mode swaps every tile for a row of a completely different
+    // shape. Done in one frame it reads as a stutter, so fade the entries out,
+    // relayout while they are invisible, and fade them back — the Material
+    // fade-through. `renderMode` is what is actually on screen; `viewMode` is
+    // what was asked for.
+    var renderMode by remember { mutableStateOf(viewMode) }
+    val swap = remember { Animatable(1f) }
+    LaunchedEffect(viewMode) {
+        if (viewMode != renderMode) {
+            swap.animateTo(0f, tween(ModeSwapOutMillis, easing = FastOutLinearInEasing))
+            renderMode = viewMode
+        }
+        // Never skip this tail, even when the modes already match. Toggling
+        // back mid-fade cancels and restarts this effect with viewMode already
+        // equal to renderMode, and an early return there would strand the grid
+        // at whatever alpha it had reached — permanently half-invisible.
+        swap.animateTo(1f, tween(ModeSwapInMillis, easing = LinearOutSlowInEasing))
+    }
+    val swapProgress = swap.asState()
+    // Hoisted so the lambda instance is stable, and read only from inside
+    // graphicsLayer: the fade runs in the draw phase and recomposes nothing.
+    val modeFade = remember(swapProgress) {
+        Modifier.graphicsLayer {
+            val progress = swapProgress.value
+            alpha = progress
+            scaleX = lerp(ModeSwapScale, 1f, progress)
+            scaleY = scaleX
+        }
+    }
+
     // `detectDragGesturesAfterLongPress` has no timeout parameter — it reads
     // this from the ambient ViewConfiguration. Delegation keeps every other
     // member (touch slop, fling velocity…) at the platform value.
@@ -399,7 +436,7 @@ fun LibraryScreen(
                 // item whose span CHANGES while its key stays the same makes
                 // LazyGrid place the same node twice ("Place was called on a
                 // node which was placed already") when the mode is toggled.
-                columns = GridCells.Fixed(if (viewMode == LibraryViewMode.GRID) 3 else 1),
+                columns = GridCells.Fixed(if (renderMode == LibraryViewMode.GRID) 3 else 1),
                 modifier = Modifier
                     .fillMaxSize()
                     .onGloballyPositioned {
@@ -432,8 +469,12 @@ fun LibraryScreen(
                 if (books.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }, key = "library_section") {
                         SectionRow(
+                            // `viewMode`, not `renderMode`: the segment lights
+                            // up under the finger while the grid is still
+                            // fading out behind it. That is most of what makes
+                            // the toggle feel instant.
                             viewMode = viewMode,
-                            showDragHint = viewMode == LibraryViewMode.GRID && !hasAnyShelf,
+                            showDragHint = renderMode == LibraryViewMode.GRID && !hasAnyShelf,
                             onViewMode = { mode ->
                                 haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                                 viewModel.setViewMode(mode)
@@ -457,7 +498,7 @@ fun LibraryScreen(
                         // Keys are scoped to the view mode so toggling grid/list
                         // swaps the items outright instead of animating a tile
                         // into a row — same reason as the column count above.
-                        key = { "${viewMode.name}/${it.id}" },
+                        key = { "${renderMode.name}/${it.id}" },
                     ) { entry ->
                         val itemModifier = Modifier
                             .animateItem(
@@ -478,9 +519,13 @@ fun LibraryScreen(
                                 enabled = entry is LibraryEntry.BookEntry && !searching,
                                 onDrop = onDrop,
                             )
+                            // INSIDE dragSource, so its onGloballyPositioned sits
+                            // outside this layer: bounds registered through a
+                            // scaled layer would report shrunken hit regions.
+                            .then(modeFade)
 
                         when (entry) {
-                            is LibraryEntry.BookEntry -> if (viewMode == LibraryViewMode.GRID) {
+                            is LibraryEntry.BookEntry -> if (renderMode == LibraryViewMode.GRID) {
                                 BookGridTile(
                                     book = entry.book,
                                     coverFile = viewModel.coverFileFor(entry.book),
@@ -500,7 +545,7 @@ fun LibraryScreen(
                                 )
                             }
 
-                            is LibraryEntry.ShelfEntry -> if (viewMode == LibraryViewMode.GRID) {
+                            is LibraryEntry.ShelfEntry -> if (renderMode == LibraryViewMode.GRID) {
                                 ShelfGridTile(
                                     entry = entry,
                                     coverOf = viewModel::coverFileFor,
