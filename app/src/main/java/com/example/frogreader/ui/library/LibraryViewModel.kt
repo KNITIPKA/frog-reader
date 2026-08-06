@@ -98,7 +98,30 @@ class LibraryViewModel(
     private val _messages = Channel<LibraryMessage>(Channel.BUFFERED)
     val messages = _messages.receiveAsFlow()
 
-    fun coverFileFor(book: Book): File? = repository.coverFileFor(book)
+    /**
+     * `bookId -> (coverFileName, resolved file)`. The repository's own
+     * `coverFileFor` ends in `File.exists()`, a disk stat, and the grid calls it
+     * during composition once per tile — plus four more times inside every shelf
+     * tile. Caching it keeps the main thread off the filesystem while scrolling.
+     *
+     * The file name is part of the cached value, not just the key: a new cover
+     * always gets a fresh `<id>-<timestamp>.img` name (BookRepository.kt:250),
+     * so a changed name is exactly the signal to look again.
+     *
+     * Only resolved entries are stored. A name that does not resolve yet — an
+     * import whose index write beat its cover write — must stay retryable.
+     */
+    private val coverCache = HashMap<String, Pair<String, File?>>()
+
+    fun coverFileFor(book: Book): File? {
+        val name = book.coverFileName ?: return null
+        coverCache[book.id]?.let { (cachedName, cachedFile) ->
+            if (cachedName == name) return cachedFile
+        }
+        val file = repository.coverFileFor(book)
+        if (file != null) coverCache[book.id] = name to file
+        return file
+    }
 
     fun importBook(uri: Uri?) {
         if (uri == null) return
@@ -120,6 +143,7 @@ class LibraryViewModel(
     }
 
     fun deleteBook(book: Book) {
+        coverCache.remove(book.id)
         viewModelScope.launch { repository.deleteBook(book.id) }
     }
 
