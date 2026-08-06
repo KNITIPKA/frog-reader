@@ -341,11 +341,17 @@ fun LibraryScreen(
     // what was asked for.
     var renderMode by remember { mutableStateOf(viewMode) }
     var swapping by remember { mutableStateOf(false) }
+    // Only a tap on the toggle earns a transition. The persisted mode arrives
+    // from DataStore a beat after the first frame, and animating that would
+    // make every cold start look like the app changed its mind.
+    var userChoseMode by remember { mutableStateOf(false) }
     val swap = remember { Animatable(1f) }
     LaunchedEffect(viewMode) {
         if (viewMode != renderMode) {
-            swapping = true
-            swap.animateTo(0f, tween(ModeSwapOutMillis, easing = FastOutLinearInEasing))
+            if (userChoseMode) {
+                swapping = true
+                swap.animateTo(0f, tween(ModeSwapOutMillis, easing = FastOutLinearInEasing))
+            }
             renderMode = viewMode
         }
         // Never skip this tail, even when the modes already match. Toggling
@@ -481,6 +487,7 @@ fun LibraryScreen(
                             viewMode = viewMode,
                             showDragHint = renderMode == LibraryViewMode.GRID && !hasAnyShelf,
                             onViewMode = { mode ->
+                                userChoseMode = true
                                 haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                                 viewModel.setViewMode(mode)
                             },
@@ -600,13 +607,6 @@ fun LibraryScreen(
                 .padding(bottom = 16.dp),
         ) { data -> Snackbar(data) }
 
-        DragOverlay(
-            drag = drag,
-            gridState = gridState,
-            books = books,
-            coverOf = viewModel::coverFileFor,
-        )
-
         mountedShelf?.let { shelfEntry ->
             ShelfPanel(
                 entry = shelfEntry,
@@ -625,6 +625,15 @@ fun LibraryScreen(
                 onClosed = { if (openShelfId == null) mountedShelf = null },
             )
         }
+
+        // LAST in the Box: the carried cover has to float above the folder
+        // panel, not disappear behind it the moment a book is lifted out.
+        DragOverlay(
+            drag = drag,
+            gridState = gridState,
+            books = books,
+            coverOf = viewModel::coverFileFor,
+        )
 
     }
 
@@ -1866,7 +1875,20 @@ private fun ShelfPanel(
                                             enabled = true,
                                             fromShelfId = entry.shelf.id,
                                             onDrop = { drop ->
-                                                if (drop.outsideContainer) onTakeOut(book.id)
+                                                if (drop.outsideContainer) {
+                                                    onTakeOut(book.id)
+                                                } else {
+                                                    // Let go inside the folder:
+                                                    // settle back into the slot
+                                                    // instead of blinking out.
+                                                    drag.beginLanding(
+                                                        entryId = drop.draggedId,
+                                                        from = drop.releaseRoot,
+                                                        to = drop.targetCenter ?: drop.releaseRoot,
+                                                        liveTargetId = drop.draggedId,
+                                                        merged = false,
+                                                    )
+                                                }
                                             },
                                         ),
                                 )
