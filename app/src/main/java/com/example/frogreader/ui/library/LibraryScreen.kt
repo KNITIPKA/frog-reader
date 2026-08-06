@@ -31,7 +31,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -242,6 +241,10 @@ private fun rememberShelfArrival(shelfId: String, pop: ShelfPopState): State<Flo
 @Composable
 fun LibraryScreen(
     viewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory),
+    // Clearance for the navigation bar. Taken as CONTENT padding, not as a
+    // margin: the grid's background still runs to the bottom of the screen and
+    // its items scroll under the bar, which is the point of having one.
+    contentPadding: PaddingValues = PaddingValues(),
     onOpenBook: (Book) -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
@@ -463,7 +466,7 @@ fun LibraryScreen(
                 contentPadding = PaddingValues(
                     start = SidePadding,
                     end = SidePadding,
-                    bottom = BottomInset,
+                    bottom = BottomInset + contentPadding.calculateBottomPadding(),
                 ),
                 horizontalArrangement = Arrangement.spacedBy(GridGap),
                 verticalArrangement = Arrangement.spacedBy(ListGap),
@@ -609,8 +612,8 @@ fun LibraryScreen(
             hostState = snackbarHostState,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 16.dp),
+                // The bar's height already carries the system inset.
+                .padding(bottom = contentPadding.calculateBottomPadding() + 16.dp),
         ) { data -> Snackbar(data) }
 
         mountedShelf?.let { shelfEntry ->
