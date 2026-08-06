@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -177,7 +178,6 @@ fun LibraryScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
-    val density = LocalDensity.current
 
     var bookToDelete by remember { mutableStateOf<Book?>(null) }
     var bookToEdit by remember { mutableStateOf<Book?>(null) }
@@ -414,29 +414,12 @@ fun LibraryScreen(
                 .padding(bottom = 16.dp),
         ) { data -> Snackbar(data) }
 
-        // Auto-scroll the grid while a book is held near an edge. Bound to the
-        // composition, so it cannot outlive the screen.
-        val isDragging = drag.isDragging
-        LaunchedEffect(isDragging) {
-            if (!isDragging) return@LaunchedEffect
-            val zonePx = with(density) { AutoScrollZone.toPx() }
-            var lastFrame = 0L
-            while (isActive) {
-                val now = withFrameNanos { it }
-                val deltaSeconds = if (lastFrame == 0L) 0f else (now - lastFrame) / 1_000_000_000f
-                lastFrame = now
-                // Per FRAME, not per pointer event: the dwell that turns a
-                // hover into a shelf has to advance while the finger is
-                // perfectly still, and a still finger sends nothing.
-                if (drag.updateHover()) {
-                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                }
-                val velocity = drag.autoScrollVelocity(zonePx, maxVelocity = 1200f)
-                if (velocity != 0f && deltaSeconds > 0f) {
-                    gridState.scrollBy(velocity * deltaSeconds)
-                }
-            }
-        }
+        DragOverlay(
+            drag = drag,
+            gridState = gridState,
+            books = books,
+            coverOf = viewModel::coverFileFor,
+        )
 
         openShelf?.let { shelfEntry ->
             ShelfPanel(
@@ -453,9 +436,6 @@ fun LibraryScreen(
             )
         }
 
-        if (drag.isDragging) {
-            DragGhost(drag = drag, books = books, coverOf = viewModel::coverFileFor)
-        }
     }
 
     bookToDelete?.let { book ->
@@ -1851,6 +1831,54 @@ private fun Modifier.dropTargetOverlay(
                 draw(size = Size(iconSize, iconSize), colorFilter = iconTint)
             }
         }
+    }
+}
+
+/**
+ * Everything that reacts to a live drag: the per-frame hover/auto-scroll loop
+ * and the floating ghost.
+ *
+ * Its own composable purely so that `drag.isDragging` is read HERE. Read from
+ * `LibraryScreen`'s body, picking a book up invalidated the whole screen and
+ * rebuilt the header with its hero card and cover — at the exact moment the
+ * frame budget is being spent on the gesture.
+ */
+@Composable
+private fun DragOverlay(
+    drag: LibraryDragState,
+    gridState: LazyGridState,
+    books: List<Book>,
+    coverOf: (Book) -> java.io.File?,
+) {
+    val density = LocalDensity.current
+    val haptics = LocalHapticFeedback.current
+    val isDragging = drag.isDragging
+
+    // Auto-scroll the grid while a book is held near an edge. Bound to the
+    // composition, so it cannot outlive the screen.
+    LaunchedEffect(isDragging) {
+        if (!isDragging) return@LaunchedEffect
+        val zonePx = with(density) { AutoScrollZone.toPx() }
+        var lastFrame = 0L
+        while (isActive) {
+            val now = withFrameNanos { it }
+            val deltaSeconds = if (lastFrame == 0L) 0f else (now - lastFrame) / 1_000_000_000f
+            lastFrame = now
+            // Per FRAME, not per pointer event: the dwell that turns a hover
+            // into a shelf has to advance while the finger is perfectly still,
+            // and a still finger sends nothing.
+            if (drag.updateHover()) {
+                haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+            }
+            val velocity = drag.autoScrollVelocity(zonePx, maxVelocity = 1200f)
+            if (velocity != 0f && deltaSeconds > 0f) {
+                gridState.scrollBy(velocity * deltaSeconds)
+            }
+        }
+    }
+
+    if (isDragging) {
+        DragGhost(drag = drag, books = books, coverOf = coverOf)
     }
 }
 
