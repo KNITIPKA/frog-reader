@@ -2,6 +2,7 @@ package com.example.frogreader.ui.profile
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -26,10 +27,11 @@ import com.example.frogreader.R
  * has both of its destinations.
  */
 @Composable
-fun ProfileScreen() {
+fun ProfileScreen(contentPadding: PaddingValues = PaddingValues()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .padding(contentPadding)
             .padding(horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,

@@ -6,10 +6,14 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
+import coil3.memory.MemoryCache
 import coil3.svg.SvgDecoder
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.StatsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class FrogReaderApp : Application(), SingletonImageLoader.Factory {
     val bookRepository: BookRepository by lazy { BookRepository(this) }
@@ -24,11 +28,28 @@ class FrogReaderApp : Application(), SingletonImageLoader.Factory {
         // Keep the legacy toolbar until the new menu exposes the selection
         // to custom items (b/455589857).
         ComposeFoundationFlags.isNewContextMenuEnabled = false
+
+        // Read library.json off the main thread, now, in parallel with
+        // DataStore and Compose starting up. The flows behind it are backed by
+        // a synchronized `lazy`, so whoever asks first pays for the read — and
+        // that used to be the library screen's first composition, on the main
+        // thread, blocking the frame it was trying to draw.
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { bookRepository.books.value }
+        }
     }
 
     /** Coil with SVG support — books use vector covers and illustrations. */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
             .components { add(SvgDecoder.Factory()) }
+            // Explicit and generous: the library grid rebuilds every cover node
+            // when the view mode is toggled, and only a memory-cache hit makes
+            // that repaint free. The default is smaller and device-dependent.
+            .memoryCache {
+                MemoryCache.Builder()
+                    .maxSizePercent(context, 0.25)
+                    .build()
+            }
             .build()
 }

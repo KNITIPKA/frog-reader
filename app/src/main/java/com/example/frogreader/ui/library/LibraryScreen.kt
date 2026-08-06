@@ -1,9 +1,14 @@
 package com.example.frogreader.ui.library
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateFloatAsState
@@ -26,7 +31,6 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -34,6 +38,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -81,6 +86,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -97,10 +104,12 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.lerp
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
@@ -134,12 +143,17 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.toSize
+import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
 import com.example.frogreader.R
 import com.example.frogreader.data.LibraryViewMode
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.data.model.bookOrderKey
+import com.example.frogreader.data.model.shelfOrderKey
 import com.example.frogreader.ui.nav.sharedBookCover
 import com.example.frogreader.ui.theme.LocalFrogColors
 import kotlinx.coroutines.isActive
@@ -149,7 +163,7 @@ import kotlin.math.roundToInt
 private val GridGap = 14.dp
 private val ListGap = 8.dp
 private val SidePadding = 20.dp
-private val BottomInset = 132.dp
+private val BottomInset = 20.dp
 private val GhostWidth = 84.dp
 private val GhostHeight = 124.dp
 private val AutoScrollZone = 72.dp
@@ -160,10 +174,77 @@ private val ShelfScrim = Color(0xFF102C1A)
 /** Long-press threshold for picking a book up, shortened from the 500ms default. */
 private const val DragPickupMillis = 250L
 
+/**
+ * How long a released book takes to reach where it landed. Long enough to read
+ * as travel, short enough that the repository's `library.json` write (a few
+ * milliseconds, on IO) is over well before the ghost arrives.
+ */
+private const val GhostFlightMillis = 200
+
+/** How small the ghost gets as it disappears into a shelf. */
+private const val GhostLandScale = 0.34f
+
+/**
+ * Which shelf, if any, has just been created and still owes the user an
+ * arrival animation.
+ *
+ * A holder rather than a bare `String?` so the tiles can read it themselves.
+ * Read at the `items` call site instead, creating one folder would invalidate
+ * every book tile on screen twice.
+ */
+@Stable
+private class ShelfPopState {
+    var shelfId by mutableStateOf<String?>(null)
+}
+
+/** Scale a brand-new folder grows from. */
+private const val ShelfPopFrom = 0.62f
+
+/** Scale the open-folder panel grows out of its tile from. */
+private const val PanelCollapsedScale = 0.78f
+
+/** Material fade-through, applied to the entries when the view mode changes. */
+private const val ModeSwapOutMillis = 90
+private const val ModeSwapInMillis = 210
+private const val ModeSwapScale = 0.92f
+
+/**
+ * The arrival animation for [shelfId], or a flat `1f` for every folder that has
+ * been there all along — so the modifier chain is the same shape either way and
+ * existing folders pay nothing for it.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun rememberShelfArrival(shelfId: String, pop: ShelfPopState): State<Float> {
+    val justCreated = pop.shelfId == shelfId
+    val spec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
+    val arrival = remember { Animatable(if (justCreated) 0f else 1f) }
+
+    LaunchedEffect(justCreated) {
+        if (justCreated) {
+            // The tile can compose a frame before the new id reaches us — the
+            // shelf flow and the callback are separate trips to the main
+            // thread — so start from scratch rather than trust the initial.
+            arrival.snapTo(0f)
+            arrival.animateTo(1f, spec)
+            pop.shelfId = null
+        } else if (arrival.value != 1f) {
+            // A second folder created mid-animation cancels this effect. Never
+            // leave a tile stranded at two-thirds size.
+            arrival.animateTo(1f, spec)
+        }
+    }
+    return arrival.asState()
+}
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun LibraryScreen(
     viewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory),
+    // Clearance for the navigation bar. Taken as CONTENT padding, not as a
+    // margin: the grid's background still runs to the bottom of the screen and
+    // its items scroll under the bar, which is the point of having one.
+    contentPadding: PaddingValues = PaddingValues(),
     onOpenBook: (Book) -> Unit = {},
     onOpenSettings: () -> Unit = {},
 ) {
@@ -175,14 +256,16 @@ fun LibraryScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
-    val density = LocalDensity.current
 
     var bookToDelete by remember { mutableStateOf<Book?>(null) }
     var bookToEdit by remember { mutableStateOf<Book?>(null) }
     var bookForDetails by remember { mutableStateOf<Book?>(null) }
-    var openShelfId by remember { mutableStateOf<String?>(null) }
+    var openShelfId by rememberSaveable { mutableStateOf<String?>(null) }
 
     val searching = query.isNotBlank()
+
+    // Without this, Back with a folder open leaves the library entirely.
+    BackHandler(enabled = openShelfId != null) { openShelfId = null }
 
     // The hero is still "the last book you opened". It keeps that spot even
     // when it lives inside a shelf — only a LOOSE copy is hidden from the grid.
@@ -198,8 +281,30 @@ fun LibraryScreen(
         }
     }
     val hasAnyShelf = remember(entries) { entries.any { it is LibraryEntry.ShelfEntry } }
-    val openShelf = remember(entries, openShelfId) {
-        entries.filterIsInstance<LibraryEntry.ShelfEntry>().firstOrNull { it.shelf.id == openShelfId }
+
+    // What the panel is drawing. It deliberately outlives `openShelfId`: the
+    // panel has to stay mounted while it folds back into its tile, and it has
+    // to keep its last contents when the shelf itself dissolves underneath it
+    // (pull the second-to-last book out and there is no shelf left to read).
+    var mountedShelf by remember { mutableStateOf<LibraryEntry.ShelfEntry?>(null) }
+    LaunchedEffect(entries, openShelfId) {
+        val id = openShelfId ?: return@LaunchedEffect
+        val match = entries.filterIsInstance<LibraryEntry.ShelfEntry>()
+            .firstOrNull { it.shelf.id == id }
+        if (match != null) {
+            mountedShelf = match
+        } else {
+            // The shelf is gone — dissolved down to one book, or restored from
+            // a saved state that outlived it. Close, don't sit there holding an
+            // id that nothing can open (and that Back would keep swallowing).
+            openShelfId = null
+        }
+    }
+    // Opening seeds it from the click instead of waiting for that effect, so
+    // the panel is there on the very frame the folder is tapped.
+    val onOpenShelf: (LibraryEntry.ShelfEntry) -> Unit = { entry ->
+        mountedShelf = entry
+        openShelfId = entry.shelf.id
     }
 
     LaunchedEffect(Unit) {
@@ -230,7 +335,53 @@ fun LibraryScreen(
     }
 
     val drag = remember { LibraryDragState() }
+    val pop = remember { ShelfPopState() }
     val gridState = rememberLazyGridState()
+
+    // Toggling the mode swaps every tile for a row of a completely different
+    // shape. Done in one frame it reads as a stutter, so fade the entries out,
+    // relayout while they are invisible, and fade them back — the Material
+    // fade-through. `renderMode` is what is actually on screen; `viewMode` is
+    // what was asked for.
+    var renderMode by remember { mutableStateOf(viewMode) }
+    var swapping by remember { mutableStateOf(false) }
+    // Only a tap on the toggle earns a transition. The persisted mode arrives
+    // from DataStore a beat after the first frame, and animating that would
+    // make every cold start look like the app changed its mind.
+    var userChoseMode by remember { mutableStateOf(false) }
+    val swap = remember { Animatable(1f) }
+    LaunchedEffect(viewMode) {
+        if (viewMode != renderMode) {
+            if (userChoseMode) {
+                swapping = true
+                swap.animateTo(0f, tween(ModeSwapOutMillis, easing = FastOutLinearInEasing))
+            }
+            renderMode = viewMode
+        }
+        // Never skip this tail, even when the modes already match. Toggling
+        // back mid-fade cancels and restarts this effect with viewMode already
+        // equal to renderMode, and an early return there would strand the grid
+        // at whatever alpha it had reached — permanently half-invisible.
+        swap.animateTo(1f, tween(ModeSwapInMillis, easing = LinearOutSlowInEasing))
+        swapping = false
+    }
+    // Content types for the grid, so LazyGrid can reuse a book tile for another
+    // book instead of composing it from scratch. Hoisted rather than built per
+    // item: the lambda below runs during measurement, on every item.
+    val bookType = remember(renderMode) { "${renderMode.name}:book" }
+    val shelfType = remember(renderMode) { "${renderMode.name}:shelf" }
+
+    val swapProgress = swap.asState()
+    // Hoisted so the lambda instance is stable, and read only from inside
+    // graphicsLayer: the fade runs in the draw phase and recomposes nothing.
+    val modeFade = remember(swapProgress) {
+        Modifier.graphicsLayer {
+            val progress = swapProgress.value
+            alpha = progress
+            scaleX = lerp(ModeSwapScale, 1f, progress)
+            scaleY = scaleX
+        }
+    }
 
     // `detectDragGesturesAfterLongPress` has no timeout parameter — it reads
     // this from the ambient ViewConfiguration. Delegation keeps every other
@@ -245,6 +396,20 @@ fun LibraryScreen(
     val onDrop: (DragDrop) -> Unit = { drop ->
         val draggedBookId = drop.draggedId.substringAfter(':')
         val target = drop.mergeTargetId
+        // Every release flies the cover somewhere — into the thing that
+        // swallowed it, or back into the slot it came from. The one exception
+        // is a book carried out of an open folder: the panel fading back in
+        // already accounts for where it went.
+        val landsHome = target == null && !drop.outsideContainer
+        if (target != null || landsHome) {
+            drag.beginLanding(
+                entryId = drop.draggedId,
+                from = drop.releaseRoot,
+                to = drop.targetCenter ?: drop.releaseRoot,
+                liveTargetId = target ?: drop.draggedId.takeIf { landsHome },
+                merged = target != null,
+            )
+        }
         when {
             target == null -> Unit
 
@@ -254,11 +419,21 @@ fun LibraryScreen(
             }
 
             else -> {
+                // Deliberately no auto-open: dropping one icon on another in a
+                // launcher makes a folder, it does not walk you into it. The
+                // shelf lands unnamed in the target's slot; tapping it opens the
+                // panel with the name field.
                 viewModel.createShelf(
                     draggedBookId = draggedBookId,
                     targetBookId = target.substringAfter(':'),
-                    // A fresh shelf opens straight away so it can be named.
-                    onCreated = { shelfId -> openShelfId = shelfId },
+                    // The shelf only becomes addressable once the write lands.
+                    // Handing its id to the flight lets the ghost finish on the
+                    // real folder rather than on the target's remembered slot,
+                    // and tells that one tile to play its arrival.
+                    onCreated = { shelfId ->
+                        drag.retargetLanding(shelfOrderKey(shelfId))
+                        pop.shelfId = shelfId
+                    },
                 )
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
             }
@@ -276,11 +451,13 @@ fun LibraryScreen(
         ) {
             LazyVerticalGrid(
                 state = gridState,
-                // One column in list mode instead of spanning every row: an
-                // item whose span CHANGES while its key stays the same makes
-                // LazyGrid place the same node twice ("Place was called on a
-                // node which was placed already") when the mode is toggled.
-                columns = GridCells.Fixed(if (viewMode == LibraryViewMode.GRID) 3 else 1),
+                // One column in list mode, rather than giving every entry a
+                // full-line span: an ITEM whose span changes under an unchanged
+                // key makes LazyGrid place the same node twice ("Place was
+                // called on a node which was placed already"). Changing the
+                // column count keeps every entry at span 1 in both modes, which
+                // is what lets the keys below stay stable.
+                columns = GridCells.Fixed(if (renderMode == LibraryViewMode.GRID) 3 else 1),
                 modifier = Modifier
                     .fillMaxSize()
                     .onGloballyPositioned {
@@ -289,12 +466,10 @@ fun LibraryScreen(
                 contentPadding = PaddingValues(
                     start = SidePadding,
                     end = SidePadding,
-                    bottom = BottomInset,
+                    bottom = BottomInset + contentPadding.calculateBottomPadding(),
                 ),
                 horizontalArrangement = Arrangement.spacedBy(GridGap),
-                verticalArrangement = Arrangement.spacedBy(
-                    if (viewMode == LibraryViewMode.GRID) GridGap else ListGap,
-                ),
+                verticalArrangement = Arrangement.spacedBy(ListGap),
             ) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "library_header") {
                     LibraryHeader(
@@ -315,16 +490,18 @@ fun LibraryScreen(
                 if (books.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }, key = "library_section") {
                         SectionRow(
+                            // `viewMode`, not `renderMode`: the segment lights
+                            // up under the finger while the grid is still
+                            // fading out behind it. That is most of what makes
+                            // the toggle feel instant.
                             viewMode = viewMode,
-                            showDragHint = viewMode == LibraryViewMode.GRID && !hasAnyShelf,
+                            showDragHint = renderMode == LibraryViewMode.GRID && !hasAnyShelf,
                             onViewMode = { mode ->
+                                userChoseMode = true
                                 haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                                 viewModel.setViewMode(mode)
                             },
-                            modifier = Modifier.padding(
-                                top = if (viewMode == LibraryViewMode.GRID) 2.dp else 8.dp,
-                                bottom = if (viewMode == LibraryViewMode.GRID) 0.dp else 4.dp,
-                            ),
+                            modifier = Modifier.padding(top = 6.dp, bottom = 6.dp),
                         )
                     }
                 }
@@ -340,10 +517,16 @@ fun LibraryScreen(
                 } else {
                     items(
                         items = visibleEntries,
-                        // Keys are scoped to the view mode so toggling grid/list
-                        // swaps the items outright instead of animating a tile
-                        // into a row — same reason as the column count above.
-                        key = { "${viewMode.name}/${it.id}" },
+                        // The entry id alone, so a mode swap KEEPS every item
+                        // slot: the cover's image node survives, its remembers
+                        // survive, and the grid keeps its scroll anchor. Safe
+                        // because entry items never declare a span — only the
+                        // column count changes, exactly as the full-span header
+                        // above has always done.
+                        key = { it.id },
+                        contentType = { entry ->
+                            if (entry is LibraryEntry.ShelfEntry) shelfType else bookType
+                        },
                     ) { entry ->
                         val itemModifier = Modifier
                             .animateItem(
@@ -351,11 +534,21 @@ fun LibraryScreen(
                                 // bouncy spring overshot and took ~500ms to
                                 // settle, so displaced tiles stayed under the
                                 // finger long enough to fight the reorder.
-                                placementSpec = spring(
-                                    stiffness = Spring.StiffnessMedium,
-                                    dampingRatio = Spring.DampingRatioNoBouncy,
-                                    visibilityThreshold = IntOffset.VisibilityThreshold,
-                                ),
+                                //
+                                // Suppressed outright across a mode swap: every
+                                // item now keeps its slot, so every one of them
+                                // would otherwise fly from its grid position to
+                                // its row position while fading in. The
+                                // cross-fade carries that motion instead.
+                                placementSpec = if (swapping) {
+                                    null
+                                } else {
+                                    spring(
+                                        stiffness = Spring.StiffnessMedium,
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        visibilityThreshold = IntOffset.VisibilityThreshold,
+                                    )
+                                },
                             )
                             .dragSource(
                                 id = entry.id,
@@ -364,16 +557,20 @@ fun LibraryScreen(
                                 enabled = entry is LibraryEntry.BookEntry && !searching,
                                 onDrop = onDrop,
                             )
+                            // INSIDE dragSource, so its onGloballyPositioned sits
+                            // outside this layer: bounds registered through a
+                            // scaled layer would report shrunken hit regions.
+                            .then(modeFade)
 
                         when (entry) {
-                            is LibraryEntry.BookEntry -> if (viewMode == LibraryViewMode.GRID) {
+                            is LibraryEntry.BookEntry -> if (renderMode == LibraryViewMode.GRID) {
                                 BookGridTile(
                                     book = entry.book,
                                     coverFile = viewModel.coverFileFor(entry.book),
                                     drag = drag,
                                     entryId = entry.id,
                                     onClick = { onOpenBook(entry.book) },
-                                    modifier = itemModifier,
+                                    modifier = itemModifier.padding(top = 6.dp),
                                 )
                             } else {
                                 BookListRow(
@@ -386,20 +583,22 @@ fun LibraryScreen(
                                 )
                             }
 
-                            is LibraryEntry.ShelfEntry -> if (viewMode == LibraryViewMode.GRID) {
+                            is LibraryEntry.ShelfEntry -> if (renderMode == LibraryViewMode.GRID) {
                                 ShelfGridTile(
                                     entry = entry,
                                     coverOf = viewModel::coverFileFor,
                                     drag = drag,
-                                    onClick = { openShelfId = entry.shelf.id },
-                                    modifier = itemModifier,
+                                    pop = pop,
+                                    onClick = { onOpenShelf(entry) },
+                                    modifier = itemModifier.padding(top = 6.dp),
                                 )
                             } else {
                                 ShelfListRow(
                                     entry = entry,
                                     coverOf = viewModel::coverFileFor,
                                     drag = drag,
-                                    onClick = { openShelfId = entry.shelf.id },
+                                    pop = pop,
+                                    onClick = { onOpenShelf(entry) },
                                     modifier = itemModifier,
                                 )
                             }
@@ -409,70 +608,47 @@ fun LibraryScreen(
             }
         }
 
-        // Fade under the floating nav bar. Not clickable — it is pure paint.
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(140.dp)
-                .background(
-                    Brush.verticalGradient(
-                        0f to Color.Transparent,
-                        0.68f to MaterialTheme.colorScheme.surface,
-                    ),
-                ),
-        )
-
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = 100.dp),
+                // The bar's height already carries the system inset.
+                .padding(bottom = contentPadding.calculateBottomPadding() + 16.dp),
         ) { data -> Snackbar(data) }
 
-        // Auto-scroll the grid while a book is held near an edge. Bound to the
-        // composition, so it cannot outlive the screen.
-        val isDragging = drag.isDragging
-        LaunchedEffect(isDragging) {
-            if (!isDragging) return@LaunchedEffect
-            val zonePx = with(density) { AutoScrollZone.toPx() }
-            var lastFrame = 0L
-            while (isActive) {
-                val now = withFrameNanos { it }
-                val deltaSeconds = if (lastFrame == 0L) 0f else (now - lastFrame) / 1_000_000_000f
-                lastFrame = now
-                // Per FRAME, not per pointer event: the dwell that turns a
-                // hover into a shelf has to advance while the finger is
-                // perfectly still, and a still finger sends nothing.
-                if (drag.updateHover()) {
-                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                }
-                val velocity = drag.autoScrollVelocity(zonePx, maxVelocity = 1200f)
-                if (velocity != 0f && deltaSeconds > 0f) {
-                    gridState.scrollBy(velocity * deltaSeconds)
-                }
-            }
-        }
-
-        openShelf?.let { shelfEntry ->
+        mountedShelf?.let { shelfEntry ->
             ShelfPanel(
                 entry = shelfEntry,
+                expanded = openShelfId == shelfEntry.shelf.id,
                 coverOf = viewModel::coverFileFor,
                 drag = drag,
                 onRename = { newName -> viewModel.renameShelf(shelfEntry.shelf.id, newName) },
                 onTakeOut = { bookId ->
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     viewModel.removeFromShelf(shelfEntry.shelf.id, bookId)
-                    if (shelfEntry.books.size <= 2) openShelfId = null
+                    // Always, not just when the shelf dissolves. Carrying a
+                    // book past the folder's edge already fades the folder out
+                    // of the way; springing it back open afterwards — which is
+                    // what happened with three books or more — contradicts the
+                    // gesture you just finished making.
+                    openShelfId = null
                 },
                 onDismiss = { openShelfId = null },
+                // Unmount only once it has finished folding away — and only if
+                // nothing reopened it in the meantime.
+                onClosed = { if (openShelfId == null) mountedShelf = null },
             )
         }
 
-        if (drag.isDragging) {
-            DragGhost(drag = drag, books = books, coverOf = viewModel::coverFileFor)
-        }
+        // LAST in the Box: the carried cover has to float above the folder
+        // panel, not disappear behind it the moment a book is lifted out.
+        DragOverlay(
+            drag = drag,
+            gridState = gridState,
+            books = books,
+            coverOf = viewModel::coverFileFor,
+        )
+
     }
 
     bookToDelete?.let { book ->
@@ -570,7 +746,7 @@ private fun LibraryHeader(
             .clip(RoundedCornerShape(bottomStart = 36.dp, bottomEnd = 36.dp))
             .background(Brush.verticalGradient(listOf(frog.headerTop, frog.headerBottom)))
             .statusBarsPadding()
-            .padding(bottom = 18.dp),
+            .padding(bottom = 8.dp),
     ) {
         Row(
             // 16dp, the same inset the hero card below uses, so the search
@@ -1199,22 +1375,31 @@ private fun BookGridTile(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ShelfGridTile(
     entry: LibraryEntry.ShelfEntry,
     coverOf: (Book) -> java.io.File?,
     drag: LibraryDragState,
+    pop: ShelfPopState,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val frog = LocalFrogColors.current
     val extra = entry.books.size - 4
+    val arrival = rememberShelfArrival(entry.shelf.id, pop)
 
     Column(modifier = modifier) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
+                // The artwork pops, the label below it does not: an overshoot
+                // spring on 12sp type is visibly jittery.
+                .graphicsLayer {
+                    scaleX = lerp(ShelfPopFrom, 1f, arrival.value)
+                    scaleY = scaleX
+                }
                 .clip(RoundedCornerShape(22.dp))
                 .background(frog.folder)
                 .clickable(onClick = onClick)
@@ -1230,11 +1415,22 @@ private fun ShelfGridTile(
                 repeat(2) { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         repeat(2) { column ->
-                            val book = entry.books.getOrNull(row * 2 + column)
+                            val slot = row * 2 + column
+                            val book = entry.books.getOrNull(slot)
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
                                     .aspectRatio(2f / 3f)
+                                    // Mini covers land one after another, so a
+                                    // new folder reads as books dropping in
+                                    // rather than a card appearing.
+                                    .graphicsLayer {
+                                        val t = ((arrival.value - slot * 0.07f) / 0.6f)
+                                            .coerceIn(0f, 1f)
+                                        alpha = t
+                                        scaleX = lerp(0.7f, 1f, t)
+                                        scaleY = scaleX
+                                    }
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(
                                         // Empty slots need to read as plates in
@@ -1394,11 +1590,13 @@ private fun BookListRow(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ShelfListRow(
     entry: LibraryEntry.ShelfEntry,
     coverOf: (Book) -> java.io.File?,
     drag: LibraryDragState,
+    pop: ShelfPopState,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1406,10 +1604,16 @@ private fun ShelfListRow(
     val scheme = MaterialTheme.colorScheme
     val spines = entry.books.take(6)
     val extra = entry.books.size - spines.size
+    val arrival = rememberShelfArrival(entry.shelf.id, pop)
 
     Column(
         modifier = modifier
             .fillMaxWidth()
+            // The whole card is the folder here, so all of it pops.
+            .graphicsLayer {
+                scaleX = lerp(ShelfPopFrom, 1f, arrival.value)
+                scaleY = scaleX
+            }
             .clip(RoundedCornerShape(20.dp))
             .background(frog.folder)
             .clickable(onClick = onClick)
@@ -1487,20 +1691,44 @@ private fun ShelfListRow(
 
 // ------------------------------------------------------------- shelf panel
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ShelfPanel(
     entry: LibraryEntry.ShelfEntry,
+    expanded: Boolean,
     coverOf: (Book) -> java.io.File?,
     drag: LibraryDragState,
     onRename: (String) -> Unit,
     onTakeOut: (String) -> Unit,
     onDismiss: () -> Unit,
+    onClosed: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     var name by remember(entry.shelf.id) { mutableStateOf(entry.shelf.name) }
     val currentName by rememberUpdatedState(name)
     val savedName by rememberUpdatedState(entry.shelf.name)
     val commitRename by rememberUpdatedState(onRename)
+    val finish by rememberUpdatedState(onClosed)
+
+    // The folder unfolding out of its own tile and folding back into it. The
+    // open uses the expressive spatial spring; the close is deliberately
+    // non-bouncy, because an overshoot on the way out reads as a mistake.
+    val openSpec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
+    val expansion = remember { Animatable(0f) }
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            expansion.animateTo(1f, openSpec)
+        } else {
+            expansion.animateTo(
+                targetValue = 0f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMedium,
+                ),
+            )
+            finish()
+        }
+    }
 
     // Save on the way out, so a rename survives tapping the scrim or dragging
     // the last book out from under the panel.
@@ -1513,13 +1741,20 @@ private fun ShelfPanel(
     // panel stays COMPOSED: unmounting it would dispose the pointerInput node
     // that owns the gesture still in flight.
     val pullingOut = drag.dragShelfId == entry.shelf.id && drag.outsidePanel
+
+    // `!expanded` counts as hidden, and that is the whole point: a panel faded
+    // out by a pull-out used to start fading BACK IN the instant the finger
+    // lifted, while `expansion` was already collapsing it. The two crossing
+    // over is what leaves a folder-shaped smear behind for a frame or two.
+    // Once the panel is on its way out, neither fade is allowed to recover.
+    val hidden = pullingOut || !expanded
     val panelAlpha by animateFloatAsState(
-        targetValue = if (pullingOut) 0f else 1f,
+        targetValue = if (hidden) 0f else 1f,
         animationSpec = tween(180),
         label = "shelfPanelAlpha",
     )
     val scrimAlpha by animateFloatAsState(
-        targetValue = if (pullingOut) 0.12f else 0.42f,
+        targetValue = if (hidden) 0.12f else 0.42f,
         animationSpec = tween(180),
         label = "shelfScrimAlpha",
     )
@@ -1528,13 +1763,13 @@ private fun ShelfPanel(
         modifier = Modifier
             .fillMaxSize()
             .drawWithContent {
-                drawRect(ShelfScrim.copy(alpha = scrimAlpha))
+                drawRect(ShelfScrim.copy(alpha = scrimAlpha * expansion.value))
                 drawContent()
             }
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                enabled = !drag.isDragging,
+                enabled = expanded && !drag.isDragging,
                 onClick = onDismiss,
             ),
     ) {
@@ -1545,10 +1780,36 @@ private fun ShelfPanel(
             modifier = Modifier
                 .align(Alignment.Center)
                 .padding(horizontal = 16.dp)
+                // BEFORE the graphicsLayer, and it has to stay there: modifier
+                // nodes to the left of a layer sit outside it, so positionInRoot
+                // keeps reporting untransformed bounds and "did the book leave
+                // the folder?" stays truthful while the panel is mid-scale.
                 .onGloballyPositioned {
                     drag.panelBounds = Rect(it.positionInRoot(), it.size.toSize())
                 }
-                .graphicsLayer { alpha = panelAlpha }
+                .graphicsLayer {
+                    val progress = expansion.value
+                    // Grow out of the folder's own tile. Both rects are plain
+                    // fields read in the layout phase, and the lambda re-runs
+                    // every frame because `progress` changed — so this resolves
+                    // itself on the first frame the panel has any size at all.
+                    val panel = drag.panelBounds
+                    val tile = drag.bounds[entry.id]
+                    transformOrigin = if (tile != null && !panel.isEmpty) {
+                        TransformOrigin(
+                            ((tile.center.x - panel.left) / panel.width).coerceIn(0f, 1f),
+                            ((tile.center.y - panel.top) / panel.height).coerceIn(0f, 1f),
+                        )
+                    } else {
+                        TransformOrigin.Center
+                    }
+                    scaleX = lerp(PanelCollapsedScale, 1f, progress)
+                    scaleY = scaleX
+                    // Alpha leads the scale, so the panel is solid well before
+                    // it stops growing. `panelAlpha` still wins outright — a
+                    // book being pulled out has to see the grid underneath.
+                    alpha = (progress * 2.2f).coerceAtMost(1f) * panelAlpha
+                }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -1635,7 +1896,32 @@ private fun ShelfPanel(
                                             enabled = true,
                                             fromShelfId = entry.shelf.id,
                                             onDrop = { drop ->
-                                                if (drop.outsideContainer) onTakeOut(book.id)
+                                                if (drop.outsideContainer) {
+                                                    onTakeOut(book.id)
+                                                    // Home in on the grid slot
+                                                    // the book is about to get.
+                                                    // It has no bounds entry yet
+                                                    // — until it does, the ghost
+                                                    // just fades where it was.
+                                                    drag.beginLanding(
+                                                        entryId = drop.draggedId,
+                                                        from = drop.releaseRoot,
+                                                        to = drop.releaseRoot,
+                                                        liveTargetId = bookOrderKey(book.id),
+                                                        merged = false,
+                                                    )
+                                                } else {
+                                                    // Let go inside the folder:
+                                                    // settle back into the slot
+                                                    // instead of blinking out.
+                                                    drag.beginLanding(
+                                                        entryId = drop.draggedId,
+                                                        from = drop.releaseRoot,
+                                                        to = drop.targetCenter ?: drop.releaseRoot,
+                                                        liveTargetId = drop.draggedId,
+                                                        merged = false,
+                                                    )
+                                                }
                                             },
                                         ),
                                 )
@@ -1871,22 +2157,95 @@ private fun Modifier.dropTargetOverlay(
     }
 }
 
+/**
+ * Everything that reacts to a live drag: the per-frame hover/auto-scroll loop
+ * and the floating ghost.
+ *
+ * Its own composable purely so that `drag.isDragging` is read HERE. Read from
+ * `LibraryScreen`'s body, picking a book up invalidated the whole screen and
+ * rebuilt the header with its hero card and cover — at the exact moment the
+ * frame budget is being spent on the gesture.
+ */
+@Composable
+private fun DragOverlay(
+    drag: LibraryDragState,
+    gridState: LazyGridState,
+    books: List<Book>,
+    coverOf: (Book) -> java.io.File?,
+) {
+    val density = LocalDensity.current
+    val haptics = LocalHapticFeedback.current
+    val isDragging = drag.isDragging
+
+    // Auto-scroll the grid while a book is held near an edge. Bound to the
+    // composition, so it cannot outlive the screen.
+    LaunchedEffect(isDragging) {
+        if (!isDragging) return@LaunchedEffect
+        val zonePx = with(density) { AutoScrollZone.toPx() }
+        var lastFrame = 0L
+        while (isActive) {
+            val now = withFrameNanos { it }
+            val deltaSeconds = if (lastFrame == 0L) 0f else (now - lastFrame) / 1_000_000_000f
+            lastFrame = now
+            // Per FRAME, not per pointer event: the dwell that turns a hover
+            // into a shelf has to advance while the finger is perfectly still,
+            // and a still finger sends nothing.
+            if (drag.updateHover()) {
+                haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+            }
+            val velocity = drag.autoScrollVelocity(zonePx, maxVelocity = 1200f)
+            if (velocity != 0f && deltaSeconds > 0f) {
+                gridState.scrollBy(velocity * deltaSeconds)
+            }
+        }
+    }
+
+    DragGhost(drag = drag, books = books, coverOf = coverOf)
+}
+
+/**
+ * The carried cover — under the finger while the gesture is live, then flying
+ * to wherever the book ended up.
+ *
+ * One composable for both, deliberately: splitting them would dispose the
+ * cover's image node at exactly the handover and reintroduce the blank frame
+ * the flight exists to remove.
+ */
 @Composable
 private fun DragGhost(
     drag: LibraryDragState,
     books: List<Book>,
     coverOf: (Book) -> java.io.File?,
 ) {
-    val draggedBook = remember(drag.draggingId, books) {
-        val id = drag.draggingId?.substringAfter(':')
+    val landing = drag.landing
+    val carriedId = drag.draggingId ?: landing?.entryId ?: return
+    val carriedBook = remember(carriedId, books) {
+        val id = carriedId.substringAfter(':')
         books.firstOrNull { it.id == id }
     } ?: return
 
+    // A fresh animator per flight; the cover subtree below is untouched.
+    val flight = remember(landing) { Animatable(0f) }
+    LaunchedEffect(landing) {
+        if (landing == null) return@LaunchedEffect
+        flight.animateTo(1f, tween(GhostFlightMillis, easing = FastOutSlowInEasing))
+        drag.endLanding()
+    }
+
     Box(
         modifier = Modifier
-            // Placement phase: reads fingerRoot without recomposing anything.
+            // Placement phase: reads the finger and the flight without
+            // recomposing anything.
             .offset {
-                val local = drag.fingerRoot - drag.rootOrigin
+                val centre = if (landing == null) {
+                    drag.fingerRoot
+                } else {
+                    // Re-read every frame so the ghost tracks a destination
+                    // that is still settling into place under it.
+                    val target = landing.liveTargetId?.let { drag.bounds[it]?.center } ?: landing.to
+                    lerp(landing.from, target, flight.value)
+                }
+                val local = centre - drag.rootOrigin
                 IntOffset(
                     (local.x - GhostWidth.toPx() / 2f).roundToInt(),
                     (local.y - GhostHeight.toPx() / 2f).roundToInt(),
@@ -1894,15 +2253,21 @@ private fun DragGhost(
             }
             .size(GhostWidth, GhostHeight)
             .graphicsLayer {
-                rotationZ = -4f
-                scaleX = 1.04f
-                scaleY = 1.04f
-                shadowElevation = 18.dp.toPx()
+                val t = flight.value
+                val endScale = if (landing?.merged == true) GhostLandScale else 1f
+                rotationZ = -4f * (1f - t)
+                scaleX = lerp(1.04f, endScale, t)
+                scaleY = scaleX
+                // Squared, so it stays solid for most of the trip and only
+                // gives way at the end — otherwise it reads as a fade, not
+                // as the book being put somewhere.
+                alpha = 1f - t * t
+                shadowElevation = 18.dp.toPx() * (1f - t)
                 shape = RoundedCornerShape(20.dp)
                 clip = true
             },
     ) {
-        BookCover(book = draggedBook, coverFile = coverOf(draggedBook), titleSize = 10.sp, padding = 9.dp)
+        BookCover(book = carriedBook, coverFile = coverOf(carriedBook), titleSize = 10.sp, padding = 9.dp)
     }
 }
 
@@ -1922,8 +2287,21 @@ private fun BookCover(
     alignBottom: Boolean = false,
 ) {
     if (coverFile != null) {
+        val platform = LocalPlatformContext.current
+        // Cover nodes are thrown away and rebuilt constantly — on every scroll
+        // and on every grid/list swap. Pinning the memory-cache key to the file
+        // path (a new cover always gets a new name) lets the rebuilt node paint
+        // the cached bitmap on its FIRST frame; without it Coil treats each new
+        // node as a fresh load and the tile flashes empty.
+        val request = remember(platform, coverFile) {
+            ImageRequest.Builder(platform)
+                .data(coverFile)
+                .memoryCacheKey(coverFile.path)
+                .placeholderMemoryCacheKey(coverFile.path)
+                .build()
+        }
         AsyncImage(
-            model = coverFile,
+            model = request,
             contentDescription = stringResource(R.string.library_book_cover, book.title),
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),

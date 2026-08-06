@@ -24,3 +24,9 @@ data object SettingsRoute
 
 @Serializable
 data object StatsRoute
+
+/** The two destinations the navigation bar switches between. */
+enum class NavTab {
+    LIBRARY,
+    PROFILE,
+}
