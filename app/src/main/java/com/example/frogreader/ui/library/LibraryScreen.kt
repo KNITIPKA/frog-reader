@@ -340,9 +340,11 @@ fun LibraryScreen(
     // fade-through. `renderMode` is what is actually on screen; `viewMode` is
     // what was asked for.
     var renderMode by remember { mutableStateOf(viewMode) }
+    var swapping by remember { mutableStateOf(false) }
     val swap = remember { Animatable(1f) }
     LaunchedEffect(viewMode) {
         if (viewMode != renderMode) {
+            swapping = true
             swap.animateTo(0f, tween(ModeSwapOutMillis, easing = FastOutLinearInEasing))
             renderMode = viewMode
         }
@@ -351,6 +353,7 @@ fun LibraryScreen(
         // equal to renderMode, and an early return there would strand the grid
         // at whatever alpha it had reached — permanently half-invisible.
         swap.animateTo(1f, tween(ModeSwapInMillis, easing = LinearOutSlowInEasing))
+        swapping = false
     }
     val swapProgress = swap.asState()
     // Hoisted so the lambda instance is stable, and read only from inside
@@ -432,10 +435,12 @@ fun LibraryScreen(
         ) {
             LazyVerticalGrid(
                 state = gridState,
-                // One column in list mode instead of spanning every row: an
-                // item whose span CHANGES while its key stays the same makes
-                // LazyGrid place the same node twice ("Place was called on a
-                // node which was placed already") when the mode is toggled.
+                // One column in list mode, rather than giving every entry a
+                // full-line span: an ITEM whose span changes under an unchanged
+                // key makes LazyGrid place the same node twice ("Place was
+                // called on a node which was placed already"). Changing the
+                // column count keeps every entry at span 1 in both modes, which
+                // is what lets the keys below stay stable.
                 columns = GridCells.Fixed(if (renderMode == LibraryViewMode.GRID) 3 else 1),
                 modifier = Modifier
                     .fillMaxSize()
@@ -495,10 +500,17 @@ fun LibraryScreen(
                 } else {
                     items(
                         items = visibleEntries,
-                        // Keys are scoped to the view mode so toggling grid/list
-                        // swaps the items outright instead of animating a tile
-                        // into a row — same reason as the column count above.
-                        key = { "${renderMode.name}/${it.id}" },
+                        // The entry id alone, so a mode swap KEEPS every item
+                        // slot: the cover's image node survives, its remembers
+                        // survive, and the grid keeps its scroll anchor. Safe
+                        // because entry items never declare a span — only the
+                        // column count changes, exactly as the full-span header
+                        // above has always done.
+                        key = { it.id },
+                        contentType = { entry ->
+                            val shelf = entry is LibraryEntry.ShelfEntry
+                            "${renderMode.name}:${if (shelf) "shelf" else "book"}"
+                        },
                     ) { entry ->
                         val itemModifier = Modifier
                             .animateItem(
@@ -506,11 +518,21 @@ fun LibraryScreen(
                                 // bouncy spring overshot and took ~500ms to
                                 // settle, so displaced tiles stayed under the
                                 // finger long enough to fight the reorder.
-                                placementSpec = spring(
-                                    stiffness = Spring.StiffnessMedium,
-                                    dampingRatio = Spring.DampingRatioNoBouncy,
-                                    visibilityThreshold = IntOffset.VisibilityThreshold,
-                                ),
+                                //
+                                // Suppressed outright across a mode swap: every
+                                // item now keeps its slot, so every one of them
+                                // would otherwise fly from its grid position to
+                                // its row position while fading in. The
+                                // cross-fade carries that motion instead.
+                                placementSpec = if (swapping) {
+                                    null
+                                } else {
+                                    spring(
+                                        stiffness = Spring.StiffnessMedium,
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        visibilityThreshold = IntOffset.VisibilityThreshold,
+                                    )
+                                },
                             )
                             .dragSource(
                                 id = entry.id,
