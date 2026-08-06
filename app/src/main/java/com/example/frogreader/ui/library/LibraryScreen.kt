@@ -92,6 +92,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -179,6 +181,51 @@ private const val GhostFlightMillis = 200
 /** How small the ghost gets as it disappears into a shelf. */
 private const val GhostLandScale = 0.34f
 
+/**
+ * Which shelf, if any, has just been created and still owes the user an
+ * arrival animation.
+ *
+ * A holder rather than a bare `String?` so the tiles can read it themselves.
+ * Read at the `items` call site instead, creating one folder would invalidate
+ * every book tile on screen twice.
+ */
+@Stable
+private class ShelfPopState {
+    var shelfId by mutableStateOf<String?>(null)
+}
+
+/** Scale a brand-new folder grows from. */
+private const val ShelfPopFrom = 0.62f
+
+/**
+ * The arrival animation for [shelfId], or a flat `1f` for every folder that has
+ * been there all along — so the modifier chain is the same shape either way and
+ * existing folders pay nothing for it.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun rememberShelfArrival(shelfId: String, pop: ShelfPopState): State<Float> {
+    val justCreated = pop.shelfId == shelfId
+    val spec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
+    val arrival = remember { Animatable(if (justCreated) 0f else 1f) }
+
+    LaunchedEffect(justCreated) {
+        if (justCreated) {
+            // The tile can compose a frame before the new id reaches us — the
+            // shelf flow and the callback are separate trips to the main
+            // thread — so start from scratch rather than trust the initial.
+            arrival.snapTo(0f)
+            arrival.animateTo(1f, spec)
+            pop.shelfId = null
+        } else if (arrival.value != 1f) {
+            // A second folder created mid-animation cancels this effect. Never
+            // leave a tile stranded at two-thirds size.
+            arrival.animateTo(1f, spec)
+        }
+    }
+    return arrival.asState()
+}
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun LibraryScreen(
@@ -251,6 +298,7 @@ fun LibraryScreen(
     }
 
     val drag = remember { LibraryDragState() }
+    val pop = remember { ShelfPopState() }
     val gridState = rememberLazyGridState()
 
     // `detectDragGesturesAfterLongPress` has no timeout parameter — it reads
@@ -298,8 +346,12 @@ fun LibraryScreen(
                     targetBookId = target.substringAfter(':'),
                     // The shelf only becomes addressable once the write lands.
                     // Handing its id to the flight lets the ghost finish on the
-                    // real folder rather than on the target's remembered slot.
-                    onCreated = { shelfId -> drag.retargetLanding(shelfOrderKey(shelfId)) },
+                    // real folder rather than on the target's remembered slot,
+                    // and tells that one tile to play its arrival.
+                    onCreated = { shelfId ->
+                        drag.retargetLanding(shelfOrderKey(shelfId))
+                        pop.shelfId = shelfId
+                    },
                 )
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
             }
@@ -427,6 +479,7 @@ fun LibraryScreen(
                                     entry = entry,
                                     coverOf = viewModel::coverFileFor,
                                     drag = drag,
+                                    pop = pop,
                                     onClick = { openShelfId = entry.shelf.id },
                                     modifier = itemModifier.padding(top = 6.dp),
                                 )
@@ -435,6 +488,7 @@ fun LibraryScreen(
                                     entry = entry,
                                     coverOf = viewModel::coverFileFor,
                                     drag = drag,
+                                    pop = pop,
                                     onClick = { openShelfId = entry.shelf.id },
                                     modifier = itemModifier,
                                 )
@@ -1201,22 +1255,31 @@ private fun BookGridTile(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ShelfGridTile(
     entry: LibraryEntry.ShelfEntry,
     coverOf: (Book) -> java.io.File?,
     drag: LibraryDragState,
+    pop: ShelfPopState,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val frog = LocalFrogColors.current
     val extra = entry.books.size - 4
+    val arrival = rememberShelfArrival(entry.shelf.id, pop)
 
     Column(modifier = modifier) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
+                // The artwork pops, the label below it does not: an overshoot
+                // spring on 12sp type is visibly jittery.
+                .graphicsLayer {
+                    scaleX = lerp(ShelfPopFrom, 1f, arrival.value)
+                    scaleY = scaleX
+                }
                 .clip(RoundedCornerShape(22.dp))
                 .background(frog.folder)
                 .clickable(onClick = onClick)
@@ -1232,11 +1295,22 @@ private fun ShelfGridTile(
                 repeat(2) { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         repeat(2) { column ->
-                            val book = entry.books.getOrNull(row * 2 + column)
+                            val slot = row * 2 + column
+                            val book = entry.books.getOrNull(slot)
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
                                     .aspectRatio(2f / 3f)
+                                    // Mini covers land one after another, so a
+                                    // new folder reads as books dropping in
+                                    // rather than a card appearing.
+                                    .graphicsLayer {
+                                        val t = ((arrival.value - slot * 0.07f) / 0.6f)
+                                            .coerceIn(0f, 1f)
+                                        alpha = t
+                                        scaleX = lerp(0.7f, 1f, t)
+                                        scaleY = scaleX
+                                    }
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(
                                         // Empty slots need to read as plates in
@@ -1396,11 +1470,13 @@ private fun BookListRow(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ShelfListRow(
     entry: LibraryEntry.ShelfEntry,
     coverOf: (Book) -> java.io.File?,
     drag: LibraryDragState,
+    pop: ShelfPopState,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1408,10 +1484,16 @@ private fun ShelfListRow(
     val scheme = MaterialTheme.colorScheme
     val spines = entry.books.take(6)
     val extra = entry.books.size - spines.size
+    val arrival = rememberShelfArrival(entry.shelf.id, pop)
 
     Column(
         modifier = modifier
             .fillMaxWidth()
+            // The whole card is the folder here, so all of it pops.
+            .graphicsLayer {
+                scaleX = lerp(ShelfPopFrom, 1f, arrival.value)
+                scaleY = scaleX
+            }
             .clip(RoundedCornerShape(20.dp))
             .background(frog.folder)
             .clickable(onClick = onClick)
