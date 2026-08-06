@@ -152,7 +152,8 @@ class LibraryViewModel(
     /**
      * A book was dropped onto another book. The TARGET goes first: the new
      * shelf inherits its position so it appears exactly where the target was.
-     * Emits the new shelf id so the screen can open it for renaming.
+     * Emits the new shelf id — not to open the shelf (a launcher doesn't), but
+     * so the screen can play the arrival animation on that one tile.
      */
     fun createShelf(draggedBookId: String, targetBookId: String, onCreated: (String) -> Unit = {}) {
         viewModelScope.launch {

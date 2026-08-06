@@ -1,6 +1,7 @@
 package com.example.frogreader.ui.library
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -182,9 +183,12 @@ fun LibraryScreen(
     var bookToDelete by remember { mutableStateOf<Book?>(null) }
     var bookToEdit by remember { mutableStateOf<Book?>(null) }
     var bookForDetails by remember { mutableStateOf<Book?>(null) }
-    var openShelfId by remember { mutableStateOf<String?>(null) }
+    var openShelfId by rememberSaveable { mutableStateOf<String?>(null) }
 
     val searching = query.isNotBlank()
+
+    // Without this, Back with a folder open leaves the library entirely.
+    BackHandler(enabled = openShelfId != null) { openShelfId = null }
 
     // The hero is still "the last book you opened". It keeps that spot even
     // when it lives inside a shelf — only a LOOSE copy is hidden from the grid.
@@ -256,11 +260,13 @@ fun LibraryScreen(
             }
 
             else -> {
+                // Deliberately no auto-open: dropping one icon on another in a
+                // launcher makes a folder, it does not walk you into it. The
+                // shelf lands unnamed in the target's slot; tapping it opens the
+                // panel with the name field.
                 viewModel.createShelf(
                     draggedBookId = draggedBookId,
                     targetBookId = target.substringAfter(':'),
-                    // A fresh shelf opens straight away so it can be named.
-                    onCreated = { shelfId -> openShelfId = shelfId },
                 )
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
             }
