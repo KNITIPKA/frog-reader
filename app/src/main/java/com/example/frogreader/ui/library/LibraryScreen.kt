@@ -109,6 +109,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
@@ -197,6 +198,9 @@ private class ShelfPopState {
 /** Scale a brand-new folder grows from. */
 private const val ShelfPopFrom = 0.62f
 
+/** Scale the open-folder panel grows out of its tile from. */
+private const val PanelCollapsedScale = 0.78f
+
 /**
  * The arrival animation for [shelfId], or a flat `1f` for every folder that has
  * been there all along — so the modifier chain is the same shape either way and
@@ -266,8 +270,30 @@ fun LibraryScreen(
         }
     }
     val hasAnyShelf = remember(entries) { entries.any { it is LibraryEntry.ShelfEntry } }
-    val openShelf = remember(entries, openShelfId) {
-        entries.filterIsInstance<LibraryEntry.ShelfEntry>().firstOrNull { it.shelf.id == openShelfId }
+
+    // What the panel is drawing. It deliberately outlives `openShelfId`: the
+    // panel has to stay mounted while it folds back into its tile, and it has
+    // to keep its last contents when the shelf itself dissolves underneath it
+    // (pull the second-to-last book out and there is no shelf left to read).
+    var mountedShelf by remember { mutableStateOf<LibraryEntry.ShelfEntry?>(null) }
+    LaunchedEffect(entries, openShelfId) {
+        val id = openShelfId ?: return@LaunchedEffect
+        val match = entries.filterIsInstance<LibraryEntry.ShelfEntry>()
+            .firstOrNull { it.shelf.id == id }
+        if (match != null) {
+            mountedShelf = match
+        } else {
+            // The shelf is gone — dissolved down to one book, or restored from
+            // a saved state that outlived it. Close, don't sit there holding an
+            // id that nothing can open (and that Back would keep swallowing).
+            openShelfId = null
+        }
+    }
+    // Opening seeds it from the click instead of waiting for that effect, so
+    // the panel is there on the very frame the folder is tapped.
+    val onOpenShelf: (LibraryEntry.ShelfEntry) -> Unit = { entry ->
+        mountedShelf = entry
+        openShelfId = entry.shelf.id
     }
 
     LaunchedEffect(Unit) {
@@ -480,7 +506,7 @@ fun LibraryScreen(
                                     coverOf = viewModel::coverFileFor,
                                     drag = drag,
                                     pop = pop,
-                                    onClick = { openShelfId = entry.shelf.id },
+                                    onClick = { onOpenShelf(entry) },
                                     modifier = itemModifier.padding(top = 6.dp),
                                 )
                             } else {
@@ -489,7 +515,7 @@ fun LibraryScreen(
                                     coverOf = viewModel::coverFileFor,
                                     drag = drag,
                                     pop = pop,
-                                    onClick = { openShelfId = entry.shelf.id },
+                                    onClick = { onOpenShelf(entry) },
                                     modifier = itemModifier,
                                 )
                             }
@@ -514,9 +540,10 @@ fun LibraryScreen(
             coverOf = viewModel::coverFileFor,
         )
 
-        openShelf?.let { shelfEntry ->
+        mountedShelf?.let { shelfEntry ->
             ShelfPanel(
                 entry = shelfEntry,
+                expanded = openShelfId == shelfEntry.shelf.id,
                 coverOf = viewModel::coverFileFor,
                 drag = drag,
                 onRename = { newName -> viewModel.renameShelf(shelfEntry.shelf.id, newName) },
@@ -526,6 +553,9 @@ fun LibraryScreen(
                     if (shelfEntry.books.size <= 2) openShelfId = null
                 },
                 onDismiss = { openShelfId = null },
+                // Unmount only once it has finished folding away — and only if
+                // nothing reopened it in the meantime.
+                onClosed = { if (openShelfId == null) mountedShelf = null },
             )
         }
 
@@ -1571,20 +1601,44 @@ private fun ShelfListRow(
 
 // ------------------------------------------------------------- shelf panel
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ShelfPanel(
     entry: LibraryEntry.ShelfEntry,
+    expanded: Boolean,
     coverOf: (Book) -> java.io.File?,
     drag: LibraryDragState,
     onRename: (String) -> Unit,
     onTakeOut: (String) -> Unit,
     onDismiss: () -> Unit,
+    onClosed: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     var name by remember(entry.shelf.id) { mutableStateOf(entry.shelf.name) }
     val currentName by rememberUpdatedState(name)
     val savedName by rememberUpdatedState(entry.shelf.name)
     val commitRename by rememberUpdatedState(onRename)
+    val finish by rememberUpdatedState(onClosed)
+
+    // The folder unfolding out of its own tile and folding back into it. The
+    // open uses the expressive spatial spring; the close is deliberately
+    // non-bouncy, because an overshoot on the way out reads as a mistake.
+    val openSpec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
+    val expansion = remember { Animatable(0f) }
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            expansion.animateTo(1f, openSpec)
+        } else {
+            expansion.animateTo(
+                targetValue = 0f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMedium,
+                ),
+            )
+            finish()
+        }
+    }
 
     // Save on the way out, so a rename survives tapping the scrim or dragging
     // the last book out from under the panel.
@@ -1612,13 +1666,13 @@ private fun ShelfPanel(
         modifier = Modifier
             .fillMaxSize()
             .drawWithContent {
-                drawRect(ShelfScrim.copy(alpha = scrimAlpha))
+                drawRect(ShelfScrim.copy(alpha = scrimAlpha * expansion.value))
                 drawContent()
             }
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
-                enabled = !drag.isDragging,
+                enabled = expanded && !drag.isDragging,
                 onClick = onDismiss,
             ),
     ) {
@@ -1629,10 +1683,36 @@ private fun ShelfPanel(
             modifier = Modifier
                 .align(Alignment.Center)
                 .padding(horizontal = 16.dp)
+                // BEFORE the graphicsLayer, and it has to stay there: modifier
+                // nodes to the left of a layer sit outside it, so positionInRoot
+                // keeps reporting untransformed bounds and "did the book leave
+                // the folder?" stays truthful while the panel is mid-scale.
                 .onGloballyPositioned {
                     drag.panelBounds = Rect(it.positionInRoot(), it.size.toSize())
                 }
-                .graphicsLayer { alpha = panelAlpha }
+                .graphicsLayer {
+                    val progress = expansion.value
+                    // Grow out of the folder's own tile. Both rects are plain
+                    // fields read in the layout phase, and the lambda re-runs
+                    // every frame because `progress` changed — so this resolves
+                    // itself on the first frame the panel has any size at all.
+                    val panel = drag.panelBounds
+                    val tile = drag.bounds[entry.id]
+                    transformOrigin = if (tile != null && !panel.isEmpty) {
+                        TransformOrigin(
+                            ((tile.center.x - panel.left) / panel.width).coerceIn(0f, 1f),
+                            ((tile.center.y - panel.top) / panel.height).coerceIn(0f, 1f),
+                        )
+                    } else {
+                        TransformOrigin.Center
+                    }
+                    scaleX = lerp(PanelCollapsedScale, 1f, progress)
+                    scaleY = scaleX
+                    // Alpha leads the scale, so the panel is solid well before
+                    // it stops growing. `panelAlpha` still wins outright — a
+                    // book being pulled out has to see the grid underneath.
+                    alpha = (progress * 2.2f).coerceAtMost(1f) * panelAlpha
+                }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
