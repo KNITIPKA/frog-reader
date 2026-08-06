@@ -239,6 +239,7 @@ class MainActivity : ComponentActivity() {
                 // the back stack. That start destination IS the library, so
                 // reading null as top-level keeps the bar from flying in.
                 val onTopLevel = destination == null || destination.isTopLevel()
+                val onLibrary = destination == null || destination.hasRoute<LibraryRoute>()
                 val selectedTab = if (destination?.hasRoute<ProfileRoute>() == true) {
                     NavTab.PROFILE
                 } else {
@@ -293,7 +294,10 @@ class MainActivity : ComponentActivity() {
                     },
                     floatingActionButton = {
                         ImportFab(
-                            visible = onTopLevel,
+                            // Library only. Profile is where reading history
+                            // will live; importing a book from it never made
+                            // sense.
+                            visible = onLibrary,
                             importing = isImportingBook,
                             onClick = { showImportSheet = true },
                         )
