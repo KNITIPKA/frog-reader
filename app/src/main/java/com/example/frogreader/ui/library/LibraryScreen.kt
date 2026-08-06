@@ -153,6 +153,7 @@ import coil3.request.ImageRequest
 import com.example.frogreader.R
 import com.example.frogreader.data.LibraryViewMode
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.data.model.bookOrderKey
 import com.example.frogreader.data.model.shelfOrderKey
 import com.example.frogreader.ui.nav.sharedBookCover
 import com.example.frogreader.ui.theme.LocalFrogColors
@@ -622,7 +623,12 @@ fun LibraryScreen(
                 onTakeOut = { bookId ->
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     viewModel.removeFromShelf(shelfEntry.shelf.id, bookId)
-                    if (shelfEntry.books.size <= 2) openShelfId = null
+                    // Always, not just when the shelf dissolves. Carrying a
+                    // book past the folder's edge already fades the folder out
+                    // of the way; springing it back open afterwards — which is
+                    // what happened with three books or more — contradicts the
+                    // gesture you just finished making.
+                    openShelfId = null
                 },
                 onDismiss = { openShelfId = null },
                 // Unmount only once it has finished folding away — and only if
@@ -1732,13 +1738,20 @@ private fun ShelfPanel(
     // panel stays COMPOSED: unmounting it would dispose the pointerInput node
     // that owns the gesture still in flight.
     val pullingOut = drag.dragShelfId == entry.shelf.id && drag.outsidePanel
+
+    // `!expanded` counts as hidden, and that is the whole point: a panel faded
+    // out by a pull-out used to start fading BACK IN the instant the finger
+    // lifted, while `expansion` was already collapsing it. The two crossing
+    // over is what leaves a folder-shaped smear behind for a frame or two.
+    // Once the panel is on its way out, neither fade is allowed to recover.
+    val hidden = pullingOut || !expanded
     val panelAlpha by animateFloatAsState(
-        targetValue = if (pullingOut) 0f else 1f,
+        targetValue = if (hidden) 0f else 1f,
         animationSpec = tween(180),
         label = "shelfPanelAlpha",
     )
     val scrimAlpha by animateFloatAsState(
-        targetValue = if (pullingOut) 0.12f else 0.42f,
+        targetValue = if (hidden) 0.12f else 0.42f,
         animationSpec = tween(180),
         label = "shelfScrimAlpha",
     )
@@ -1882,6 +1895,18 @@ private fun ShelfPanel(
                                             onDrop = { drop ->
                                                 if (drop.outsideContainer) {
                                                     onTakeOut(book.id)
+                                                    // Home in on the grid slot
+                                                    // the book is about to get.
+                                                    // It has no bounds entry yet
+                                                    // — until it does, the ghost
+                                                    // just fades where it was.
+                                                    drag.beginLanding(
+                                                        entryId = drop.draggedId,
+                                                        from = drop.releaseRoot,
+                                                        to = drop.releaseRoot,
+                                                        liveTargetId = bookOrderKey(book.id),
+                                                        merged = false,
+                                                    )
                                                 } else {
                                                     // Let go inside the folder:
                                                     // settle back into the slot
