@@ -5,4 +5,12 @@
     <style name="Theme.FrogReader" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:enableOnBackInvokedCallback">true</item>
     </style>
+
+    <!-- The activity's manifest theme, so the system starting window is the
+         splash. installSplashScreen() swaps in postSplashScreenTheme as soon
+         as onCreate runs. -->
+    <style name="Theme.FrogReader.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.FrogReader</item>
+    </style>
 </resources>

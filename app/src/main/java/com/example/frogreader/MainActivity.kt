@@ -7,11 +7,13 @@ import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
+import android.view.animation.AccelerateInterpolator
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -22,8 +24,10 @@ import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -63,6 +67,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
@@ -71,6 +76,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -85,8 +91,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
-import com.example.frogreader.data.AppTheme
 import com.example.frogreader.data.BookRepository
+import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.parser.BookParsers
 import com.example.frogreader.ui.library.ImportBookSheet
 import com.example.frogreader.ui.library.LibraryScreen
@@ -106,6 +112,7 @@ import com.example.frogreader.ui.settings.SettingsScreen
 import com.example.frogreader.ui.profile.ProfileScreen
 import com.example.frogreader.ui.stats.StatsScreen
 import com.example.frogreader.ui.theme.FrogReaderTheme
+import com.example.frogreader.ui.theme.colorSchemeFor
 import com.example.frogreader.ui.theme.isDark
 import com.example.frogreader.ui.tracker.TrackerScreen
 import com.example.frogreader.widget.ContinueReadingWidget
@@ -141,42 +148,99 @@ class MainActivity : ComponentActivity() {
     var volumeKeyHandler: ((forward: Boolean) -> Boolean)? = null
     private var volumeKeyDownConsumed = false
 
+    /** Read by the splash screen every frame until the app has something to show. */
+    private var contentReady = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Before super.onCreate, as the splash API requires. It holds the
+        // system starting window on screen until `contentReady`, which is what
+        // removes the blank frames the app used to boot through.
+        val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
+
+        // The window BEHIND the splash, painted in the theme the app was last
+        // running in. Without it the hand-off exposes Theme.Material.Light's
+        // own background for a frame — grey on a Midnight install.
+        val bootTheme = SettingsRepository.bootTheme(this)
+        window.setBackgroundDrawable(colorSchemeFor(bootTheme).surface.toArgb().toDrawable())
+
         enableEdgeToEdge()
         pendingIntents.value = intent
+
+        splash.setKeepOnScreenCondition { !contentReady }
+        splash.setOnExitAnimationListener { splashView ->
+            // Hand off rather than cut: the splash lifts and fades while the
+            // app scales up into place underneath it.
+            splashView.view.animate()
+                .alpha(0f)
+                .scaleX(SplashExitScale)
+                .scaleY(SplashExitScale)
+                .setDuration(SplashExitMillis)
+                .setInterpolator(AccelerateInterpolator())
+                .withEndAction { splashView.remove() }
+                .start()
+        }
+
         setContent {
             val app = application as FrogReaderApp
             val appSettings by app.settingsRepository.appSettings.collectAsState(initial = null)
             val settings = appSettings
 
-            val theme = settings?.theme ?: AppTheme.SEPIA
+            // `bootTheme`, not a hard-coded default: on a Midnight install the
+            // old fallback meant the first composition was beige.
+            val theme = settings?.theme ?: bootTheme
             // Status-bar icon contrast follows the app theme, not the system
             // dark mode (OLED on a light-mode phone still needs light icons).
             LaunchedEffect(theme) {
                 WindowCompat.getInsetsController(window, window.decorView)
                     .isAppearanceLightStatusBars = !theme.isDark()
+                SettingsRepository.rememberBootTheme(this@MainActivity, theme)
+            }
+
+            LaunchedEffect(settings != null) {
+                if (settings == null) return@LaunchedEffect
+                contentReady = true
+                // Tells the platform when the app is actually usable rather
+                // than merely on screen — it is what Play vitals and `am start`
+                // measure startup against.
+                reportFullyDrawn()
             }
 
             FrogReaderTheme(theme = theme) {
                 val lockViewModel: LockViewModel = viewModel()
                 RelockOnBackground(lockViewModel)
 
+                val entering by animateFloatAsState(
+                    targetValue = if (settings != null) 1f else 0f,
+                    animationSpec = tween(SplashExitMillis.toInt(), easing = LinearOutSlowInEasing),
+                    label = "appEnter",
+                )
+
                 val haptics =
                     if (settings?.haptics == false) NoOpHapticFeedback else LocalHapticFeedback.current
                 CompositionLocalProvider(LocalHapticFeedback provides haptics) {
-                    when {
-                        // Waiting for DataStore — draw the background only.
-                        settings == null -> Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.surface),
-                        )
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surface)
+                            // Read in the draw phase, so growing in costs no
+                            // recomposition of the tree underneath.
+                            .graphicsLayer {
+                                alpha = entering
+                                scaleX = 0.94f + 0.06f * entering
+                                scaleY = scaleX
+                            },
+                    ) {
+                        when {
+                            // Still waiting on DataStore. The splash is holding
+                            // the screen, so this is never actually seen.
+                            settings == null -> Unit
 
-                        settings.appLock && !lockViewModel.unlocked ->
-                            LockScreen(onUnlocked = { lockViewModel.unlocked = true })
+                            settings.appLock && !lockViewModel.unlocked ->
+                                LockScreen(onUnlocked = { lockViewModel.unlocked = true })
 
-                        else -> AppNavigation()
+                            else -> AppNavigation()
+                        }
                     }
                 }
             }
@@ -446,6 +510,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+/** How long the splash takes to lift away, and how far it grows doing it. */
+private const val SplashExitMillis = 260L
+private const val SplashExitScale = 1.08f
 
 // ------------------------------------------------------------------ chrome
 

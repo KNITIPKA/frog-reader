@@ -208,4 +208,33 @@ class SettingsRepository(private val context: Context) {
 
     private inline fun <reified T : Enum<T>> enumOrDefault(name: String?, default: T): T =
         name?.let { runCatching { enumValueOf<T>(it) }.getOrNull() } ?: default
+
+    companion object {
+        private const val BOOT_PREFS = "boot_hints"
+        private const val KEY_THEME = "app_theme"
+
+        /**
+         * The theme the app was last running in, readable synchronously.
+         *
+         * DataStore's first read is disk I/O on a background dispatcher, so the
+         * first frame after a cold start would otherwise have to be painted in
+         * the default theme and corrected a moment later. On a Midnight install
+         * that means a beige screen flashing black. This mirror is written from
+         * the UI whenever the effective theme is known, which also heals an
+         * install that has never seen this code.
+         */
+        fun bootTheme(context: Context): AppTheme {
+            val name = context.getSharedPreferences(BOOT_PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_THEME, null)
+            return name?.let { runCatching { AppTheme.valueOf(it) }.getOrNull() } ?: AppTheme.SEPIA
+        }
+
+        fun rememberBootTheme(context: Context, theme: AppTheme) {
+            if (bootTheme(context) == theme) return
+            context.getSharedPreferences(BOOT_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_THEME, theme.name)
+                .apply()
+        }
+    }
 }
