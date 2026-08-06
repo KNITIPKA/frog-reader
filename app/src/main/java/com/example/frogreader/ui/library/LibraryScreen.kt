@@ -5,6 +5,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateFloatAsState
@@ -99,6 +101,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.lerp
+import androidx.compose.ui.util.lerp
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -144,6 +148,7 @@ import coil3.request.ImageRequest
 import com.example.frogreader.R
 import com.example.frogreader.data.LibraryViewMode
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.data.model.shelfOrderKey
 import com.example.frogreader.ui.nav.sharedBookCover
 import com.example.frogreader.ui.theme.LocalFrogColors
 import kotlinx.coroutines.isActive
@@ -163,6 +168,16 @@ private val ShelfScrim = Color(0xFF102C1A)
 
 /** Long-press threshold for picking a book up, shortened from the 500ms default. */
 private const val DragPickupMillis = 250L
+
+/**
+ * How long a released book takes to reach where it landed. Long enough to read
+ * as travel, short enough that the repository's `library.json` write (a few
+ * milliseconds, on IO) is over well before the ghost arrives.
+ */
+private const val GhostFlightMillis = 200
+
+/** How small the ghost gets as it disappears into a shelf. */
+private const val GhostLandScale = 0.34f
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -251,6 +266,20 @@ fun LibraryScreen(
     val onDrop: (DragDrop) -> Unit = { drop ->
         val draggedBookId = drop.draggedId.substringAfter(':')
         val target = drop.mergeTargetId
+        // Every release flies the cover somewhere — into the thing that
+        // swallowed it, or back into the slot it came from. The one exception
+        // is a book carried out of an open folder: the panel fading back in
+        // already accounts for where it went.
+        val landsHome = target == null && !drop.outsideContainer
+        if (target != null || landsHome) {
+            drag.beginLanding(
+                entryId = drop.draggedId,
+                from = drop.releaseRoot,
+                to = drop.targetCenter ?: drop.releaseRoot,
+                liveTargetId = target ?: drop.draggedId.takeIf { landsHome },
+                merged = target != null,
+            )
+        }
         when {
             target == null -> Unit
 
@@ -267,6 +296,10 @@ fun LibraryScreen(
                 viewModel.createShelf(
                     draggedBookId = draggedBookId,
                     targetBookId = target.substringAfter(':'),
+                    // The shelf only becomes addressable once the write lands.
+                    // Handing its id to the flight lets the ghost finish on the
+                    // real folder rather than on the target's remembered slot.
+                    onCreated = { shelfId -> drag.retargetLanding(shelfOrderKey(shelfId)) },
                 )
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
             }
@@ -1883,27 +1916,52 @@ private fun DragOverlay(
         }
     }
 
-    if (isDragging) {
-        DragGhost(drag = drag, books = books, coverOf = coverOf)
-    }
+    DragGhost(drag = drag, books = books, coverOf = coverOf)
 }
 
+/**
+ * The carried cover — under the finger while the gesture is live, then flying
+ * to wherever the book ended up.
+ *
+ * One composable for both, deliberately: splitting them would dispose the
+ * cover's image node at exactly the handover and reintroduce the blank frame
+ * the flight exists to remove.
+ */
 @Composable
 private fun DragGhost(
     drag: LibraryDragState,
     books: List<Book>,
     coverOf: (Book) -> java.io.File?,
 ) {
-    val draggedBook = remember(drag.draggingId, books) {
-        val id = drag.draggingId?.substringAfter(':')
+    val landing = drag.landing
+    val carriedId = drag.draggingId ?: landing?.entryId ?: return
+    val carriedBook = remember(carriedId, books) {
+        val id = carriedId.substringAfter(':')
         books.firstOrNull { it.id == id }
     } ?: return
 
+    // A fresh animator per flight; the cover subtree below is untouched.
+    val flight = remember(landing) { Animatable(0f) }
+    LaunchedEffect(landing) {
+        if (landing == null) return@LaunchedEffect
+        flight.animateTo(1f, tween(GhostFlightMillis, easing = FastOutSlowInEasing))
+        drag.endLanding()
+    }
+
     Box(
         modifier = Modifier
-            // Placement phase: reads fingerRoot without recomposing anything.
+            // Placement phase: reads the finger and the flight without
+            // recomposing anything.
             .offset {
-                val local = drag.fingerRoot - drag.rootOrigin
+                val centre = if (landing == null) {
+                    drag.fingerRoot
+                } else {
+                    // Re-read every frame so the ghost tracks a destination
+                    // that is still settling into place under it.
+                    val target = landing.liveTargetId?.let { drag.bounds[it]?.center } ?: landing.to
+                    lerp(landing.from, target, flight.value)
+                }
+                val local = centre - drag.rootOrigin
                 IntOffset(
                     (local.x - GhostWidth.toPx() / 2f).roundToInt(),
                     (local.y - GhostHeight.toPx() / 2f).roundToInt(),
@@ -1911,15 +1969,21 @@ private fun DragGhost(
             }
             .size(GhostWidth, GhostHeight)
             .graphicsLayer {
-                rotationZ = -4f
-                scaleX = 1.04f
-                scaleY = 1.04f
-                shadowElevation = 18.dp.toPx()
+                val t = flight.value
+                val endScale = if (landing?.merged == true) GhostLandScale else 1f
+                rotationZ = -4f * (1f - t)
+                scaleX = lerp(1.04f, endScale, t)
+                scaleY = scaleX
+                // Squared, so it stays solid for most of the trip and only
+                // gives way at the end — otherwise it reads as a fade, not
+                // as the book being put somewhere.
+                alpha = 1f - t * t
+                shadowElevation = 18.dp.toPx() * (1f - t)
                 shape = RoundedCornerShape(20.dp)
                 clip = true
             },
     ) {
-        BookCover(book = draggedBook, coverFile = coverOf(draggedBook), titleSize = 10.sp, padding = 9.dp)
+        BookCover(book = carriedBook, coverFile = coverOf(carriedBook), titleSize = 10.sp, padding = 9.dp)
     }
 }
 

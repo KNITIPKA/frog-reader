@@ -14,6 +14,43 @@ data class DragDrop(
     val mergeTargetId: String?,
     /** Carried out of the open shelf panel — put the book back on the grid. */
     val outsideContainer: Boolean,
+    /** Where the finger let go, in root space. */
+    val releaseRoot: Offset = Offset.Zero,
+    /**
+     * Centre of the merge target, captured AT RELEASE. The target's tile is
+     * about to be disposed — a book swallowed by a new shelf stops being an
+     * entry — and `dragSource` prunes its bounds on the way out, so this is the
+     * last moment the rect can be read.
+     */
+    val targetCenter: Offset? = null,
+)
+
+/**
+ * A book that has been let go but is still travelling to where it landed.
+ *
+ * Exists so the ghost can fly home instead of blinking out of existence: the
+ * gesture is over ([LibraryDragState.isDragging] is already false, veils and
+ * rings are gone), but the cover is still on screen for another ~200ms.
+ */
+data class DragLanding(
+    /** Entry id of the carried book, for picking the cover to draw. */
+    val entryId: String,
+    /** Release point, root space. */
+    val from: Offset,
+    /** Where to land if [liveTargetId] resolves to nothing. */
+    val to: Offset,
+    /**
+     * Tile to home in on, re-read from [LibraryDragState.bounds] every frame.
+     * The grid reflows underneath the flight — the dragged book vacated its
+     * slot, so everything after it slides up — and a destination captured at
+     * release would be a row stale by the time the ghost got there.
+     */
+    val liveTargetId: String?,
+    /**
+     * True when the book was swallowed by something. A merge shrinks into its
+     * target; a drag that ended on nothing just settles back at full size.
+     */
+    val merged: Boolean,
 )
 
 /**
@@ -70,6 +107,10 @@ class LibraryDragState {
 
     var fingerRoot by mutableStateOf(Offset.Zero)
 
+    /** Set while a released book is still flying to its destination. */
+    var landing by mutableStateOf<DragLanding?>(null)
+        private set
+
     val isDragging: Boolean get() = draggingId != null
 
     fun start(id: String, finger: Offset, shelfId: String? = null) {
@@ -78,6 +119,27 @@ class LibraryDragState {
         outsidePanel = false
         mergeTargetId = null
         fingerRoot = finger
+        // Picking anything up cancels a flight still in the air.
+        landing = null
+    }
+
+    fun beginLanding(
+        entryId: String,
+        from: Offset,
+        to: Offset,
+        liveTargetId: String?,
+        merged: Boolean,
+    ) {
+        landing = DragLanding(entryId, from, to, liveTargetId, merged)
+    }
+
+    /** The destination only became addressable after the drop — a new shelf. */
+    fun retargetLanding(liveTargetId: String) {
+        landing = landing?.copy(liveTargetId = liveTargetId)
+    }
+
+    fun endLanding() {
+        landing = null
     }
 
     /**
@@ -128,6 +190,9 @@ class LibraryDragState {
             draggedId = dragged,
             mergeTargetId = mergeTargetId,
             outsideContainer = outsidePanel,
+            releaseRoot = fingerRoot,
+            targetCenter = mergeTargetId?.let { bounds[it]?.center }
+                ?: bounds[dragged]?.center,
         )
     }
 
