@@ -137,6 +137,8 @@ import androidx.compose.ui.unit.toSize
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.request.ImageRequest
 import com.example.frogreader.R
 import com.example.frogreader.data.LibraryViewMode
 import com.example.frogreader.data.model.Book
@@ -149,7 +151,7 @@ import kotlin.math.roundToInt
 private val GridGap = 14.dp
 private val ListGap = 8.dp
 private val SidePadding = 20.dp
-private val BottomInset = 132.dp
+private val BottomInset = 20.dp
 private val GhostWidth = 84.dp
 private val GhostHeight = 124.dp
 private val AutoScrollZone = 72.dp
@@ -292,9 +294,7 @@ fun LibraryScreen(
                     bottom = BottomInset,
                 ),
                 horizontalArrangement = Arrangement.spacedBy(GridGap),
-                verticalArrangement = Arrangement.spacedBy(
-                    if (viewMode == LibraryViewMode.GRID) GridGap else ListGap,
-                ),
+                verticalArrangement = Arrangement.spacedBy(ListGap),
             ) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "library_header") {
                     LibraryHeader(
@@ -321,10 +321,7 @@ fun LibraryScreen(
                                 haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                                 viewModel.setViewMode(mode)
                             },
-                            modifier = Modifier.padding(
-                                top = if (viewMode == LibraryViewMode.GRID) 2.dp else 8.dp,
-                                bottom = if (viewMode == LibraryViewMode.GRID) 0.dp else 4.dp,
-                            ),
+                            modifier = Modifier.padding(top = 6.dp, bottom = 6.dp),
                         )
                     }
                 }
@@ -373,7 +370,7 @@ fun LibraryScreen(
                                     drag = drag,
                                     entryId = entry.id,
                                     onClick = { onOpenBook(entry.book) },
-                                    modifier = itemModifier,
+                                    modifier = itemModifier.padding(top = 6.dp),
                                 )
                             } else {
                                 BookListRow(
@@ -392,7 +389,7 @@ fun LibraryScreen(
                                     coverOf = viewModel::coverFileFor,
                                     drag = drag,
                                     onClick = { openShelfId = entry.shelf.id },
-                                    modifier = itemModifier,
+                                    modifier = itemModifier.padding(top = 6.dp),
                                 )
                             } else {
                                 ShelfListRow(
@@ -409,26 +406,12 @@ fun LibraryScreen(
             }
         }
 
-        // Fade under the floating nav bar. Not clickable — it is pure paint.
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(140.dp)
-                .background(
-                    Brush.verticalGradient(
-                        0f to Color.Transparent,
-                        0.68f to MaterialTheme.colorScheme.surface,
-                    ),
-                ),
-        )
-
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(bottom = 100.dp),
+                .padding(bottom = 16.dp),
         ) { data -> Snackbar(data) }
 
         // Auto-scroll the grid while a book is held near an edge. Bound to the
@@ -570,7 +553,7 @@ private fun LibraryHeader(
             .clip(RoundedCornerShape(bottomStart = 36.dp, bottomEnd = 36.dp))
             .background(Brush.verticalGradient(listOf(frog.headerTop, frog.headerBottom)))
             .statusBarsPadding()
-            .padding(bottom = 18.dp),
+            .padding(bottom = 8.dp),
     ) {
         Row(
             // 16dp, the same inset the hero card below uses, so the search
@@ -1922,8 +1905,21 @@ private fun BookCover(
     alignBottom: Boolean = false,
 ) {
     if (coverFile != null) {
+        val platform = LocalPlatformContext.current
+        // Cover nodes are thrown away and rebuilt constantly — on every scroll
+        // and on every grid/list swap. Pinning the memory-cache key to the file
+        // path (a new cover always gets a new name) lets the rebuilt node paint
+        // the cached bitmap on its FIRST frame; without it Coil treats each new
+        // node as a fresh load and the tile flashes empty.
+        val request = remember(platform, coverFile) {
+            ImageRequest.Builder(platform)
+                .data(coverFile)
+                .memoryCacheKey(coverFile.path)
+                .placeholderMemoryCacheKey(coverFile.path)
+                .build()
+        }
         AsyncImage(
-            model = coverFile,
+            model = request,
             contentDescription = stringResource(R.string.library_book_cover, book.title),
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),

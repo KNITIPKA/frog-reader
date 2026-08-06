@@ -6,6 +6,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
+import coil3.memory.MemoryCache
 import coil3.svg.SvgDecoder
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.SettingsRepository
@@ -30,5 +31,13 @@ class FrogReaderApp : Application(), SingletonImageLoader.Factory {
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
             .components { add(SvgDecoder.Factory()) }
+            // Explicit and generous: the library grid rebuilds every cover node
+            // when the view mode is toggled, and only a memory-cache hit makes
+            // that repaint free. The default is smaller and device-dependent.
+            .memoryCache {
+                MemoryCache.Builder()
+                    .maxSizePercent(context, 0.25)
+                    .build()
+            }
             .build()
 }
