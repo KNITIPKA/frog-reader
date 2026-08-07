@@ -217,12 +217,14 @@ class ReaderViewModel(
 
     fun load() {
         viewModelScope.launch {
+            val t0 = System.currentTimeMillis()
             _state.value = ReaderState.Loading
             val book = repository.bookById(bookId)
             if (book == null) {
                 _state.value = ReaderState.Error
                 return@launch
             }
+            val tBook = System.currentTimeMillis()
             currentFlatIndex = book.progress.elementIndex
             repository.markStarted(bookId)
             // First open pins the current settings as THIS book's own: from
@@ -230,11 +232,19 @@ class ReaderViewModel(
             if (book.readerSettings == null) {
                 repository.saveReaderSettings(bookId, settingsRepository.settings.first())
             }
+            val tMark = System.currentTimeMillis()
             runCatching { repository.loadContent(book) }
                 .onSuccess { content ->
+                    val tParse = System.currentTimeMillis()
                     loadedBook = book
                     loadedContent = content
                     rebuildReady()
+                    val tReady = System.currentTimeMillis()
+                    android.util.Log.i(
+                        "ReaderOpen",
+                        "total=${tReady - t0}ms  book=${tBook - t0}  writes=${tMark - tBook}" +
+                            "  parse=${tParse - tMark}  build=${tReady - tParse}",
+                    )
                 }
                 .onFailure { _state.value = ReaderState.Error }
         }
