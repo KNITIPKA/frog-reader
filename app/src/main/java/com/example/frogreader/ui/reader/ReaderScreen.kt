@@ -179,6 +179,19 @@ fun ReaderScreen(
         viewModel(key = "reader-$bookId", factory = ReaderViewModel.factory(bookId))
     val state by viewModel.state.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
+
+    // A book opens onto its text, not onto its menus.
+    //
+    // Owned HERE rather than in ReaderContent for two reasons. It survives the
+    // Loading→Ready swap — ReaderContent is only composed once the book is
+    // parsed, so its rememberSaveable was being recreated on every open. And
+    // the system bars now start hiding on the reader's very first frame:
+    // driven from ReaderContent they only went away once the text appeared,
+    // leaving the status and navigation bars sitting through the whole opening
+    // and then sliding out as a second, separate step.
+    var chromeVisible by rememberSaveable { mutableStateOf(false) }
+    SystemBarsEffect(appSettings.theme, chromeVisible)
 
     when (val current = state) {
         ReaderState.Loading -> Box(
@@ -216,6 +229,9 @@ fun ReaderScreen(
             ready = current,
             settings = settings,
             viewModel = viewModel,
+            appSettings = appSettings,
+            chromeVisible = chromeVisible,
+            onToggleChrome = { chromeVisible = !chromeVisible },
             onBack = onBack,
         )
     }
@@ -227,16 +243,16 @@ private fun ReaderContent(
     ready: ReaderState.Ready,
     settings: ReaderSettings,
     viewModel: ReaderViewModel,
+    appSettings: AppSettings,
+    chromeVisible: Boolean,
+    onToggleChrome: () -> Unit,
     onBack: () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
     val clipboard = LocalClipboardManager.current
 
-    val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
     val colors = readerColors(appSettings.theme)
     val liveBook by viewModel.book.collectAsStateWithLifecycle()
-
-    var chromeVisible by rememberSaveable { mutableStateOf(true) }
 
     // How far the settings drawer is pulled up (0 closed → 1 half-open and
     // beyond). The top bar slides out along this SAME value, so both move in
@@ -271,8 +287,6 @@ private fun ReaderContent(
     // with the finger instead of jumping when a page/paragraph settles.
     val livePagePosition = remember { mutableStateOf<Float?>(null) }
     val liveScrollPosition = remember { mutableStateOf<Float?>(null) }
-
-    SystemBarsEffect(appSettings.theme, chromeVisible)
 
     // Accumulate reading time while the reader is on screen and resumed.
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -434,7 +448,7 @@ private fun ReaderContent(
                         seekPosition = seekPosition,
                         onSeekPositionConsumed = { seekPosition = null },
                         onToggleChrome = {
-                            chromeVisible = !chromeVisible
+                            onToggleChrome()
                             searchHighlight = null
                         },
                         searchHighlight = searchHighlight,
@@ -461,7 +475,7 @@ private fun ReaderContent(
                         seekPosition = seekPosition,
                         onSeekPositionConsumed = { seekPosition = null },
                         onToggleChrome = {
-                            chromeVisible = !chromeVisible
+                            onToggleChrome()
                             searchHighlight = null
                         },
                         searchHighlight = searchHighlight,
