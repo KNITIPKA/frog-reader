@@ -39,6 +39,15 @@ class FrogReaderApp : Application(), SingletonImageLoader.Factory {
         }
     }
 
+    /**
+     * A parsed book is tens of megabytes and is held only to make reopening it
+     * instant — the first thing that should go when the system needs room.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_BACKGROUND) bookRepository.releaseContentCache()
+    }
+
     /** Coil with SVG support — books use vector covers and illustrations. */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)

@@ -133,6 +133,7 @@ open class BookRepository(private val context: Context? = null) {
 
     open suspend fun deleteBook(bookId: String) = withContext(Dispatchers.IO) {
         val book = _books.value.firstOrNull { it.id == bookId } ?: return@withContext
+        if (cachedContentId == bookId) releaseContentCache()
         updateIndex { books -> books.filterNot { it.id == bookId } }
         File(booksDir, book.fileName).delete()
         book.coverFileName?.let { File(coversDir, it).delete() }
@@ -143,10 +144,50 @@ open class BookRepository(private val context: Context? = null) {
         }
     }
 
+    /**
+     * The last book that was parsed, kept whole.
+     *
+     * Parsing is 90% of the time it takes to open a book — 2.7s for a 4MB EPUB
+     * on a Pixel 9a — and the reader's ViewModel dies with its back-stack
+     * entry, so backing out and stepping straight back in used to pay all of it
+     * again. One entry, not two: a parsed book is tens of megabytes of
+     * AnnotatedStrings, and "leave and come back" is far more common than
+     * alternating between two books.
+     *
+     * Not a SoftReference — ART clears those eagerly and unpredictably, which
+     * would drop the cache exactly when the device is busy and the user would
+     * feel it most. [releaseContentCache] handles memory pressure explicitly.
+     */
+    private var cachedContentId: String? = null
+    private var cachedContent: BookContent? = null
+
     open suspend fun loadContent(book: Book): BookContent = withContext(Dispatchers.IO) {
+        synchronized(contentLock) {
+            if (cachedContentId == book.id) cachedContent else null
+        }?.let { return@withContext it }
+
         val file = File(booksDir, book.fileName)
         if (!file.exists()) throw IOException("Book file is missing")
-        BookParsers.parseContent(file, book.format, File(imagesDir, book.id))
+        val content = BookParsers.parseContent(file, book.format, File(imagesDir, book.id))
+        // Stored here rather than by the caller on purpose: `parseContent` has
+        // no suspension points, so backing out mid-open cannot interrupt it —
+        // the work happens either way. Caching it here means an abandoned open
+        // still leaves the book ready for the next tap.
+        synchronized(contentLock) {
+            cachedContentId = book.id
+            cachedContent = content
+        }
+        content
+    }
+
+    private val contentLock = Any()
+
+    /** Drops the parsed-book cache — called when the system asks for memory. */
+    fun releaseContentCache() {
+        synchronized(contentLock) {
+            cachedContentId = null
+            cachedContent = null
+        }
     }
 
     /** Stamps the first-opened time once and updates lastOpenedAtMillis. */
