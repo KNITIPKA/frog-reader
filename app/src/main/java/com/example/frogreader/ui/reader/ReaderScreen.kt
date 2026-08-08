@@ -1836,8 +1836,13 @@ private fun SystemBarsEffect(theme: AppTheme, chromeVisible: Boolean) {
         val window = activity?.window ?: return@LaunchedEffect
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         controller.isAppearanceLightStatusBars = !theme.isDark()
-        controller.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        // NOT BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE. Under it, a swipe from the
+        // screen edge asks the system for TRANSIENT bars, and Android draws
+        // those with its own dark scrim. The back gesture IS a swipe from the
+        // edge — so closing a book summoned a scrimmed status bar for the
+        // handful of frames before the reader went away, which read as a dark
+        // band flashing across the top of the library.
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
         if (chromeVisible) {
             controller.show(WindowInsetsCompat.Type.systemBars())
         } else {
