@@ -2274,6 +2274,88 @@ private fun DragGhost(
 
 // ------------------------------------------------------------------ covers
 
+/**
+ * A cover image, or a deterministic gradient plate with the title on it. The
+ * hue comes from the title, so the same book always gets the same plate.
+ */
+@Composable
+private fun BookCover(
+    book: Book,
+    coverFile: java.io.File?,
+    titleSize: TextUnit,
+    padding: Dp,
+    alignBottom: Boolean = false,
+) {
+    if (coverFile != null) {
+        val platform = LocalPlatformContext.current
+        // Cover nodes are thrown away and rebuilt constantly — on every scroll
+        // and on every grid/list swap. Pinning the memory-cache key to the file
+        // path (a new cover always gets a new name) lets the rebuilt node paint
+        // the cached bitmap on its FIRST frame; without it Coil treats each new
+        // node as a fresh load and the tile flashes empty.
+        val request = remember(platform, coverFile) {
+            ImageRequest.Builder(platform)
+                .data(coverFile)
+                .memoryCacheKey(coverFile.path)
+                .placeholderMemoryCacheKey(coverFile.path)
+                .build()
+        }
+        AsyncImage(
+            model = request,
+            contentDescription = stringResource(R.string.library_book_cover, book.title),
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+    } else {
+        FallbackCover(
+            book = book,
+            titleSize = titleSize,
+            padding = padding,
+            alignBottom = alignBottom,
+        )
+    }
+}
+
+@Composable
+private fun FallbackCover(
+    book: Book,
+    titleSize: TextUnit,
+    padding: Dp,
+    alignBottom: Boolean = false,
+) {
+    val (top, bottom) = remember(book.title) { plateColors(book.title) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.linearGradient(listOf(top, bottom))),
+        contentAlignment = if (alignBottom) Alignment.BottomStart else Alignment.Center,
+    ) {
+        if (titleSize.value > 0f) {
+            Text(
+                text = book.title.uppercase(),
+                fontSize = titleSize,
+                lineHeight = 1.3.em,
+                fontWeight = FontWeight.Bold,
+                color = Color.White.copy(alpha = 0.92f),
+                textAlign = if (alignBottom) TextAlign.Start else TextAlign.Center,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(padding),
+            )
+        }
+    }
+}
+
+/** Deterministic dark→light plate, hue derived from the title. */
+private fun plateColors(title: String): Pair<Color, Color> {
+    var hash = 0
+    for (character in title) hash = hash * 31 + character.code
+    val hue = ((hash % 360) + 360) % 360
+    return Color.hsl(hue.toFloat(), 0.42f, 0.27f) to
+        Color.hsl(((hue + 22) % 360).toFloat(), 0.34f, 0.47f)
+}
+
 // ------------------------------------------------------------ empty states
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)

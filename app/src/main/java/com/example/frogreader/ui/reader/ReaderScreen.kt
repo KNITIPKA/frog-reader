@@ -3,7 +3,6 @@ package com.example.frogreader.ui.reader
 import android.content.Intent
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.fadeIn
@@ -12,8 +11,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -159,7 +156,6 @@ import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.FOOTNOTE_TAG
 import com.example.frogreader.data.model.LINK_TAG
 import com.example.frogreader.data.model.ParagraphStyle
-import com.example.frogreader.ui.nav.LocalSharedCoverAvailable
 import com.example.frogreader.ui.nav.sharedBookCover
 import com.example.frogreader.ui.theme.isDark
 import kotlinx.coroutines.delay
@@ -172,9 +168,6 @@ import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
-
-/** How long the opening screen takes to dissolve into the page. */
-private const val OpeningFadeMillis = 240
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -200,24 +193,15 @@ fun ReaderScreen(
     var chromeVisible by rememberSaveable { mutableStateOf(false) }
     SystemBarsEffect(appSettings.theme, chromeVisible)
 
-    val liveBook by viewModel.book.collectAsStateWithLifecycle()
-    val colors = readerColors(appSettings.theme)
-    val openingCover = remember(liveBook?.id, liveBook?.coverFileName) {
-        liveBook?.let { viewModel.coverFile(it) }
-    }
-
-    // The opening screen outlives ReaderState.Loading: it stays composed while
-    // it fades, over content that is already there. `isIdle` is what makes that
-    // safe — the page may only claim the shared cover key once this node is
-    // really gone, never merely on its way out.
-    val opening = remember { MutableTransitionState(state is ReaderState.Loading) }
-    opening.targetState = state is ReaderState.Loading
-    val openingGone = opening.isIdle && !opening.currentState
-
-    Box(modifier = Modifier.fillMaxSize()) {
-    CompositionLocalProvider(LocalSharedCoverAvailable provides openingGone) {
     when (val current = state) {
-        ReaderState.Loading -> Unit
+        ReaderState.Loading -> Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            LoadingIndicator()
+        }
 
         ReaderState.Error -> Box(
             modifier = Modifier
@@ -250,18 +234,6 @@ fun ReaderScreen(
             onToggleChrome = { chromeVisible = !chromeVisible },
             onBack = onBack,
         )
-    }
-    }
-
-        AnimatedVisibility(
-            visibleState = opening,
-            // No enter transition: the nav transition is already bringing this
-            // screen in, and the cover's own morph is the motion that matters.
-            enter = EnterTransition.None,
-            exit = fadeOut(tween(OpeningFadeMillis)),
-        ) {
-            ReaderOpeningScreen(book = liveBook, coverFile = openingCover, colors = colors)
-        }
     }
 }
 

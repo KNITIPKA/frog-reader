@@ -130,9 +130,6 @@ class ReaderViewModel(
     var currentCharOffset: Int = 0
         private set
 
-    /** The book's cover, for the opening screen — no parsing involved. */
-    fun coverFile(book: Book): File? = repository.coverFileFor(book)
-
     /**
      * Recomputes pages in the background unless [key] is already available.
      * [quick] (optional) paginates just the chapter being read; its result

@@ -17,25 +17,11 @@ val LocalSharedTransitionScope = staticCompositionLocalOf<SharedTransitionScope?
 val LocalNavAnimatedVisibilityScope = compositionLocalOf<AnimatedVisibilityScope?> { null }
 
 /**
- * Whether the cover key is free to be claimed here.
- *
- * A shared-element key may only be alive in ONE place at a time — two nodes
- * registering `book-cover-<id>` at once is a crash. The reader shows the cover
- * twice over: on the opening screen while the book is parsed, and again as the
- * first item of the page content. This is how they hand the key over, and it
- * has to stay false for as long as the opening screen is composed at all,
- * including the frames it spends fading out.
- */
-val LocalSharedCoverAvailable = compositionLocalOf { true }
-
-/**
  * Marks a book cover as a shared element so it morphs between the library
- * grid and the reader. No-op when the scopes are unavailable, or when
- * something else currently owns the key.
+ * grid and the reader's title page. No-op when scopes are unavailable.
  */
 @Composable
 fun Modifier.sharedBookCover(bookId: String): Modifier {
-    if (!LocalSharedCoverAvailable.current) return this
     val sharedScope = LocalSharedTransitionScope.current ?: return this
     val animatedScope = LocalNavAnimatedVisibilityScope.current ?: return this
     return with(sharedScope) {
