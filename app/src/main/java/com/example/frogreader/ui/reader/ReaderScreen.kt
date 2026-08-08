@@ -1849,6 +1849,13 @@ private fun SystemBarsEffect(theme: AppTheme, chromeVisible: Boolean) {
         onDispose {
             val window = activity?.window ?: return@onDispose
             val controller = WindowCompat.getInsetsController(window, window.decorView)
+            // Reset the BEHAVIOUR first, and not just the visibility. Left in
+            // BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE, the status bar comes back
+            // as a TRANSIENT bar — which Android draws with its own translucent
+            // dark scrim — and only loses it once the system settles the bar
+            // into a normal one. That was the dark band flashing across the top
+            // of the library for a tenth of a second after closing a book.
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
             controller.show(WindowInsetsCompat.Type.systemBars())
             controller.isAppearanceLightStatusBars = !currentTheme.isDark()
         }
