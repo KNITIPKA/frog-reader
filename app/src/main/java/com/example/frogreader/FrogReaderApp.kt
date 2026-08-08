@@ -40,12 +40,23 @@ class FrogReaderApp : Application(), SingletonImageLoader.Factory {
     }
 
     /**
-     * A parsed book is tens of megabytes and is held only to make reopening it
-     * instant — the first thing that should go when the system needs room.
+     * A parsed book is tens of megabytes, held only to make reopening it
+     * instant, so it should go when the system needs room — but not at the
+     * first excuse.
+     *
+     * Deliberately NOT at UI_HIDDEN or BACKGROUND. Those arrive every time the
+     * app is merely put aside, which is exactly the moment before the user
+     * comes back to the book they were reading; observed on the device firing
+     * within seconds of the app losing focus, with memory otherwise fine.
+     * Rebuilding costs seconds, so hold on until the system is genuinely
+     * short: critical pressure while in front, or far enough down the LRU list
+     * that the whole process is a candidate anyway.
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        if (level >= TRIM_MEMORY_BACKGROUND) bookRepository.releaseContentCache()
+        if (level == TRIM_MEMORY_RUNNING_CRITICAL || level >= TRIM_MEMORY_MODERATE) {
+            bookRepository.releaseContentCache()
+        }
     }
 
     /** Coil with SVG support — books use vector covers and illustrations. */

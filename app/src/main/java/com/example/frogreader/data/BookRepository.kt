@@ -15,7 +15,9 @@ import androidx.glance.appwidget.updateAll
 import com.example.frogreader.data.parser.BookParsers
 import com.example.frogreader.widget.ContinueReadingWidget
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -164,23 +166,42 @@ open class BookRepository(private val context: Context? = null) {
     private var cachedContentId: String? = null
     private var cachedContent: BookContent? = null
 
-    open suspend fun loadContent(book: Book): BookContent = withContext(Dispatchers.IO) {
+    /** Parses already running, so a second asker joins instead of repeating. */
+    private val inFlight = HashMap<String, Deferred<BookContent>>()
+
+    open suspend fun loadContent(book: Book): BookContent {
         synchronized(contentLock) {
             if (cachedContentId == book.id) cachedContent else null
-        }?.let { return@withContext it }
+        }?.let { return it }
 
+        // The parse runs on the repository's own scope, not the caller's. Two
+        // things fall out of that, and both matter now that the library
+        // pre-loads the "continue reading" book in the background: a tap on
+        // that same book JOINS the parse already running instead of starting a
+        // second one, and backing out mid-open no longer throws the work away —
+        // `parseContent` has no suspension points, so it cannot be interrupted
+        // anyway. It finishes, caches, and the next tap is instant.
+        val parse = synchronized(contentLock) {
+            inFlight.getOrPut(book.id) {
+                bookkeeping.async { parseAndCache(book) }
+            }
+        }
+        try {
+            return parse.await()
+        } finally {
+            synchronized(contentLock) { inFlight.remove(book.id, parse) }
+        }
+    }
+
+    private fun parseAndCache(book: Book): BookContent {
         val file = File(booksDir, book.fileName)
         if (!file.exists()) throw IOException("Book file is missing")
         val content = BookParsers.parseContent(file, book.format, File(imagesDir, book.id))
-        // Stored here rather than by the caller on purpose: `parseContent` has
-        // no suspension points, so backing out mid-open cannot interrupt it —
-        // the work happens either way. Caching it here means an abandoned open
-        // still leaves the book ready for the next tap.
         synchronized(contentLock) {
             cachedContentId = book.id
             cachedContent = content
         }
-        content
+        return content
     }
 
     private val contentLock = Any()
