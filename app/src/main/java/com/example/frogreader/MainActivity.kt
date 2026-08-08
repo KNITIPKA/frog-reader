@@ -376,7 +376,21 @@ class MainActivity : ComponentActivity() {
                         navController = navController,
                         startDestination = LibraryRoute,
                         modifier = Modifier.fillMaxSize(),
-                        enterTransition = { if (switchingTabs) tabEnter() else pushEnter() },
+                        enterTransition = {
+                            when {
+                                switchingTabs -> tabEnter()
+                                // The reader is entered by its cover morphing
+                                // out of the library tile. pushEnter's scaleIn
+                                // puts a graphicsLayer scale on the whole
+                                // destination, cover included, so the cover
+                                // would be bounds-animated by the shared
+                                // element and scaled by its parent at once —
+                                // which is exactly what makes a morph look
+                                // wrong. Everything else keeps its zoom.
+                                targetState.destination.hasRoute<ReaderRoute>() -> fadeIn(NavFade)
+                                else -> pushEnter()
+                            }
+                        },
                         exitTransition = { if (switchingTabs) tabExit() else fadeOut(NavFade) },
                         popEnterTransition = { if (switchingTabs) tabEnter() else fadeIn(NavFade) },
                         popExitTransition = { if (switchingTabs) tabExit() else popExit() },
