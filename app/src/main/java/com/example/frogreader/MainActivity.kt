@@ -81,7 +81,10 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.core.graphics.drawable.toDrawable
+import androidx.activity.compose.LocalActivity
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -312,6 +315,27 @@ class MainActivity : ComponentActivity() {
                     NavTab.PROFILE
                 } else {
                     NavTab.LIBRARY
+                }
+
+                // Give the system bars back the moment the reader stops being
+                // the destination — which is when the pop STARTS, not when the
+                // reader finally leaves composition a transition later.
+                //
+                // The reader reads in BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE,
+                // and under that behaviour a swipe from the screen edge asks
+                // the system for TRANSIENT bars, which Android draws with a
+                // dark scrim of its own. The back gesture is exactly such a
+                // swipe, so closing a book left a scrimmed status bar over the
+                // library until something put the window back in order. Doing
+                // it here is early enough that there is nothing to see.
+                val activity = LocalActivity.current
+                val inReader = destination?.hasRoute<ReaderRoute>() == true
+                LaunchedEffect(inReader) {
+                    if (inReader) return@LaunchedEffect
+                    val window = activity?.window ?: return@LaunchedEffect
+                    val controller = WindowCompat.getInsetsController(window, window.decorView)
+                    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+                    controller.show(WindowInsetsCompat.Type.systemBars())
                 }
 
                 val context = LocalContext.current
