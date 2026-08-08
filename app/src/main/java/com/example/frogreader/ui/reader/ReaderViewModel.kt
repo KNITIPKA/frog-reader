@@ -130,17 +130,6 @@ class ReaderViewModel(
     var currentCharOffset: Int = 0
         private set
 
-    init {
-        load()
-        // Re-render the book when the footnote visibility setting changes.
-        viewModelScope.launch {
-            settings
-                .map { it.hideFootnotes }
-                .distinctUntilChanged()
-                .collect { if (loadedContent != null) rebuildReady() }
-        }
-    }
-
     /**
      * Recomputes pages in the background unless [key] is already available.
      * [quick] (optional) paginates just the chapter being read; its result
@@ -515,6 +504,29 @@ class ReaderViewModel(
             }
         }
         return ""
+    }
+
+    /**
+     * LAST in the class body, and it has to stay last.
+     *
+     * `load()` starts on Dispatchers.Main.immediate, so whatever runs before
+     * its first real suspension runs INSIDE this constructor — and Kotlin
+     * initialises properties in declaration order. Sitting above
+     * `_searchResults`, `loadedBook` and `loadedContent`, it used to get away
+     * with it only because the open always suspended early on a library-index
+     * write. The moment a cached book made `loadContent` return without
+     * suspending at all, `rebuildReady` reached a `_searchResults` that was
+     * still null and every re-open crashed.
+     */
+    init {
+        load()
+        // Re-render the book when the footnote visibility setting changes.
+        viewModelScope.launch {
+            settings
+                .map { it.hideFootnotes }
+                .distinctUntilChanged()
+                .collect { if (loadedContent != null) rebuildReady() }
+        }
     }
 
     companion object {
