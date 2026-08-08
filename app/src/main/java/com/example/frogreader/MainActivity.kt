@@ -36,7 +36,11 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -528,6 +532,7 @@ private const val SplashExitScale = 1.08f
  * bar out of view instead keeps the measured height, and the padding never
  * moves.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FrogNavigationBar(
     visible: Boolean,
@@ -547,6 +552,14 @@ private fun FrogNavigationBar(
     )
 
     NavigationBar(
+        // Same reason the library header uses the ignoring-visibility inset:
+        // the reader hides the system bars, so coming back from a book this
+        // measures while the navigation bar is still gone. The default inset
+        // reads 0, the bar is that much shorter, and it slides down into place
+        // as the system bar animates back. Reserving the space either way
+        // keeps it still.
+        windowInsets = WindowInsets.systemBarsIgnoringVisibility
+            .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
         modifier = Modifier
             .onSizeChanged { barHeight = it.height }
             .graphicsLayer { translationY = barHeight * hidden },
