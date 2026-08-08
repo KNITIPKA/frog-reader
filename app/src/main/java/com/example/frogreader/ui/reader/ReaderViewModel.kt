@@ -217,19 +217,15 @@ class ReaderViewModel(
 
     fun load() {
         viewModelScope.launch {
-            val t0 = System.currentTimeMillis()
             _state.value = ReaderState.Loading
             val book = repository.bookById(bookId)
             if (book == null) {
                 _state.value = ReaderState.Error
                 return@launch
             }
-            val tBook = System.currentTimeMillis()
             currentFlatIndex = book.progress.elementIndex
-            val tMark = System.currentTimeMillis()
             runCatching { repository.loadContent(book) }
                 .onSuccess { content ->
-                    val tParse = System.currentTimeMillis()
                     loadedBook = book
                     loadedContent = content
                     rebuildReady()
@@ -239,12 +235,6 @@ class ReaderViewModel(
                     // pool that the book itself was about to be read from, and
                     // the open simply queued behind it.
                     repository.noteOpened(bookId) { settingsRepository.settings.first() }
-                    val tReady = System.currentTimeMillis()
-                    android.util.Log.i(
-                        "ReaderOpen",
-                        "total=${tReady - t0}ms  book=${tBook - t0}  writes=${tMark - tBook}" +
-                            "  parse=${tParse - tMark}  build=${tReady - tParse}",
-                    )
                 }
                 .onFailure { _state.value = ReaderState.Error }
         }
