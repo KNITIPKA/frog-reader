@@ -17,7 +17,6 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContentTransitionScope
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -49,6 +48,7 @@ import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.animateFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
@@ -608,9 +608,18 @@ private fun FrogNavigationBar(
 }
 
 /**
- * Add-a-book button. Free to come and go with AnimatedVisibility: Scaffold
- * takes the content's bottom padding from the bar, not from this slot, so
- * removing it moves nothing.
+ * Add-a-book button. Free to come and go: Scaffold takes the content's bottom
+ * padding from the bar, not from this slot, so removing it moves nothing.
+ *
+ * Shown and hidden by [Modifier.animateFloatingActionButton], not by
+ * AnimatedVisibility. The hand-rolled version drove alpha with [NavFade], a
+ * LOW-BOUNCY spring — and a bouncy spring aiming at 0 undershoots past it. Alpha
+ * clamps at 0, springs back up, and the button flashes back into view after it
+ * has already faded. The Material modifier separates the two channels the way
+ * the motion scheme intends: a spatial spring for the scale, which may overshoot
+ * because that reads as weight, and a non-bouncy effects spring for the alpha,
+ * which may not. It also folds to a zero-size layout once it is invisible
+ * instead of adding and removing the node.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -619,23 +628,23 @@ private fun ImportFab(
     importing: Boolean,
     onClick: () -> Unit,
 ) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = scaleIn(NavFade) + fadeIn(NavFade),
-        exit = scaleOut(NavFade, targetScale = 0.7f) + fadeOut(NavFade),
+    FloatingActionButton(
+        onClick = onClick,
+        modifier = Modifier.animateFloatingActionButton(
+            visible = visible,
+            alignment = Alignment.BottomEnd,
+        ),
     ) {
-        FloatingActionButton(onClick = onClick) {
-            if (importing) {
-                LoadingIndicator(
-                    modifier = Modifier.size(24.dp),
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Rounded.Add,
-                    contentDescription = stringResource(R.string.library_add_book),
-                )
-            }
+        if (importing) {
+            LoadingIndicator(
+                modifier = Modifier.size(24.dp),
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Rounded.Add,
+                contentDescription = stringResource(R.string.library_add_book),
+            )
         }
     }
 }
