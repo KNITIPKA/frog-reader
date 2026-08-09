@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.library
 
+import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -9,6 +10,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.frogreader.FrogReaderApp
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.DuplicateMatch
+import com.example.frogreader.data.FolderScanner
 import com.example.frogreader.data.ImportMode
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.parser.mobi.MobiDrmException
@@ -43,6 +45,8 @@ sealed interface LibraryMessage {
 class LibraryViewModel(
     private val repository: BookRepository,
     private val settingsRepository: SettingsRepository? = null,
+    /** Null in unit tests, which have no Context and need none of what it is for. */
+    private val application: Application? = null,
 ) : ViewModel() {
 
     val books: StateFlow<List<Book>> = repository.books
@@ -84,8 +88,14 @@ class LibraryViewModel(
 
     init {
         // One background sweep per app start (the library screen is the
-        // entry point): drop caches orphaned by failed imports.
+        // entry point): drop caches orphaned by failed imports, and hand back
+        // the folder permissions the old scan took and never released.
         viewModelScope.launch { runCatching { repository.cleanOrphanCaches() } }
+        application?.let { app ->
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { FolderScanner.releaseLegacyGrants(app) }
+            }
+        }
         preloadContinueReading()
         if (settingsRepository != null) {
             viewModelScope.launch {
@@ -335,7 +345,7 @@ class LibraryViewModel(
         val Factory = viewModelFactory {
             initializer {
                 val app = this[APPLICATION_KEY] as FrogReaderApp
-                LibraryViewModel(app.bookRepository, app.settingsRepository)
+                LibraryViewModel(app.bookRepository, app.settingsRepository, app)
             }
         }
     }

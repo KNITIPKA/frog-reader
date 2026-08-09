@@ -2,8 +2,32 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Unlocking the app. A normal permission: granted at install, never asked for. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+
+    <!--
+        READ_EXTERNAL_STORAGE is deliberately absent, and must stay absent.
+
+        It was declared here and never once requested at runtime. On API 26-32
+        that is a dangerous permission, so declaring it alone granted nothing
+        and the scan it was meant to serve silently returned nothing; from 33
+        it is not a thing at all under scoped storage. Every file the app reads
+        now comes through the Storage Access Framework, which needs no
+        permission because the user picks the file or folder themselves.
+
+        Adding it back would put a storage permission on the Play listing that
+        the app does not use.
+    -->
+
+    <!--
+        WorkManager (pulled in by the home-screen widget through Glance) merges
+        FOREGROUND_SERVICE into the manifest. Nothing here ever runs one: the
+        only worker is a plain periodic backup, with no setExpedited and no
+        setForeground. Left in, targetSdk 36 requires a foreground service type
+        to be declared and justified in the Play Console for a service the app
+        never starts.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
 
     <application
         android:name=".FrogReaderApp"
