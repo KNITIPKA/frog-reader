@@ -103,6 +103,21 @@ data class Book(
     /** File name inside the app's private covers directory, if the book has a cover. */
     val coverFileName: String? = null,
     val addedAtMillis: Long,
+    /**
+     * SHA-256 of the STORED file, lowercase hex — what tells one book file from
+     * another byte for byte.
+     *
+     * Of the stored file rather than of whatever was picked, because the same
+     * book arrives as `book.fb2` and as `book.fb2.zip` and the import unzips
+     * both to the same bytes. Hashing the source would call those two different
+     * books; hashing what was stored calls them one.
+     *
+     * Null on a record written before this existed, and on a record with no
+     * file yet. Filled in on demand, never in bulk — see BookRepository.
+     */
+    val contentHash: String? = null,
+    /** Size of the stored file in bytes; 0 = unknown, same two cases as above. */
+    val sizeBytes: Long = 0,
     val lastOpenedAtMillis: Long? = null,
     val progress: ReadingProgress = ReadingProgress(),
     val bookmarks: List<Bookmark> = emptyList(),

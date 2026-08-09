@@ -40,6 +40,12 @@ data class BookRecord(
     /** File name inside the app's private covers directory, if the book has a cover. */
     val coverFileName: String? = null,
     val addedAtMillis: Long,
+    /** See [Book.contentHash]. Defaulted: a library.json written before this
+     *  existed has no such key, and requiring one would reject every legacy
+     *  library as corrupt. */
+    val contentHash: String? = null,
+    /** See [Book.sizeBytes]. Defaulted for the same reason. */
+    val sizeBytes: Long = 0,
     // Extended metadata (shown in the "Book details" sheet; absent = hidden).
     val genres: List<String> = emptyList(),
     val series: String? = null,
@@ -162,6 +168,8 @@ fun BookRecord.withUserData(
     fileName = fileName,
     coverFileName = coverFileName,
     addedAtMillis = addedAtMillis,
+    contentHash = contentHash,
+    sizeBytes = sizeBytes,
     lastOpenedAtMillis = prog?.lastOpenedAtMillis,
     progress = prog?.position ?: ReadingProgress(),
     bookmarks = bookmarks,
@@ -194,6 +202,8 @@ fun Book.toRecord(): BookRecord = BookRecord(
     fileName = fileName,
     coverFileName = coverFileName,
     addedAtMillis = addedAtMillis,
+    contentHash = contentHash,
+    sizeBytes = sizeBytes,
     genres = genres,
     series = series,
     seriesNumber = seriesNumber,
