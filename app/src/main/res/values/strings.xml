@@ -286,7 +286,12 @@
     <string name="scan_found">%1$d books · %2$d already in your library</string>
     <string name="scan_search_placeholder">Search title, author or file…</string>
     <string name="scan_select_all">Select all</string>
+    <string name="scan_clear_all">Clear</string>
+    <string name="scan_section_found">Found in this folder</string>
+    <string name="scan_selected_count">%1$d selected</string>
+    <string name="scan_state_reading">Reading…</string>
     <string name="scan_add_n">Add %1$d books</string>
+    <string name="scan_add_none">Select books to add</string>
     <string name="scan_adding">Adding %1$d of %2$d…</string>
     <string name="scan_state_in_library">Already in your library</string>
     <string name="scan_state_similar">Looks like a book you have</string>

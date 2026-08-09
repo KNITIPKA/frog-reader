@@ -848,59 +848,12 @@ private fun SearchField(
     onQueryChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val frog = LocalFrogColors.current
-
-    Row(
-        modifier = modifier
-            .height(44.dp)
-            .clip(RoundedCornerShape(22.dp))
-            .background(frog.glass)
-            .padding(horizontal = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.Search,
-            contentDescription = null,
-            tint = frog.ink2,
-            modifier = Modifier.size(19.dp),
-        )
-        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-            if (query.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.library_search_hint),
-                    fontSize = 14.sp,
-                    lineHeight = 18.sp,
-                    fontWeight = FontWeight.Normal,
-                    color = frog.ink2,
-                    maxLines = 1,
-                )
-            }
-            BasicTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                singleLine = true,
-                textStyle = TextStyle(
-                    fontSize = 14.sp,
-                    lineHeight = 18.sp,
-                    fontWeight = FontWeight.Normal,
-                    color = frog.ink,
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        if (query.isNotEmpty()) {
-            Icon(
-                imageVector = Icons.Rounded.Close,
-                contentDescription = stringResource(R.string.library_search_clear),
-                tint = frog.ink2,
-                modifier = Modifier
-                    .size(19.dp)
-                    .clickable { onQueryChange("") },
-            )
-        }
-    }
+    FrogSearchField(
+        query = query,
+        onQueryChange = onQueryChange,
+        hint = stringResource(R.string.library_search_hint),
+        modifier = modifier,
+    )
 }
 
 // -------------------------------------------------------------- hero card
@@ -1140,37 +1093,6 @@ private fun HeroCover(
     ) {
         BookCover(book = book, coverFile = coverFile, titleSize = 11.sp, padding = 10.dp)
     }
-}
-
-/**
- * A button whose corner radius snaps tighter while pressed — the M3 Expressive
- * shape morph, done by hand so it also works on the plain Box we need here.
- */
-@Composable
-private fun MorphingButton(
-    onClick: () -> Unit,
-    color: Color,
-    modifier: Modifier = Modifier,
-    content: @Composable () -> Unit,
-) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val corner by animateFloatAsState(
-        targetValue = if (pressed) 10f else 20f,
-        animationSpec = spring(
-            stiffness = Spring.StiffnessMediumLow,
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-        ),
-        label = "buttonCorner",
-    )
-
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(corner.dp))
-            .background(color)
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) { content() }
 }
 
 @Composable
