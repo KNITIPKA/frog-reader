@@ -126,7 +126,13 @@ class ScanFolderState(
         val cover = inspected.coverBytes?.let { bytes ->
             withContext(Dispatchers.IO) {
                 runCatching {
-                    File(coverDir, "$id.img").apply { writeBytes(bytes) }
+                    // Named by content hash, NOT by document id. A SAF document
+                    // id looks like "primary:Download/book.epub" — colons and
+                    // slashes and all — so using it as a file name asked to
+                    // write into a directory that does not exist, the write
+                    // threw, runCatching swallowed it, and every cover on this
+                    // screen silently came out blank. The hash is hex.
+                    File(coverDir, "${inspected.contentHash}.img").apply { writeBytes(bytes) }
                 }.getOrNull()
             }
         }
@@ -142,11 +148,12 @@ class ScanFolderState(
                     ScanRowState.IN_LIBRARY
                 },
                 match = inspected.duplicateOf?.match,
-                // A book already in the library is left unticked. Offering it
-                // is right — a better file for it may be exactly what the user
-                // came for — but ticking it by default would make "select all"
-                // mean "ask me about every book I already own".
-                selected = it.selected && inspected.duplicateOf == null,
+                // Whatever the user has already said about this row stands.
+                // Rows start unticked, so a book that turns out to be one they
+                // already own is still never ticked on its own — but a row
+                // ticked before it finished resolving was ticked by them, and
+                // unticking it behind their back is not ours to do.
+                selected = it.selected,
             )
         }
     }
@@ -160,15 +167,23 @@ class ScanFolderState(
         update(id) { if (it.selectable) it.copy(selected = !it.selected) else it }
     }
 
-    /** Ticks or unticks what is on screen — not what the search is hiding. */
+    /**
+     * Ticks or unticks everything on screen — not what the search is hiding.
+     *
+     * Everything means everything. This used to skip books already in the
+     * library, which had two consequences: "select all" quietly did less than
+     * it said, and because the header checkbox could then never reach a fully
+     * ticked state it never flipped to checked — so it could not be used to
+     * untick either, and the control was stuck. Books already held are still
+     * never ticked ON THEIR OWN; being asked directly is a different matter.
+     */
     fun setAllSelected(selected: Boolean) {
         val visible = visibleRows.mapTo(HashSet()) { it.id }
         // Gathered first, applied after: writing into the list while iterating
         // it is what SnapshotStateList's iterator refuses to allow.
         val updates = rows.mapIndexedNotNull { index, row ->
             if (row.id !in visible || !row.selectable) return@mapIndexedNotNull null
-            val wanted = selected && row.state != ScanRowState.IN_LIBRARY
-            if (row.selected == wanted) null else index to row.copy(selected = wanted)
+            if (row.selected == selected) null else index to row.copy(selected = selected)
         }
         updates.forEach { (index, row) -> rows[index] = row }
     }
