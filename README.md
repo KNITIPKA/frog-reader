@@ -22,8 +22,8 @@ customization. Runs on **Android 8.0+ (minSdk 26)**.
 > **[GitHub Releases](https://github.com/KNITIPKA/frog-reader/releases/latest)**
 > — the file is named `frog-reader-<version>-alpha.apk`.
 >
-> The current build is ~71 MB because it is an unminified debug APK; that is not the size of
-> the finished app.
+> Builds since v1.52 are minified release builds of about 4 MB. They carry a debug
+> signature, so each one installs straight over the last without uninstalling.
 
 ---
 
@@ -61,6 +61,13 @@ customization. Runs on **Android 8.0+ (minSdk 26)**.
 - **Grid & List Views**: three-column cover grid or a compact list with inline reading progress.
 - **Live Search**: filters by title and author as you type, and looks inside shelves.
 
+### 💾 Backup & Data Safety
+- **Export & Restore**: write the whole library to a `.zip` you keep — two modes, *library only* (a few hundred KB: books, quotes, notes, ratings, positions, shelves, reading time and settings) or *everything* including the book files and covers.
+- **Scheduled Backups**: pick a folder once and the app backs itself up daily or weekly, keeping the five most recent snapshots. Point it at a folder inside Google Drive, Dropbox, OneDrive or Nextcloud and that is a cloud backup — with no account, no OAuth and no network code, through the system file picker.
+- **Split Storage**: book metadata, user-authored data (quotes, bookmarks, notes) and reading positions live in three separate documents, so a page turn never rewrites the things you wrote.
+- **Crash-Safe Writes**: every store is written `.tmp` → fsync → `.bak` → atomic rename, and reads fall back to the backup copy and repair the live file.
+- **Cloud Backup**: Android Auto Backup carries the irreplaceable files (and nothing large) to your Google account, and the phone-to-phone transfer brings the book files too.
+
 ### 🔐 App Security & Widgets
 - **App Lock**: Optional biometric / device-credential lock on the library (Android 10+).
 - **Reading Analytics Dashboard**: Track daily reading time, set daily reading goals (in minutes), and view reading history.
@@ -76,6 +83,7 @@ FrogReader/
 │   ├── data/
 │   │   ├── model/          # Core book models, bookmarks & library schemas
 │   │   ├── parser/         # EPUB, FB2, MOBI parsers, CSS resolver, WOFF/2 decoders
+│   │   ├── backup/         # Backup format, targets (SAF / folder), scheduled worker
 │   │   └── repository/     # DataStore & book storage repositories
 │   ├── ui/
 │   │   ├── library/        # Main bookshelf & book details UI
@@ -90,7 +98,8 @@ FrogReader/
 - **Language**: 100% Kotlin 2.x
 - **UI Framework**: Jetpack Compose (Material 3)
 - **Asynchrony**: Kotlin Coroutines & Flow
-- **Data Persistence**: Jetpack DataStore Preferences & JSON Serialization
+- **Data Persistence**: Jetpack DataStore Preferences & kotlinx.serialization JSON, split across three atomically-written documents
+- **Background Work**: WorkManager (scheduled backups), Storage Access Framework (no storage permissions)
 - **Parsing**: JSoup, XML Pull Parser, Brotli (WOFF2)
 - **Image Processing**: Coil Compose & Coil SVG
 - **Widgets**: Jetpack Glance AppWidget

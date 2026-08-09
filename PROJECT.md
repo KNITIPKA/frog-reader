@@ -7,10 +7,19 @@ Android native e-book reader built with **Kotlin 2.x** and **Jetpack Compose (Ma
   - `minSdk`: 26 (Android 8.0 Oreo, covers >98% of active devices worldwide)
   - `targetSdk`: 36
   - `compileSdk`: 37 (release version)
-- **Data Persistence**:
-  - `BookRepository.kt`: Manages reading, atomic JSON file writes (`.tmp` -> `.json` -> `.bak`), and book imports.
+- **Data Persistence**: three JSON documents, split by who owns the data.
+  - `library.json` — book metadata the app derived by parsing the file. Written on import, edit or shelving.
+  - `userdata.json` — what the user made: quotes, bookmarks, notes, ratings, reviews, statuses, per-book reader settings. The only one that cannot be reconstructed.
+  - `progress.json` — reading positions, written on every settled page turn. Kept apart so constant writing never touches the irreplaceable document.
+  - `AtomicJsonFile.kt`: the shared write path — `.tmp` -> fsync -> `.bak` -> atomic rename, with `.bak` recovery on read. Used by every store.
+  - `BookRepository.kt`: assembles whole `Book` objects from the three documents and routes writes back by diffing before/after, so callers keep working in whole books. Also stamps `updatedAtMillis` and records deletion tombstones — unused today, groundwork for syncing two devices.
   - `SettingsRepository.kt`: DataStore Preferences for user settings.
   - `StatsRepository.kt`: Reading time tracking & 100-day streaks using `java.time.LocalDate`.
+- **Backup** (`data/backup/`):
+  - `BackupArchive.kt`: the zip format. No Android types, so the round trip is JVM-testable.
+  - `BackupTarget.kt`: where the bytes go — `SafDocumentTarget` (a picked file), `SafFolderTarget` (a picked folder, which may live in Google Drive/Dropbox). A Drive API target could be added without touching the format.
+  - `ScheduledBackup.kt`: WorkManager periodic job, data-only, with snapshot rotation.
+  - A backup holds whole `Book` objects, deliberately unlike the on-disk layout, so storage changes never invalidate backups already written.
 - **Custom Reading & Typography Engine**:
   - **EPUB Parser** (`EpubParser.kt`): OPF manifest, NCX, nav TOC, XHTML mapping.
   - **FB2 Parser** (`Fb2Parser.kt`): XML stanzas, epigraphs, sub-titles, inline images.
