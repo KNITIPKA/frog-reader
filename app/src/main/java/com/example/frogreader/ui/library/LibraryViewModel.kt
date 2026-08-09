@@ -13,6 +13,7 @@ import com.example.frogreader.data.ImportMode
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.parser.mobi.MobiDrmException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 import com.example.frogreader.data.LibraryViewMode
@@ -31,6 +33,8 @@ import com.example.frogreader.data.SettingsRepository
 
 sealed interface LibraryMessage {
     data class Imported(val title: String) : LibraryMessage
+    data class Replaced(val title: String) : LibraryMessage
+    data object ImportCancelled : LibraryMessage
     data object ImportFailed : LibraryMessage
     data object ImportFailedDrm : LibraryMessage
 }
@@ -148,14 +152,72 @@ class LibraryViewModel(
         return file
     }
 
+    /** Questions this import needs answered before it can finish. */
+    val conflicts = ConflictPrompt()
+
+    fun answerConflict(choice: ConflictChoice, applyToRest: Boolean = false) {
+        conflicts.answer(choice, applyToRest)
+    }
+
     fun importBook(uri: Uri?) {
         if (uri == null) return
         viewModelScope.launch {
             _importing.value = true
-            runCatching { repository.importBook(uri) }
-                .onSuccess { _messages.send(LibraryMessage.Imported(it.title)) }
-                .onFailure { error -> _messages.send(error.toMessage()) }
-            _importing.value = false
+            try {
+                runCatching { addOne(uri, remaining = 0) }
+                    .onSuccess { _messages.send(it) }
+                    .onFailure { error -> _messages.send(error.toMessage()) }
+            } finally {
+                _importing.value = false
+                conflicts.reset()
+            }
+        }
+    }
+
+    /**
+     * Stage, ask if there is anything to ask, then commit or throw away.
+     *
+     * The discard is NonCancellable because the alternative is a book-sized
+     * file left in staging every time someone backs out mid-question. It would
+     * be swept eventually; "eventually" is half an hour of the user's storage.
+     */
+    private suspend fun addOne(uri: Uri, remaining: Int): LibraryMessage {
+        val staged = repository.stageImport(uri)
+        var committed = false
+        try {
+            val duplicate = staged.duplicateOf
+            val mode = if (duplicate == null) {
+                ImportMode.New
+            } else {
+                val existing = duplicate.book
+                when (
+                    conflicts.ask(
+                        ImportConflict(
+                            existing = existing,
+                            existingCover = repository.coverFileFor(existing),
+                            existingSizeBytes = existing.sizeBytes.takeIf { it != 0L }
+                                ?: repository.bookFileFor(existing)?.length() ?: 0L,
+                            incoming = staged,
+                            match = duplicate.match,
+                            remaining = remaining,
+                        ),
+                    )
+                ) {
+                    ConflictChoice.CANCEL -> null
+                    ConflictChoice.CLONE -> ImportMode.Clone
+                    ConflictChoice.REPLACE -> ImportMode.Replace(existing.id)
+                }
+            } ?: return LibraryMessage.ImportCancelled
+
+            val book = repository.commitImport(staged, mode)
+            committed = true
+            return if (mode is ImportMode.Replace) {
+                LibraryMessage.Replaced(book.title)
+            } else {
+                LibraryMessage.Imported(book.title)
+            }
+        } finally {
+            if (!committed) withContext(NonCancellable) { repository.discardImport(staged) }
         }
     }
 

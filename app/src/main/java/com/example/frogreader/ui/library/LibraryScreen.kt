@@ -320,6 +320,19 @@ fun LibraryScreen(
                     )
                 }
 
+                is LibraryMessage.Replaced -> {
+                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                    snackbarHostState.showSnackbar(
+                        context.getString(R.string.library_replaced, message.title),
+                    )
+                }
+
+                LibraryMessage.ImportCancelled -> {
+                    snackbarHostState.showSnackbar(
+                        context.getString(R.string.library_import_cancelled),
+                    )
+                }
+
                 LibraryMessage.ImportFailed -> {
                     haptics.performHapticFeedback(HapticFeedbackType.Reject)
                     snackbarHostState.showSnackbar(
@@ -696,6 +709,17 @@ fun LibraryScreen(
         )
     }
 
+    // An import that found something already in the library is suspended
+    // waiting on this. It is hosted here because the library is what the
+    // question is about — and because the answer belongs to the same view model
+    // that asked it.
+    val conflict by viewModel.conflicts.current.collectAsStateWithLifecycle()
+    conflict?.let { pending ->
+        DuplicateBookDialog(
+            conflict = pending,
+            onChoice = { choice, applyToRest -> viewModel.answerConflict(choice, applyToRest) },
+        )
+    }
 }
 
 /** Case-insensitive substring match over titles, authors and shelf names. */

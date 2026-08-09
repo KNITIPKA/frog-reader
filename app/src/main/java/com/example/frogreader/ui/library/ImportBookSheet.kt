@@ -75,7 +75,6 @@ import com.example.frogreader.data.BookScanner
 import com.example.frogreader.data.ScannedBookFile
 import com.example.frogreader.data.model.BookFormat
 import kotlinx.coroutines.launch
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -474,7 +473,7 @@ private fun ScannedBookCard(
                     Spacer(Modifier.width(10.dp))
 
                     Text(
-                        text = formatSize(bookFile.sizeBytes),
+                        text = formatFileSize(bookFile.sizeBytes),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -502,10 +501,3 @@ private fun ScannedBookCard(
     }
 }
 
-private fun formatSize(sizeBytes: Long): String {
-    return when {
-        sizeBytes < 1024 -> "$sizeBytes B"
-        sizeBytes < 1024 * 1024 -> "${sizeBytes / 1024} KB"
-        else -> String.format(Locale.US, "%.1f MB", sizeBytes.toFloat() / (1024 * 1024))
-    }
-}

@@ -16,6 +16,24 @@
     <string name="library_imported">“%1$s” added to your library</string>
     <string name="library_import_failed">Couldn\'t add this book. It may be damaged or not an EPUB, FB2 or MOBI file.</string>
     <string name="library_import_failed_drm">This book is copy-protected (DRM) and can\'t be opened.</string>
+    <string name="library_replaced">“%1$s” was replaced</string>
+    <string name="library_import_cancelled">Nothing was added</string>
+
+    <!-- A book that is already in the library, compared side by side -->
+    <string name="dup_title_same_file">This book is already in your library</string>
+    <string name="dup_title_same_book">You may already have this book</string>
+    <string name="dup_title_no_file">This book is waiting for a file</string>
+    <string name="dup_message_same_file">The file you picked is exactly the one already saved.</string>
+    <string name="dup_message_same_book">The file you picked is different from the one already saved. Replacing keeps your quotes, rating and place in the book.</string>
+    <string name="dup_column_existing">In your library</string>
+    <string name="dup_column_incoming">Adding</string>
+    <string name="dup_progress">%1$d%% read</string>
+    <string name="dup_not_started">Not started</string>
+    <string name="dup_action_replace">Replace</string>
+    <string name="dup_action_attach">Use this file</string>
+    <string name="dup_action_clone">Add a copy</string>
+    <string name="dup_action_cancel">Cancel</string>
+    <string name="dup_apply_to_rest">Do the same for the remaining %1$d</string>
     <string name="library_delete_title">Remove book?</string>
     <string name="library_delete_message">“%1$s” and its reading progress will be removed.</string>
     <string name="library_delete_confirm">Remove</string>
