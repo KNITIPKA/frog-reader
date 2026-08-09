@@ -236,23 +236,10 @@ class LibraryViewModel(
             val mode = if (duplicate == null) {
                 ImportMode.New
             } else {
-                val existing = duplicate.book
-                when (
-                    conflicts.ask(
-                        ImportConflict(
-                            existing = existing,
-                            existingCover = repository.coverFileFor(existing),
-                            existingSizeBytes = existing.sizeBytes.takeIf { it != 0L }
-                                ?: repository.bookFileFor(existing)?.length() ?: 0L,
-                            incoming = staged,
-                            match = duplicate.match,
-                            remaining = remaining,
-                        ),
-                    )
-                ) {
+                when (conflicts.ask(repository.conflictFor(staged, duplicate, remaining))) {
                     ConflictChoice.CANCEL -> null
                     ConflictChoice.CLONE -> ImportMode.Clone
-                    ConflictChoice.REPLACE -> ImportMode.Replace(existing.id)
+                    ConflictChoice.REPLACE -> ImportMode.Replace(duplicate.book.id)
                 }
             } ?: return LibraryMessage.ImportCancelled
 

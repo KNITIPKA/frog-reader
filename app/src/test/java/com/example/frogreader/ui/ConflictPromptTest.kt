@@ -47,6 +47,7 @@ class ConflictPromptTest {
             duplicateOf = null,
         ),
         match = DuplicateMatch.SAME_BOOK,
+        coverDiffers = false,
         remaining = remaining,
     )
 

@@ -84,15 +84,23 @@ fun DuplicateBookDialog(
     // its book. Calling that "replace" would suggest something is at risk.
     val attaching = existing.fileName == null
 
+    // What the two copies have in common gets said once; the rest goes side by
+    // side. Three independent questions, because they really are independent:
+    // the same book can arrive with a different cover, or the same cover under
+    // a different title.
     val sameTitle = normalizeForMatch(existing.title) == normalizeForMatch(incoming.title)
     val sameAuthor = normalizeForMatch(existing.author) == normalizeForMatch(incoming.author)
-    val sharedIdentity = sameTitle && sameAuthor
+    val sharedText = sameTitle && sameAuthor
 
     val sameFormat = existing.format == incoming.format
     val sameSize = conflict.existingSizeBytes == incoming.sizeBytes
-    // Nothing to say twice: one line above the columns instead of two identical
-    // ones inside them.
     val sharedFile = sameFormat && sameSize
+
+    // A different cover is a difference the user must SEE — replacing changes
+    // the picture on their shelf, and that is not something to find out
+    // afterwards. It sends both covers into the columns even when everything
+    // written about the book matches.
+    val sharedCover = !conflict.coverDiffers
 
     AlertDialog(
         onDismissRequest = { onChoice(ConflictChoice.CANCEL, false) },
@@ -113,10 +121,12 @@ fun DuplicateBookDialog(
                     .heightIn(max = sheetMaxContentHeight())
                     .verticalScroll(rememberScrollState()),
             ) {
-                if (sharedIdentity) {
+                if (sharedText) {
                     SharedIdentity(
-                        cover = conflict.existingCover,
-                        coverBytes = incoming.coverBytes,
+                        // Only when it is genuinely the same picture. Otherwise
+                        // the header would show one of the two and quietly
+                        // imply the other does not exist.
+                        cover = conflict.existingCover.takeIf { sharedCover },
                         title = existing.title,
                         author = existing.author,
                         subtitle = if (sharedFile) {
@@ -130,7 +140,11 @@ fun DuplicateBookDialog(
 
                 ComparisonStrip(
                     conflict = conflict,
-                    showIdentity = !sharedIdentity,
+                    // Covers go in the columns whenever they differ, and also
+                    // when the titles do — a column with a title but no cover
+                    // reads as half-built.
+                    showCovers = !sharedCover || !sharedText,
+                    showText = !sharedText,
                     showFile = !sharedFile,
                 )
 
@@ -207,19 +221,15 @@ fun DuplicateBookDialog(
 @Composable
 private fun SharedIdentity(
     cover: File?,
-    coverBytes: ByteArray?,
     title: String,
     author: String?,
     subtitle: String?,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        CoverThumb(
-            cover = cover,
-            coverBytes = coverBytes,
-            width = 52.dp,
-            height = 76.dp,
-        )
-        Spacer(Modifier.width(14.dp))
+        if (cover != null) {
+            CoverThumb(cover = cover, coverBytes = null, width = 52.dp, height = 76.dp)
+            Spacer(Modifier.width(14.dp))
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
@@ -260,7 +270,8 @@ private fun SharedIdentity(
 @Composable
 private fun ComparisonStrip(
     conflict: ImportConflict,
-    showIdentity: Boolean,
+    showCovers: Boolean,
+    showText: Boolean,
     showFile: Boolean,
 ) {
     Surface(
@@ -272,10 +283,11 @@ private fun ComparisonStrip(
             ComparisonColumn(
                 label = stringResource(R.string.dup_column_existing),
                 labelColor = MaterialTheme.colorScheme.primary,
-                cover = conflict.existingCover.takeIf { showIdentity },
+                cover = conflict.existingCover.takeIf { showCovers },
                 coverBytes = null,
-                title = conflict.existing.title.takeIf { showIdentity },
-                author = conflict.existing.author.takeIf { showIdentity },
+                showCover = showCovers,
+                title = conflict.existing.title.takeIf { showText },
+                author = conflict.existing.author.takeIf { showText },
                 file = if (showFile) {
                     "${conflict.existing.format.name} · ${formatFileSize(conflict.existingSizeBytes)}"
                 } else {
@@ -293,9 +305,10 @@ private fun ComparisonStrip(
                 label = stringResource(R.string.dup_column_incoming),
                 labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 cover = null,
-                coverBytes = conflict.incoming.coverBytes.takeIf { showIdentity },
-                title = conflict.incoming.title.takeIf { showIdentity },
-                author = conflict.incoming.author.takeIf { showIdentity },
+                coverBytes = conflict.incoming.coverBytes.takeIf { showCovers },
+                showCover = showCovers,
+                title = conflict.incoming.title.takeIf { showText },
+                author = conflict.incoming.author.takeIf { showText },
                 file = if (showFile) {
                     "${conflict.incoming.format.name} · ${formatFileSize(conflict.incoming.sizeBytes)}"
                 } else {
@@ -317,6 +330,7 @@ private fun ComparisonColumn(
     labelColor: androidx.compose.ui.graphics.Color,
     cover: File?,
     coverBytes: ByteArray?,
+    showCover: Boolean,
     title: String?,
     author: String?,
     file: String?,
@@ -338,9 +352,12 @@ private fun ComparisonColumn(
             overflow = TextOverflow.Ellipsis,
         )
 
-        if (title != null) {
+        if (showCover) {
             Spacer(Modifier.height(10.dp))
-            CoverThumb(cover = cover, coverBytes = coverBytes, width = 52.dp, height = 76.dp)
+            CoverThumb(cover = cover, coverBytes = coverBytes, width = 56.dp, height = 82.dp)
+        }
+
+        if (title != null) {
             Spacer(Modifier.height(8.dp))
             Text(
                 text = title,
@@ -359,7 +376,7 @@ private fun ComparisonColumn(
         }
 
         if (file != null) {
-            Spacer(Modifier.height(if (title != null) 6.dp else 8.dp))
+            Spacer(Modifier.height(if (title != null || showCover) 6.dp else 8.dp))
             Text(
                 text = file,
                 style = MaterialTheme.typography.labelMedium,
