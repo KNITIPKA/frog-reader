@@ -42,6 +42,13 @@ data class Quote(
     val createdAtMillis: Long,
 )
 
+/**
+ * One book, as the rest of the app sees it.
+ *
+ * Not what is on disk: the repository assembles this from three documents that
+ * are written at very different rates — see `Stores.kt`. Nothing above the
+ * repository needs to know that, which is the point.
+ */
 @Serializable
 data class Book(
     val id: String,
@@ -105,18 +112,6 @@ data class Shelf(
      * 0 = written by an older build, fall back to [createdAtMillis].
      */
     val sortKey: Long = 0L,
-)
-
-@Serializable
-data class LibraryIndex(
-    val books: List<Book> = emptyList(),
-    /**
-     * Defaulted on purpose: a `library.json` written before shelves existed
-     * must keep decoding. Declaring this without a default would make
-     * kotlinx.serialization throw MissingFieldException on every legacy file,
-     * which BookRepository would read as "corrupted" — i.e. an empty library.
-     */
-    val shelves: List<Shelf> = emptyList(),
 )
 
 /**
