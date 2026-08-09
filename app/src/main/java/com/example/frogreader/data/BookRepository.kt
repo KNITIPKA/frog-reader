@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookContent
 import com.example.frogreader.data.model.BookFormat
+import com.example.frogreader.data.model.BookMetadata
 import com.example.frogreader.data.model.BookProgress
 import com.example.frogreader.data.model.BookRecord
 import com.example.frogreader.data.model.Bookmark
@@ -39,6 +40,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.util.UUID
 
 class LibraryIndexCorruptedException(
@@ -48,6 +50,41 @@ class LibraryIndexCorruptedException(
 
 /** How long a deletion is remembered; see [UserDataStore.deletedIds]. */
 private const val TOMBSTONE_LIFETIME_MILLIS = 365L * 24 * 60 * 60 * 1000
+
+/**
+ * How long a staged file may sit undecided before a sweep treats it as
+ * abandoned. Far longer than any decision takes, so a sweep can never race an
+ * import that is still live; short enough that a process killed mid-dialog does
+ * not leave a book-sized file behind for good.
+ */
+private const val STAGING_LIFETIME_MILLIS = 30L * 60 * 1000
+
+/** The title a book gets when neither the file nor its name offers one. */
+private const val UNTITLED = "Untitled"
+
+/**
+ * Flattens a title or an author down to what two people would agree is "the
+ * same" — case, punctuation and spacing all removed, since one source writes
+ * "Dostoyevsky, Fyodor" and another "Fyodor  Dostoyevsky.".
+ */
+internal fun normalizeForMatch(text: String?): String {
+    if (text.isNullOrBlank()) return ""
+    val out = StringBuilder(text.length)
+    var pendingSpace = false
+    for (ch in text.lowercase()) {
+        when {
+            ch.isLetterOrDigit() -> {
+                if (pendingSpace && out.isNotEmpty()) out.append(' ')
+                pendingSpace = false
+                out.append(ch)
+            }
+            // Punctuation and whitespace alike collapse to a single gap, so
+            // "Anna Karenina" and "anna-karenina" land on the same string.
+            else -> pendingSpace = true
+        }
+    }
+    return out.toString()
+}
 
 /**
  * Owns the library: imported book files, extracted covers/images and the JSON
@@ -166,50 +203,59 @@ open class BookRepository(private val context: Context? = null) {
     open fun coverFileFor(book: Book): File? =
         book.coverFileName?.let { File(coversDir, it) }?.takeIf { it.exists() }
 
-    open suspend fun importBook(uri: Uri): Book = withContext(Dispatchers.IO) {
-        val c = context ?: throw IOException("Cannot open the selected file")
-        val id = UUID.randomUUID().toString()
-        val temp = File.createTempFile("import-", null, c.cacheDir)
-        try {
-            c.contentResolver.openInputStream(uri)?.use { input ->
-                temp.outputStream().use { input.copyTo(it) }
-            } ?: throw IOException("Cannot open the selected file")
+    /** Adds a book outright. Stage and commit in one call, for callers with no question to ask. */
+    open suspend fun importBook(uri: Uri): Book {
+        val staged = stageImport(uri)
+        return try {
+            commitImport(staged, ImportMode.New)
+        } catch (e: Exception) {
+            discardImport(staged)
+            throw e
+        }
+    }
 
-            val (format, stored) = BookParsers.detectAndStore(temp, booksDir, id)
+    /**
+     * Works out what a file is, and whether the library already has it, without
+     * writing anything.
+     *
+     * The file is copied in and normalized here rather than at commit time, so
+     * the answer to "is this a duplicate" is about the bytes that would actually
+     * be stored — a `.fb2.zip` and the `.fb2` inside it are the same book, and
+     * only the unpacked form can say so.
+     *
+     * The caller owns what comes back: every path has to end in [commitImport]
+     * or [discardImport].
+     */
+    open suspend fun stageImport(uri: Uri): StagedImport = withContext(Dispatchers.IO) {
+        val stagingId = UUID.randomUUID().toString()
+        val temp = createTempFile("import-")
+        try {
+            openStream(uri).use { input ->
+                temp.outputStream().use { input.copyTo(it) }
+            }
+
+            val (format, stored) = BookParsers.detectAndStore(temp, stagingDir, stagingId)
             try {
                 val metadata = BookParsers.parseMetadata(stored, format)
+                val title = metadata.title?.takeIf { it.isNotBlank() }
+                    ?: displayNameFor(uri)?.substringBeforeLast('.')?.takeIf { it.isNotBlank() }
+                    ?: UNTITLED
+                val author = metadata.authors.takeIf { it.isNotEmpty() }?.joinToString(", ")
+                    ?: metadata.author
+                val hash = ContentHash.of(stored)
+                val size = stored.length()
 
-                val coverFileName = metadata.coverBytes?.let { bytes ->
-                    coversDir.mkdirs()
-                    val name = "$id.img"
-                    File(coversDir, name).writeBytes(bytes)
-                    name
-                }
-
-                val fallbackTitle = displayNameFor(uri)?.substringBeforeLast('.')
-                val book = Book(
-                    id = id,
-                    title = metadata.title?.takeIf { it.isNotBlank() }
-                        ?: fallbackTitle?.takeIf { it.isNotBlank() }
-                        ?: "Untitled",
-                    author = metadata.authors.takeIf { it.isNotEmpty() }?.joinToString(", ")
-                        ?: metadata.author,
+                StagedImport(
+                    file = stored,
+                    metadata = metadata,
                     format = format,
-                    fileName = stored.name,
-                    coverFileName = coverFileName,
-                    addedAtMillis = System.currentTimeMillis(),
-                    genres = metadata.genres,
-                    series = metadata.series,
-                    seriesNumber = metadata.seriesNumber,
-                    publisher = metadata.publisher,
-                    year = metadata.year,
-                    isbn = metadata.isbn,
-                    translators = metadata.translators,
-                    description = metadata.description,
-                    language = metadata.language,
+                    title = title,
+                    author = author,
+                    contentHash = hash,
+                    sizeBytes = size,
+                    coverBytes = metadata.coverBytes,
+                    duplicateOf = findDuplicate(hash, size, title, author),
                 )
-                updateIndex { listOf(book) + it }
-                book
             } catch (e: Exception) {
                 stored.delete()
                 throw e
@@ -219,17 +265,289 @@ open class BookRepository(private val context: Context? = null) {
         }
     }
 
+    /** Throws away a staged file the user decided against. */
+    open suspend fun discardImport(staged: StagedImport) = withContext(Dispatchers.IO) {
+        staged.file.delete()
+        Unit
+    }
+
+    /**
+     * Puts a staged file into the library, as a new book or over an existing one.
+     */
+    open suspend fun commitImport(staged: StagedImport, mode: ImportMode): Book =
+        withContext(Dispatchers.IO) {
+            when (mode) {
+                ImportMode.New, ImportMode.Clone -> commitAsNewBook(staged)
+                is ImportMode.Replace -> commitOverBook(staged, mode.bookId)
+            }
+        }
+
+    private suspend fun commitAsNewBook(staged: StagedImport): Book {
+        val id = UUID.randomUUID().toString()
+        booksDir.mkdirs()
+        val stored = File(booksDir, "$id.${staged.file.extension}")
+        moveFile(staged.file, stored)
+        try {
+            val book = Book(
+                id = id,
+                title = staged.title,
+                author = staged.author,
+                format = staged.format,
+                fileName = stored.name,
+                coverFileName = writeCover(id, staged.coverBytes),
+                addedAtMillis = System.currentTimeMillis(),
+                contentHash = staged.contentHash,
+                sizeBytes = staged.sizeBytes,
+                genres = staged.metadata.genres,
+                series = staged.metadata.series,
+                seriesNumber = staged.metadata.seriesNumber,
+                publisher = staged.metadata.publisher,
+                year = staged.metadata.year,
+                isbn = staged.metadata.isbn,
+                translators = staged.metadata.translators,
+                description = staged.metadata.description,
+                language = staged.metadata.language,
+            )
+            updateIndex { listOf(book) + it }
+            return book
+        } catch (e: Exception) {
+            stored.delete()
+            throw e
+        }
+    }
+
+    /**
+     * Swaps the file under an existing record.
+     *
+     * Order matters: the new file lands under a name of its own and the index
+     * write happens FIRST; only once that has succeeded is the old file removed.
+     * Overwriting in place would leave a record pointing at a half-written file
+     * if the write failed — and the new file may not even share the old one's
+     * extension, since the replacement can be an FB2 where the original was an
+     * EPUB.
+     *
+     * Everything the user made is untouched. It lives in the other two
+     * documents keyed by this id, and mapping only the metadata fields here
+     * means `split` produces byte-identical user and progress documents, so
+     * `updateStored` does not even write them.
+     */
+    private suspend fun commitOverBook(staged: StagedImport, bookId: String): Book {
+        val existing = bookById(bookId) ?: throw IOException("No such book")
+        booksDir.mkdirs()
+        val stamp = System.currentTimeMillis()
+        val stored = File(booksDir, "$bookId-$stamp.${staged.file.extension}")
+        moveFile(staged.file, stored)
+
+        val newCover = try {
+            // A fresh name each time, so image caches keyed on the path cannot
+            // keep showing the cover of the file that was just replaced.
+            writeCover("$bookId-$stamp", staged.coverBytes)
+        } catch (e: Exception) {
+            stored.delete()
+            throw e
+        }
+
+        try {
+            updateIndex { books ->
+                books.map { book ->
+                    if (book.id != bookId) {
+                        book
+                    } else {
+                        book.withParsedMetadata(
+                            metadata = staged.metadata,
+                            format = staged.format,
+                            fileName = stored.name,
+                            coverFileName = newCover ?: book.coverFileName,
+                            contentHash = staged.contentHash,
+                            sizeBytes = staged.sizeBytes,
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            stored.delete()
+            newCover?.let { File(coversDir, it).delete() }
+            throw e
+        }
+
+        // Only now: until the index write landed, these were the live files.
+        existing.fileName?.takeIf { it != stored.name }?.let { File(booksDir, it).delete() }
+        if (newCover != null) {
+            existing.coverFileName?.takeIf { it != newCover }?.let { File(coversDir, it).delete() }
+        }
+        purgeDerived(bookId)
+        return bookById(bookId) ?: existing
+    }
+
+    /** Writes cover art under `<name>.img`, or returns null when there is none. */
+    private fun writeCover(name: String, bytes: ByteArray?): String? {
+        if (bytes == null) return null
+        coversDir.mkdirs()
+        val fileName = "$name.img"
+        File(coversDir, fileName).writeBytes(bytes)
+        return fileName
+    }
+
+    /**
+     * Drops everything derived from a book's file: extracted images and the
+     * pagination cache, plus the parsed-content cache if this is the book in it.
+     * All of it is rebuilt on the next open, and all of it describes a file that
+     * is no longer there.
+     */
+    private fun purgeDerived(bookId: String) {
+        if (cachedContentId == bookId) releaseContentCache()
+        File(imagesDir, bookId).deleteRecursively()
+        context?.let { File(File(it.filesDir, "pagination"), "$bookId.json").delete() }
+    }
+
+    /**
+     * The book in the library that [hash]/[title]/[author] describes, if any.
+     *
+     * Deliberately cheap in the common case. An exact hash match is a map
+     * lookup. Only when that fails does it consider hashing anything, and only
+     * files whose SIZE already matches — one stat per book, against reading
+     * every book in the library from disk. A library of a thousand books
+     * normally costs a thousand `length()` calls and zero reads.
+     */
+    private suspend fun findDuplicate(
+        hash: String,
+        size: Long,
+        title: String,
+        author: String?,
+    ): DuplicateOf? {
+        val books = _books.value
+        books.firstOrNull { it.contentHash == hash }?.let {
+            return DuplicateOf(it, DuplicateMatch.SAME_FILE)
+        }
+
+        // Books stored before hashes existed. Backfilling here rather than in a
+        // sweep at startup means the cost is paid only by libraries that
+        // actually meet a possible duplicate, and only for the handful of books
+        // that could be one.
+        val backfilled = HashMap<String, String>()
+        for (book in books) {
+            if (book.contentHash != null) continue
+            val file = bookFileFor(book) ?: continue
+            val knownSize = book.sizeBytes.takeIf { it != 0L } ?: file.length()
+            if (knownSize != size) continue
+            val computed = runCatching { ContentHash.of(file) }.getOrNull() ?: continue
+            backfilled[book.id] = computed
+        }
+        if (backfilled.isNotEmpty()) {
+            // One write for all of them; it touches library.json only, since
+            // nothing about the user's data or their reading position changed.
+            updateIndex { current ->
+                current.map { book ->
+                    val computed = backfilled[book.id]
+                    if (computed == null) {
+                        book
+                    } else {
+                        book.copy(
+                            contentHash = computed,
+                            sizeBytes = book.sizeBytes.takeIf { it != 0L }
+                                ?: bookFileFor(book)?.length() ?: 0L,
+                        )
+                    }
+                }
+            }
+            _books.value.firstOrNull { backfilled[it.id] == hash }?.let {
+                return DuplicateOf(it, DuplicateMatch.SAME_FILE)
+            }
+        }
+
+        val wantedTitle = normalizeForMatch(title)
+        if (wantedTitle.isEmpty()) return null
+        val wantedAuthor = normalizeForMatch(author)
+        return _books.value
+            .firstOrNull { book ->
+                normalizeForMatch(book.title) == wantedTitle &&
+                    // An unknown author on either side is not a disagreement:
+                    // the same book parsed from two formats often names the
+                    // author in only one of them.
+                    (wantedAuthor.isEmpty() ||
+                        normalizeForMatch(book.author).isEmpty() ||
+                        normalizeForMatch(book.author) == wantedAuthor)
+            }
+            ?.let { DuplicateOf(it, DuplicateMatch.SAME_BOOK) }
+    }
+
+    /**
+     * Merges what a file says into a record the user may already have edited.
+     *
+     * The rule, shared with [attachFile]: what the user has wins for title and
+     * author — they may have corrected them — and the file fills in anything
+     * that was empty.
+     */
+    private fun Book.withParsedMetadata(
+        metadata: BookMetadata,
+        format: BookFormat,
+        fileName: String,
+        coverFileName: String?,
+        contentHash: String?,
+        sizeBytes: Long,
+    ): Book = copy(
+        author = author ?: metadata.authors.takeIf { it.isNotEmpty() }?.joinToString(", ")
+            ?: metadata.author,
+        format = format,
+        fileName = fileName,
+        coverFileName = coverFileName,
+        contentHash = contentHash,
+        sizeBytes = sizeBytes,
+        genres = genres.ifEmpty { metadata.genres },
+        series = series ?: metadata.series,
+        seriesNumber = seriesNumber ?: metadata.seriesNumber,
+        publisher = publisher ?: metadata.publisher,
+        year = year ?: metadata.year,
+        isbn = isbn ?: metadata.isbn,
+        translators = translators.ifEmpty { metadata.translators },
+        description = description ?: metadata.description,
+        language = language ?: metadata.language,
+    )
+
+    private fun moveFile(source: File, target: File) {
+        if (!source.renameTo(target)) {
+            source.copyTo(target, overwrite = true)
+            source.delete()
+        }
+    }
+
+    private fun createTempFile(prefix: String): File {
+        val dir = context?.cacheDir ?: File(filesRoot, "cache").apply { mkdirs() }
+        return File.createTempFile(prefix, null, dir)
+    }
+
+    /**
+     * Where a staged file waits for the user's decision.
+     *
+     * Under filesDir, not cacheDir: the system is free to empty the cache under
+     * memory pressure, and doing so while a "you already have this book" dialog
+     * is on screen would delete the file the dialog is about.
+     */
+    private val stagingDir by lazy { File(filesRoot, "staging") }
+
+    /**
+     * Deletes staged files nobody is waiting on any more — what a process killed
+     * between "which book is this?" and the user's answer leaves behind.
+     */
+    private fun sweepStaging() {
+        val deadline = System.currentTimeMillis() - STAGING_LIFETIME_MILLIS
+        stagingDir.listFiles()?.forEach { file ->
+            if (file.lastModified() < deadline) file.delete()
+        }
+    }
+
+    /** The only place a content URI is read. Overridden in tests. */
+    internal open fun openStream(uri: Uri): InputStream =
+        context?.contentResolver?.openInputStream(uri)
+            ?: throw IOException("Cannot open the selected file")
+
     open suspend fun deleteBook(bookId: String) = withContext(Dispatchers.IO) {
         val book = _books.value.firstOrNull { it.id == bookId } ?: return@withContext
         if (cachedContentId == bookId) releaseContentCache()
         updateIndex { books -> books.filterNot { it.id == bookId } }
         book.fileName?.let { File(booksDir, it).delete() }
         book.coverFileName?.let { File(coversDir, it).delete() }
-        File(imagesDir, book.id).deleteRecursively()
-        val c = context
-        if (c != null) {
-            File(File(c.filesDir, "pagination"), "$bookId.json").delete()
-        }
+        purgeDerived(bookId)
     }
 
     /**
@@ -524,33 +842,20 @@ open class BookRepository(private val context: Context? = null) {
             val (format, stored) = BookParsers.detectAndStore(temp, booksDir, bookId)
             try {
                 val metadata = BookParsers.parseMetadata(stored, format)
-                val coverFileName = existing.coverFileName ?: metadata.coverBytes?.let { bytes ->
-                    coversDir.mkdirs()
-                    val name = "$bookId.img"
-                    File(coversDir, name).writeBytes(bytes)
-                    name
-                }
+                val coverFileName = existing.coverFileName
+                    ?: writeCover(bookId, metadata.coverBytes)
                 updateIndex { books ->
                     books.map { book ->
                         if (book.id != bookId) return@map book
-                        book.copy(
-                            // What the user typed wins over what the file says:
-                            // they named this book before it had one.
-                            title = book.title,
-                            author = book.author ?: metadata.authors.takeIf { it.isNotEmpty() }
-                                ?.joinToString(", ") ?: metadata.author,
+                        // Same merge as a replace: what the user typed wins,
+                        // because they named this book before it had a file.
+                        book.withParsedMetadata(
+                            metadata = metadata,
                             format = format,
                             fileName = stored.name,
                             coverFileName = coverFileName,
-                            genres = book.genres.ifEmpty { metadata.genres },
-                            series = book.series ?: metadata.series,
-                            seriesNumber = book.seriesNumber ?: metadata.seriesNumber,
-                            publisher = book.publisher ?: metadata.publisher,
-                            year = book.year ?: metadata.year,
-                            isbn = book.isbn ?: metadata.isbn,
-                            translators = book.translators.ifEmpty { metadata.translators },
-                            description = book.description ?: metadata.description,
-                            language = book.language ?: metadata.language,
+                            contentHash = ContentHash.of(stored),
+                            sizeBytes = stored.length(),
                         )
                     }
                 }
@@ -573,6 +878,10 @@ open class BookRepository(private val context: Context? = null) {
      * originals and are never touched.
      */
     open suspend fun cleanOrphanCaches() = withContext(Dispatchers.IO) {
+        // Before the guard below, not after: an abandoned staging file belongs
+        // to no record at all, so whether the index is readable has no bearing
+        // on whether it is safe to delete.
+        sweepStaging()
         // A corrupt library.json reads as an empty list — don't wipe the
         // (regenerable, but expensive) caches on that failure mode.
         if (isIndexCorrupted || (indexStore.file.exists() && _books.value.isEmpty())) return@withContext
