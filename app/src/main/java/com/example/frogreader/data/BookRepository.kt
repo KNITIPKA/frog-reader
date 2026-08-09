@@ -17,6 +17,7 @@ import com.example.frogreader.data.model.ReadingProgress
 import com.example.frogreader.data.model.ReadingStatus
 import com.example.frogreader.data.model.Shelf
 import com.example.frogreader.data.model.Timestamped
+import com.example.frogreader.data.model.previewText
 import com.example.frogreader.data.model.UserBookData
 import com.example.frogreader.data.model.UserDataStore
 import com.example.frogreader.data.model.sortTs
@@ -42,6 +43,7 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.util.UUID
+import kotlin.math.roundToInt
 
 class LibraryIndexCorruptedException(
     message: String,
@@ -347,6 +349,20 @@ open class BookRepository(private val context: Context? = null) {
             throw e
         }
 
+        // Worked out before the write so the index lands in one transaction,
+        // and skipped entirely when the bytes are identical — nothing in a file
+        // that did not change can have moved.
+        val moved = staged.contentHash != existing.contentHash
+        // The cover the book will HAVE, not just the one that was written: the
+        // reader puts a cover on screen as item 0 whichever file it came from,
+        // and a wrong answer here shifts every bookmark by one paragraph.
+        val coverAfter = newCover ?: existing.coverFileName
+        val anchors = if (moved) {
+            runCatching { readAnchors(bookId, stored, staged.format, coverAfter != null) }.getOrNull()
+        } else {
+            null
+        }
+
         try {
             updateIndex { books ->
                 books.map { book ->
@@ -360,7 +376,7 @@ open class BookRepository(private val context: Context? = null) {
                             coverFileName = newCover ?: book.coverFileName,
                             contentHash = staged.contentHash,
                             sizeBytes = staged.sizeBytes,
-                        )
+                        ).let { if (anchors == null) it else anchors.reanchor(it) }
                     }
                 }
             }
@@ -377,6 +393,102 @@ open class BookRepository(private val context: Context? = null) {
         }
         purgeDerived(bookId)
         return bookById(bookId) ?: existing
+    }
+
+    /**
+     * Where the passages of a replacement file are, so what the user marked in
+     * the old one can be found again.
+     *
+     * [previewToIndex] holds the FIRST index each passage appears at, matching
+     * how the reader writes a bookmark's preview: it records the text at or
+     * after the marked item, so the earliest index producing that text is the
+     * earliest place the bookmark could have meant.
+     */
+    private class Anchors(
+        val previewToIndex: Map<String, Int>,
+        val chapterOfIndex: (Int) -> Int,
+        val itemCount: Int,
+    ) {
+        fun reanchor(book: Book): Book = book.copy(
+            bookmarks = book.bookmarks.map { bookmark ->
+                val found = previewToIndex[bookmark.preview]
+                if (found == null) {
+                    // The passage is not in the new file at all. Keep the
+                    // bookmark and its text; just stop claiming to know where
+                    // in the book it is.
+                    bookmark.copy(orphaned = true)
+                } else {
+                    bookmark.copy(
+                        flatIndex = found,
+                        chapterIndex = chapterOfIndex(found),
+                        orphaned = false,
+                    )
+                }
+            },
+            // The reading position has no text to anchor to — nothing records
+            // what was on screen, only how far in it was. The fraction carries
+            // across honestly; the page counts cannot, so they are cleared and
+            // recomputed on the next open rather than left to describe a book
+            // that is no longer there.
+            progress = book.progress.let { position ->
+                val fraction = position.fraction.let { if (it.isNaN()) 0f else it.coerceIn(0f, 1f) }
+                val index = ((itemCount - 1).coerceAtLeast(0) * fraction).roundToInt()
+                position.copy(
+                    chapterIndex = chapterOfIndex(index),
+                    elementIndex = index,
+                    scrollOffset = 0,
+                    fraction = fraction,
+                    pagesLeftInChapter = -1,
+                    totalPages = 0,
+                )
+            },
+        )
+    }
+
+    /**
+     * Parses a replacement file far enough to say where everything is.
+     *
+     * The one expensive step in a replace, and it only happens when the bytes
+     * actually changed. Images go to a scratch directory that is deleted
+     * straight away: the real one is about to be purged anyway, and writing
+     * into it here would race that.
+     */
+    private fun readAnchors(
+        bookId: String,
+        file: File,
+        format: BookFormat,
+        hasCover: Boolean,
+    ): Anchors {
+        val scratch = File(imagesDir, "$bookId-reanchor")
+        try {
+            val content = BookParsers.parseContent(file, format, scratch)
+
+            // The reader opens a book with its cover as item 0, so every flat
+            // index after it is shifted by one. Mirrored here, or every
+            // bookmark in a book with a cover would land one paragraph early.
+            val offset = if (hasCover) 1 else 0
+            val previewToIndex = HashMap<String, Int>()
+            val chapterStarts = ArrayList<Int>(content.chapters.size)
+            var index = offset
+            content.chapters.forEach { chapter ->
+                chapterStarts += index
+                chapter.elements.forEach { element ->
+                    element.previewText()?.let { preview ->
+                        previewToIndex.putIfAbsent(preview, index)
+                    }
+                    index++
+                }
+            }
+            return Anchors(
+                previewToIndex = previewToIndex,
+                chapterOfIndex = { at ->
+                    chapterStarts.indexOfLast { it <= at }.coerceAtLeast(0)
+                },
+                itemCount = index,
+            )
+        } finally {
+            scratch.deleteRecursively()
+        }
     }
 
     /** Writes cover art under `<name>.img`, or returns null when there is none. */

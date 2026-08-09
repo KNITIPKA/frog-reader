@@ -134,6 +134,27 @@ sealed interface ContentElement {
     }
 }
 
+/**
+ * How much text a bookmark remembers about the place it marks.
+ *
+ * Long enough to be unique in a book, short enough that a stored bookmark stays
+ * small. It is also the anchor: when a book's file is replaced, the paragraph
+ * indices a bookmark was saved with mean nothing in the new file, and this text
+ * is the only thing left that still identifies the spot.
+ */
+const val BOOKMARK_PREVIEW_CHARS = 90
+
+/**
+ * The element's own text, cut to [BOOKMARK_PREVIEW_CHARS], or null for elements
+ * that have none — an image or a divider is not somewhere you can be.
+ */
+fun ContentElement.previewText(): String? = when (this) {
+    is ContentElement.Paragraph -> text.text.take(BOOKMARK_PREVIEW_CHARS)
+    is ContentElement.Heading -> text.take(BOOKMARK_PREVIEW_CHARS)
+    is ContentElement.Table -> flatText().take(BOOKMARK_PREVIEW_CHARS)
+    else -> null
+}
+
 class TableRow(
     val cells: List<TableCell>,
     /** Header rows repeat when the table continues on the next page. */

@@ -24,7 +24,7 @@
     <string name="dup_title_same_book">You may already have this book</string>
     <string name="dup_title_no_file">This book is waiting for a file</string>
     <string name="dup_message_same_file">The file you picked is exactly the one already saved.</string>
-    <string name="dup_message_same_book">The file you picked is different from the one already saved. Replacing keeps your quotes, rating and place in the book.</string>
+    <string name="dup_message_same_book">The file you picked is different from the one already saved. Replacing keeps your quotes and rating; bookmarks are found again by their text, and your place in the book may shift by a page.</string>
     <string name="dup_column_existing">In your library</string>
     <string name="dup_column_incoming">Adding</string>
     <string name="dup_progress">%1$d%% read</string>
@@ -99,6 +99,7 @@
     <string name="reader_search_clear">Clear</string>
     <string name="reader_quotes_empty">No quotes yet. Long-press text while reading, then choose “Quote”.</string>
     <string name="reader_remove">Remove</string>
+    <string name="reader_bookmark_orphaned">Not found in this file</string>
     <string name="reader_note_title">Note</string>
     <string name="reader_hide_footnotes">Hide footnotes</string>
     <string name="reader_hide_footnotes_subtitle">Remove [1]-style markers from the text</string>

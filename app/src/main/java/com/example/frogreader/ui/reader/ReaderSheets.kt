@@ -367,20 +367,38 @@ private fun BookmarkList(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onBookmarkClick(bookmark.flatIndex) }
+                    // A bookmark whose passage is not in this file cannot be
+                    // jumped to. Better to say so than to seek to whatever
+                    // happens to sit at the old index now.
+                    .clickable(enabled = !bookmark.orphaned) {
+                        onBookmarkClick(bookmark.flatIndex)
+                    }
                     .padding(start = 8.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        text = ready.chapterTitles.getOrNull(bookmark.chapterIndex)
-                            ?: stringResource(R.string.reader_chapter_n, bookmark.chapterIndex + 1),
+                        text = if (bookmark.orphaned) {
+                            stringResource(R.string.reader_bookmark_orphaned)
+                        } else {
+                            ready.chapterTitles.getOrNull(bookmark.chapterIndex)
+                                ?: stringResource(R.string.reader_chapter_n, bookmark.chapterIndex + 1)
+                        },
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = if (bookmark.orphaned) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
                         text = bookmark.preview,
                         style = MaterialTheme.typography.bodyMedium,
+                        color = if (bookmark.orphaned) {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )

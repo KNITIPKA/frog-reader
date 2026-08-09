@@ -249,8 +249,12 @@ class BookRepositoryImportTest {
         val replaced = repository.commitImport(staged, ImportMode.Replace("keep"))
 
         assertEquals("keep", replaced.id)
-        assertEquals(0.42f, replaced.progress.fraction, 0.0001f)
-        assertEquals(3, replaced.progress.chapterIndex)
+        assertEquals("how far in survives a re-typeset file", 0.42f, replaced.progress.fraction, 0.0001f)
+        assertEquals(
+            "the chapter is recomputed against the new file, which has one",
+            0,
+            replaced.progress.chapterIndex,
+        )
         assertEquals(900L, replaced.readingSeconds)
         assertEquals(5, replaced.rating)
         assertEquals("Long, but worth it.", replaced.review)

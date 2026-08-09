@@ -14,6 +14,7 @@ import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookContent
 import com.example.frogreader.data.model.Bookmark
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.data.model.previewText
 import com.example.frogreader.data.model.Quote
 import com.example.frogreader.data.model.ReadingProgress
 import com.example.frogreader.data.model.withFootnoteRefStyle
@@ -496,12 +497,7 @@ class ReaderViewModel(
 
     private fun previewAt(ready: ReaderState.Ready, flatIndex: Int): String {
         for (i in flatIndex until ready.items.size) {
-            when (val element = ready.items[i].element) {
-                is ContentElement.Paragraph -> return element.text.text.take(90)
-                is ContentElement.Heading -> return element.text.take(90)
-                is ContentElement.Table -> return element.flatText().take(90)
-                else -> Unit
-            }
+            ready.items[i].element.previewText()?.let { return it }
         }
         return ""
     }

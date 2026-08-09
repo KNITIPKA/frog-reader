@@ -43,6 +43,17 @@ data class Bookmark(
     val chapterIndex: Int,
     val preview: String,
     val createdAtMillis: Long,
+    /**
+     * True when the book's file was replaced and [preview] could not be found
+     * anywhere in the new one — so [flatIndex] no longer points at the passage
+     * this bookmark was about.
+     *
+     * The bookmark is kept anyway. The user still has the text they marked,
+     * which is most of what a bookmark is for; deleting it because the app can
+     * no longer jump to it would be throwing away their work to tidy up its own
+     * bookkeeping. The reader shows it dimmed and does not seek on a tap.
+     */
+    val orphaned: Boolean = false,
     /** Set by the repository when the bookmark is stored; empty in transit. */
     val bookId: String = "",
     override val updatedAtMillis: Long = 0L,
