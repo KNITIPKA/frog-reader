@@ -1,7 +1,6 @@
 package com.example.frogreader.e2e
 
 import com.example.frogreader.data.BookRepository
-import com.example.frogreader.data.BookScanner
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.ui.library.LibraryMessage

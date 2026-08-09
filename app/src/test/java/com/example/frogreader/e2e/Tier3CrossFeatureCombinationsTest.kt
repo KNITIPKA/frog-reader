@@ -1,10 +1,9 @@
 package com.example.frogreader.e2e
 
 import com.example.frogreader.data.LibraryViewMode
-import com.example.frogreader.data.ScannedBookFile
-import com.example.frogreader.data.ScannedFolder
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
+import com.example.frogreader.ui.library.filterScanRows
 import com.example.frogreader.ui.library.LibraryViewModel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -59,28 +58,19 @@ class Tier3CrossFeatureCombinationsTest {
 
     @Test
     fun testCrossFeature_SearchFilteredWideMetadata_WithActiveFolderChips() {
-        val folderA = ScannedFolder(M3TestFixtures.mockUri("content://tree/FolderA"), "FolderA")
-        val activeFolders = listOf(folderA)
-
-        val file1 = M3TestFixtures.createScannedBookFile(
+        val file1 = M3TestFixtures.createScanRow(
             uriString = "content://tree/FolderA/book1",
             title = "Android Expressive UI Guide",
             format = BookFormat.EPUB,
         )
-        val file2 = M3TestFixtures.createScannedBookFile(
+        val file2 = M3TestFixtures.createScanRow(
             uriString = "content://tree/FolderA/book2",
             title = "Kotlin Programming",
             format = BookFormat.FB2,
         )
         val scannedList = listOf(file1, file2)
 
-        // Combined logic: verify active folders exist AND search query filters scanned list
-        assertTrue(activeFolders.isNotEmpty())
-
-        val query = "Expressive"
-        val filteredList = scannedList.filter {
-            it.title.lowercase().contains(query.lowercase())
-        }
+        val filteredList = filterScanRows(scannedList, "Expressive")
 
         assertEquals(1, filteredList.size)
         assertEquals("Android Expressive UI Guide", filteredList[0].title)

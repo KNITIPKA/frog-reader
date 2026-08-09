@@ -2,11 +2,12 @@ package com.example.frogreader.e2e
 
 import android.net.Uri
 import com.example.frogreader.data.BookRepository
-import com.example.frogreader.data.ScannedBookFile
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.Shelf
 import com.example.frogreader.data.model.ReadingProgress
+import com.example.frogreader.ui.library.ScanRow
+import com.example.frogreader.ui.library.ScanRowState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -119,26 +120,29 @@ object M3TestFixtures {
         )
     }
 
-    fun createScannedBookFile(
+    fun createScanRow(
+        id: String = UUID.randomUUID().toString(),
         uriString: String = "content://com.android.providers.downloads.documents/document/123",
-        file: File? = null,
+        name: String = "scanned_book.epub",
         title: String = "Scanned Test Book",
         author: String? = "Scanned Author",
-        coverBytes: ByteArray? = byteArrayOf(1, 2, 3, 4),
+        cover: File? = null,
         format: BookFormat = BookFormat.EPUB,
         sizeBytes: Long = 1024L * 500, // 500 KB
         lastModifiedMillis: Long = System.currentTimeMillis(),
-    ): ScannedBookFile {
-        val uri = mockUri(uriString)
-        return ScannedBookFile(
-            uri = uri,
-            file = file,
-            title = title,
-            author = author,
-            coverBytes = coverBytes,
-            format = format,
-            sizeBytes = sizeBytes,
-            lastModifiedMillis = lastModifiedMillis,
-        )
-    }
+        state: ScanRowState = ScanRowState.READY,
+        selected: Boolean = false,
+    ): ScanRow = ScanRow(
+        id = id,
+        uri = mockUri(uriString),
+        name = name,
+        format = format,
+        sizeBytes = sizeBytes,
+        lastModifiedMillis = lastModifiedMillis,
+        title = title,
+        author = author,
+        cover = cover,
+        state = state,
+        selected = selected,
+    )
 }

@@ -267,6 +267,27 @@ open class BookRepository(private val context: Context? = null) {
         }
     }
 
+    /**
+     * Identifies a file and keeps nothing. For showing a folder's contents,
+     * where most of what is found will never be imported.
+     */
+    open suspend fun inspectFile(uri: Uri): InspectedFile {
+        val staged = stageImport(uri)
+        try {
+            return InspectedFile(
+                format = staged.format,
+                title = staged.title,
+                author = staged.author,
+                coverBytes = staged.coverBytes,
+                contentHash = staged.contentHash,
+                sizeBytes = staged.sizeBytes,
+                duplicateOf = staged.duplicateOf,
+            )
+        } finally {
+            discardImport(staged)
+        }
+    }
+
     /** Throws away a staged file the user decided against. */
     open suspend fun discardImport(staged: StagedImport) = withContext(Dispatchers.IO) {
         staged.file.delete()

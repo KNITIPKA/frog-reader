@@ -13,16 +13,33 @@ import java.util.zip.ZipFile
 /** Entry point: format detection, storage normalization and parser dispatch. */
 object BookParsers {
 
-    /** Exact MIME types for supported book formats (EPUB, FB2, MOBI). */
+    /**
+     * What to let through the system file picker.
+     *
+     * Wider than the book formats themselves, and it has to be. Android
+     * registers no MIME type for FB2 or MOBI, so nearly every provider reports
+     * those — and a good number of EPUBs — as `application/octet-stream`; a
+     * list of only the "correct" ebook types hides most of a real library and
+     * leaves EPUB as the only selectable format. The picker can only hide
+     * non-matching files, never grey them out, so the choice is between showing
+     * some files that are not books and hiding books that are.
+     *
+     * Showing too much is recoverable: [detectAndStore] reads the actual bytes
+     * and rejects anything that is not a book, with a message saying so.
+     */
     val SUPPORTED_MIME_TYPES = arrayOf(
         "application/epub+zip",
         "application/x-fictionbook+xml",
         "application/x-fictionbook",
         "application/x-mobipocket-ebook",
         "application/x-mobi",
+        "application/vnd.amazon.ebook",
         "application/vnd.amazon.mobi8-ebook",
         "application/xml",
         "text/xml",
+        // The two catch-alls that actually carry most books.
+        "application/zip",
+        "application/octet-stream",
     )
 
     /**

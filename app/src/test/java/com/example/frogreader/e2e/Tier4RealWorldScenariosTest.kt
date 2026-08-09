@@ -1,10 +1,9 @@
 package com.example.frogreader.e2e
 
-import com.example.frogreader.data.BookScanner
 import com.example.frogreader.data.LibraryViewMode
-import com.example.frogreader.data.ScannedFolder
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
+import com.example.frogreader.ui.library.filterScanRows
 import com.example.frogreader.data.model.ReadingProgress
 import com.example.frogreader.ui.library.LibraryViewModel
 import kotlinx.coroutines.flow.first
@@ -44,27 +43,28 @@ class Tier4RealWorldScenariosTest {
         // STEP 3: Launch Import Dialog & Pick Tree Folder via SAF
         // ---------------------------------------------------------------------
         val treeUri = M3TestFixtures.mockUri("content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FBooks")
-        val activeFolders = mutableListOf(ScannedFolder(treeUri, "Books"))
-        assertEquals(1, activeFolders.size)
-        assertEquals("Books", activeFolders[0].name)
+        assertNotNull(treeUri)
 
         // ---------------------------------------------------------------------
         // STEP 4: Scan Discovered Books (EPUB, FB2, MOBI) with Wide Metadata
         // ---------------------------------------------------------------------
-        val discoveredEpub = M3TestFixtures.createScannedBookFile(
+        val discoveredEpub = M3TestFixtures.createScanRow(
             uriString = "content://tree/primary%3ADocuments%2FBooks/1.epub",
+            name = "gatsby.epub",
             title = "The Great Gatsby (Epub)",
             author = "F. Scott Fitzgerald",
             format = BookFormat.EPUB,
         )
-        val discoveredFb2 = M3TestFixtures.createScannedBookFile(
+        val discoveredFb2 = M3TestFixtures.createScanRow(
             uriString = "content://tree/primary%3ADocuments%2FBooks/2.fb2",
+            name = "voina-i-mir.fb2",
             title = "War and Peace (FB2)",
             author = "Leo Tolstoy",
             format = BookFormat.FB2,
         )
-        val discoveredMobi = M3TestFixtures.createScannedBookFile(
+        val discoveredMobi = M3TestFixtures.createScanRow(
             uriString = "content://tree/primary%3ADocuments%2FBooks/3.mobi",
+            name = "moby-dick.mobi",
             title = "Moby Dick (MOBI)",
             author = "Herman Melville",
             format = BookFormat.MOBI,
@@ -75,8 +75,7 @@ class Tier4RealWorldScenariosTest {
         // ---------------------------------------------------------------------
         // STEP 5: Filter Books via Search Bar
         // ---------------------------------------------------------------------
-        val query = "Epub"
-        val filteredList = scannedList.filter { it.title.contains(query, ignoreCase = true) }
+        val filteredList = filterScanRows(scannedList, "Epub")
         assertEquals(1, filteredList.size)
         assertEquals("The Great Gatsby (Epub)", filteredList[0].title)
 

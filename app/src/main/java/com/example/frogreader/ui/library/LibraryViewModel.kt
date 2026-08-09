@@ -34,6 +34,7 @@ import com.example.frogreader.data.SettingsRepository
 sealed interface LibraryMessage {
     data class Imported(val title: String) : LibraryMessage
     data class Replaced(val title: String) : LibraryMessage
+    data class ImportedMany(val added: Int, val failed: Int) : LibraryMessage
     data object ImportCancelled : LibraryMessage
     data object ImportFailed : LibraryMessage
     data object ImportFailedDrm : LibraryMessage
@@ -159,14 +160,50 @@ class LibraryViewModel(
         conflicts.answer(choice, applyToRest)
     }
 
+    /**
+     * Reports a folder scan's batch. The scan screen runs its own import loop —
+     * it needs per-row results, which a shared one could not give it — but the
+     * library owns the snackbar, so the outcome comes back here.
+     */
+    fun reportBatchImport(added: Int, failed: Int) {
+        if (added == 0 && failed == 0) return
+        viewModelScope.launch { _messages.send(LibraryMessage.ImportedMany(added, failed)) }
+    }
+
     fun importBook(uri: Uri?) {
-        if (uri == null) return
+        importBooks(listOfNotNull(uri))
+    }
+
+    /**
+     * Adds every picked file, one at a time.
+     *
+     * Sequential because a conflict can only be put to the user one at a time,
+     * and because every commit serializes on the repository's index lock
+     * anyway — running them together would buy nothing and interleave the
+     * questions.
+     */
+    fun importBooks(uris: List<Uri>) {
+        if (uris.isEmpty()) return
         viewModelScope.launch {
             _importing.value = true
+            var added = 0
+            var failed = 0
             try {
-                runCatching { addOne(uri, remaining = 0) }
-                    .onSuccess { _messages.send(it) }
-                    .onFailure { error -> _messages.send(error.toMessage()) }
+                uris.forEachIndexed { index, uri ->
+                    runCatching { addOne(uri, remaining = uris.size - index - 1) }
+                        .onSuccess { message ->
+                            if (message !is LibraryMessage.ImportCancelled) added++
+                            // One file gets a name; a batch gets a count, sent
+                            // once at the end rather than as a queue of
+                            // snackbars nobody can read.
+                            if (uris.size == 1) _messages.send(message)
+                        }
+                        .onFailure { error ->
+                            failed++
+                            if (uris.size == 1) _messages.send(error.toMessage())
+                        }
+                }
+                if (uris.size > 1) _messages.send(LibraryMessage.ImportedMany(added, failed))
             } finally {
                 _importing.value = false
                 conflicts.reset()

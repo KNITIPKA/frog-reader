@@ -33,6 +33,24 @@ data class DuplicateOf(
 )
 
 /**
+ * What a file turned out to be, with no copy of it kept.
+ *
+ * For listing a folder, where two hundred books may be identified and only a
+ * few added: parking all of them in staging would mean copying a whole shelf
+ * into private storage to draw a list. The cost is that importing one afterwards
+ * reads and parses it a second time, which is the cheaper end of that trade.
+ */
+class InspectedFile(
+    val format: BookFormat,
+    val title: String,
+    val author: String?,
+    val coverBytes: ByteArray?,
+    val contentHash: String,
+    val sizeBytes: Long,
+    val duplicateOf: DuplicateOf?,
+)
+
+/**
  * A file that has been copied in, identified and parsed, but that the library
  * knows nothing about yet.
  *

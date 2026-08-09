@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.DocumentsContract
 import android.util.Log
 import android.view.KeyEvent
 import android.view.animation.AccelerateInterpolator
@@ -118,8 +119,8 @@ import androidx.navigation.toRoute
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.parser.BookParsers
-import com.example.frogreader.ui.library.ImportBookSheet
 import com.example.frogreader.ui.library.LibraryScreen
+import com.example.frogreader.ui.library.ScanFolderScreen
 import com.example.frogreader.ui.library.LibraryViewModel
 import com.example.frogreader.ui.lock.LockScreen
 import com.example.frogreader.ui.lock.LockViewModel
@@ -145,17 +146,50 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
-private class OpenSupportedBooksContract : ActivityResultContract<Array<String>, Uri?>() {
+/**
+ * The root of the device's own storage, for the picker to open at.
+ *
+ * ACTION_OPEN_DOCUMENT otherwise starts in "Recent", which lists whatever the
+ * user last touched in any app — rarely where their books are. Providers that
+ * do not honour the hint simply ignore it.
+ */
+private fun storageRootUri(): Uri? = runCatching {
+    DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_PROVIDER, "primary:")
+}.getOrNull()
+
+private const val EXTERNAL_STORAGE_PROVIDER = "com.android.externalstorage.documents"
+
+/**
+ * Picks one or more book files.
+ *
+ * The MIME list is deliberately wide. Android has no registered type for FB2 or
+ * MOBI, so nearly every provider reports them — and plenty of EPUBs — as
+ * application/octet-stream; a filter listing only the "correct" ebook types
+ * hides most of the user's library from them and leaves only EPUB selectable.
+ * The system picker can only hide non-matching files, never grey them out, so
+ * the choice is between showing some files that are not books and hiding books
+ * that are. A file that turns out not to be one is caught on content when it is
+ * opened, and says so.
+ */
+private class OpenSupportedBooksContract : ActivityResultContract<Array<String>, List<Uri>>() {
     override fun createIntent(context: Context, input: Array<String>): Intent {
         return Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
             putExtra(Intent.EXTRA_MIME_TYPES, input)
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            storageRootUri()?.let { putExtra(DocumentsContract.EXTRA_INITIAL_URI, it) }
         }
     }
 
-    override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
-        return if (resultCode == Activity.RESULT_OK) intent?.data else null
+    override fun parseResult(resultCode: Int, intent: Intent?): List<Uri> {
+        if (resultCode != Activity.RESULT_OK || intent == null) return emptyList()
+        // A multi-select result arrives as ClipData; a single tap still arrives
+        // as `data`, even when EXTRA_ALLOW_MULTIPLE was asked for.
+        intent.clipData?.let { clip ->
+            return (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }
+        }
+        return listOfNotNull(intent.data)
     }
 }
 
@@ -367,7 +401,11 @@ class MainActivity : ComponentActivity() {
 
                 HandleIncomingIntents(navController, libraryViewModel)
 
-                var showImportSheet by remember { mutableStateOf(false) }
+                // The folder being scanned, or null. Not rememberSaveable: the
+                // tree grant is one-shot and does not survive process death, so
+                // restoring the screen would restore it onto a folder it can no
+                // longer read.
+                var scanningFolder by remember { mutableStateOf<Uri?>(null) }
                 var fabMenuExpanded by rememberSaveable { mutableStateOf(false) }
 
                 BackHandler(fabMenuExpanded) { fabMenuExpanded = false }
@@ -379,7 +417,16 @@ class MainActivity : ComponentActivity() {
 
                 val filePicker = rememberLauncherForActivityResult(
                     OpenSupportedBooksContract(),
-                ) { uri -> libraryViewModel.importBook(uri) }
+                ) { uris -> libraryViewModel.importBooks(uris) }
+
+                // No takePersistableUriPermission. The folder is read once,
+                // straight away, and every book found is copied into private
+                // storage — so a grant that outlives the scan buys nothing and
+                // costs a slot against the per-app cap that nothing ever
+                // released. The old scan leaked one per folder ever added.
+                val folderPicker = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocumentTree(),
+                ) { treeUri -> if (treeUri != null) scanningFolder = treeUri }
 
                 val onTabSelected: (NavTab) -> Unit = { tab ->
                     if (tab != selectedTab) {
@@ -433,7 +480,7 @@ class MainActivity : ComponentActivity() {
                                     filePicker.launch(BookParsers.SUPPORTED_MIME_TYPES)
                                 }
                             },
-                            onScanFolder = { showImportSheet = true },
+                            onScanFolder = { folderPicker.launch(storageRootUri()) },
                         )
                     },
                 ) { innerPadding ->
@@ -511,12 +558,13 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                if (showImportSheet) {
-                    ImportBookSheet(
-                        onDismiss = { showImportSheet = false },
-                        onImportUri = { uri -> libraryViewModel.importBook(uri) },
-                        onOpenSystemPicker = {
-                            if (!isImportingBook) filePicker.launch(BookParsers.SUPPORTED_MIME_TYPES)
+                scanningFolder?.let { folder ->
+                    ScanFolderScreen(
+                        treeUri = folder,
+                        onDismiss = { scanningFolder = null },
+                        onPickAnotherFolder = { folderPicker.launch(storageRootUri()) },
+                        onFinished = { added, failed ->
+                            libraryViewModel.reportBatchImport(added, failed)
                         },
                     )
                 }

@@ -327,6 +327,23 @@ fun LibraryScreen(
                     )
                 }
 
+                is LibraryMessage.ImportedMany -> {
+                    haptics.performHapticFeedback(
+                        if (message.failed > 0) HapticFeedbackType.Reject else HapticFeedbackType.Confirm,
+                    )
+                    snackbarHostState.showSnackbar(
+                        if (message.failed > 0) {
+                            context.getString(
+                                R.string.library_imported_many_partial,
+                                message.added,
+                                message.failed,
+                            )
+                        } else {
+                            context.getString(R.string.library_imported_many, message.added)
+                        },
+                    )
+                }
+
                 LibraryMessage.ImportCancelled -> {
                     snackbarHostState.showSnackbar(
                         context.getString(R.string.library_import_cancelled),

@@ -4,9 +4,10 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.core.Spring
 import androidx.compose.ui.unit.dp
-import com.example.frogreader.data.BookScanner
 import com.example.frogreader.data.LibraryViewMode
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.ui.library.ScanRow
+import com.example.frogreader.ui.library.filterScanRows
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.ReadingProgress
 import com.example.frogreader.ui.library.LibraryViewModel
@@ -256,20 +257,14 @@ class Tier1FeatureCoverageTest {
     // FEATURE 4: Import Screen (5 tests)
     // -------------------------------------------------------------------------
 
-    private fun filterScannedBooks(books: List<com.example.frogreader.data.ScannedBookFile>, query: String): List<com.example.frogreader.data.ScannedBookFile> {
-        if (query.isBlank()) return books
-        val q = query.trim().lowercase()
-        return books.filter {
-            it.title.lowercase().contains(q) ||
-                (it.author?.lowercase()?.contains(q) == true) ||
-                (it.file?.name?.lowercase()?.contains(q) == true)
-        }
-    }
+    // The production filter, not a copy of it. A local reimplementation passes
+    // happily while the real screen filters by something else entirely.
+    private fun filterScannedBooks(rows: List<ScanRow>, query: String) = filterScanRows(rows, query)
 
     @Test
     fun testImportScreen_FilterScannedBooksByTitle() {
-        val file1 = M3TestFixtures.createScannedBookFile(title = "The Hobbit")
-        val file2 = M3TestFixtures.createScannedBookFile(title = "Clean Code")
+        val file1 = M3TestFixtures.createScanRow(title = "The Hobbit")
+        val file2 = M3TestFixtures.createScanRow(title = "Clean Code")
         val books = listOf(file1, file2)
 
         val filtered = filterScannedBooks(books, "Hobbit")
@@ -279,8 +274,8 @@ class Tier1FeatureCoverageTest {
 
     @Test
     fun testImportScreen_FilterScannedBooksByAuthor() {
-        val file1 = M3TestFixtures.createScannedBookFile(title = "Book A", author = "Tolkien")
-        val file2 = M3TestFixtures.createScannedBookFile(title = "Book B", author = "Martin")
+        val file1 = M3TestFixtures.createScanRow(title = "Book A", author = "Tolkien")
+        val file2 = M3TestFixtures.createScanRow(title = "Book B", author = "Martin")
         val books = listOf(file1, file2)
 
         val filtered = filterScannedBooks(books, "tolk")
@@ -290,9 +285,8 @@ class Tier1FeatureCoverageTest {
 
     @Test
     fun testImportScreen_FilterScannedBooksByFileName() {
-        val f = File("my_special_book.epub")
-        val file1 = M3TestFixtures.createScannedBookFile(title = "Untitled", file = f)
-        val file2 = M3TestFixtures.createScannedBookFile(title = "Other")
+        val file1 = M3TestFixtures.createScanRow(title = "Untitled", name = "my_special_book.epub")
+        val file2 = M3TestFixtures.createScanRow(title = "Other")
         val books = listOf(file1, file2)
 
         val filtered = filterScannedBooks(books, "special")
@@ -302,8 +296,8 @@ class Tier1FeatureCoverageTest {
 
     @Test
     fun testImportScreen_BlankSearchQueryReturnsAll() {
-        val file1 = M3TestFixtures.createScannedBookFile(title = "Book A")
-        val file2 = M3TestFixtures.createScannedBookFile(title = "Book B")
+        val file1 = M3TestFixtures.createScanRow(title = "Book A")
+        val file2 = M3TestFixtures.createScanRow(title = "Book B")
         val books = listOf(file1, file2)
 
         val filtered = filterScannedBooks(books, "   ")
@@ -312,8 +306,8 @@ class Tier1FeatureCoverageTest {
 
     @Test
     fun testImportScreen_UnmatchedSearchQueryReturnsEmpty() {
-        val file1 = M3TestFixtures.createScannedBookFile(title = "Book A")
-        val file2 = M3TestFixtures.createScannedBookFile(title = "Book B")
+        val file1 = M3TestFixtures.createScanRow(title = "Book A")
+        val file2 = M3TestFixtures.createScanRow(title = "Book B")
         val books = listOf(file1, file2)
 
         val filtered = filterScannedBooks(books, "NonExistentTerm")

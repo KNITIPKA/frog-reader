@@ -18,6 +18,8 @@
     <string name="library_import_failed_drm">This book is copy-protected (DRM) and can\'t be opened.</string>
     <string name="library_replaced">“%1$s” was replaced</string>
     <string name="library_import_cancelled">Nothing was added</string>
+    <string name="library_imported_many">%1$d books added to your library</string>
+    <string name="library_imported_many_partial">%1$d books added, %2$d couldn\'t be read</string>
 
     <!-- A book that is already in the library, compared side by side -->
     <string name="dup_title_same_file">This book is already in your library</string>
@@ -276,19 +278,23 @@
     <string name="tracker_empty_title">Book Tracker</string>
     <string name="tracker_empty_subtitle">Track your reading goals, reading lists, and progress here. Coming soon!</string>
 
-    <!-- Import books screen -->
-    <string name="import_title">Add books</string>
-    <string name="import_scanning">Scanning books…</string>
-    <string name="import_found_count">Books found on device: %1$d</string>
-    <string name="import_found_in_folders">Books in selected folders: %1$d</string>
-    <string name="import_button_folder">+ Folder</string>
-    <string name="import_button_explorer">Explorer</string>
-    <string name="import_search_placeholder">Search title or author…</string>
-    <string name="import_empty_title">No new books found on device</string>
-    <string name="import_empty_subtitle">Tap "+ Folder" above to select a folder with books</string>
-    <string name="import_empty_search">No matching books found</string>
-    <string name="import_select_folder">Select books folder</string>
-    <string name="import_add_book">Add</string>
+    <!-- Scanning a folder for books -->
     <string name="import_author_unknown">Author unknown</string>
-    <string name="import_remove_folder">Remove folder</string>
+    <string name="scan_title">Looking for books…</string>
+    <string name="scan_looking">%1$d found so far…</string>
+    <string name="scan_found">%1$d books · %2$d already in your library</string>
+    <string name="scan_search_placeholder">Search title, author or file…</string>
+    <string name="scan_select_all">Select all</string>
+    <string name="scan_add_n">Add %1$d books</string>
+    <string name="scan_adding">Adding %1$d of %2$d…</string>
+    <string name="scan_state_in_library">Already in your library</string>
+    <string name="scan_state_similar">Looks like a book you have</string>
+    <string name="scan_state_failed">Couldn\'t read this file</string>
+    <string name="scan_retry">Try again</string>
+    <string name="scan_empty">No books in this folder</string>
+    <string name="scan_empty_hint">Frog Reader looks for EPUB, FB2 and MOBI files, including in subfolders.</string>
+    <string name="scan_empty_search">No matching books</string>
+    <string name="scan_access_lost">Lost access to this folder</string>
+    <string name="scan_access_lost_hint">Pick it again to carry on.</string>
+    <string name="scan_pick_again">Pick a folder</string>
 </resources>
