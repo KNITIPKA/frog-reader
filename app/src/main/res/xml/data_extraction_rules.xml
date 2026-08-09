@@ -1,19 +1,74 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+   Auto Backup and device-to-device transfer rules for Android 12+. Android 11
+   and below read backup_rules.xml instead, so any change here needs a matching
+   change there.
+
+   The two sections differ on purpose, because their constraints differ:
+
+   <cloud-backup> uploads to Google and has a 25 MB quota per app; exceeding it
+   drops the whole backup silently. So it carries only what the user cannot get
+   back — quotes, notes, ratings, reading positions — which is a few hundred KB.
+
+   <device-transfer> is a local phone-to-phone copy with no such quota, so it
+   also carries the book files and their covers. Moving to a new phone should
+   bring the library along, not just the notes about it.
+
+   Note that neither is a substitute for the in-app backup: Auto Backup restores
+   only during the initial setup of a new device.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- Library metadata and shelves. -->
+        <include domain="file" path="library.json"/>
+        <!-- Irreplaceable: quotes, notes, bookmarks, ratings, reviews, statuses. -->
+        <include domain="file" path="userdata.json"/>
+        <!-- Reading positions. -->
+        <include domain="file" path="progress.json"/>
+        <!-- Per-day reading time. -->
+        <include domain="file" path="reading_stats.json"/>
+        <!-- DataStore Preferences: reader and app settings. -->
+        <include domain="file" path="datastore/"/>
+
+        <!-- Write-path scaffolding; restoring a half-written .tmp over a good
+             file would be worse than restoring nothing. -->
+        <exclude domain="file" path="library.json.tmp"/>
+        <exclude domain="file" path="library.json.bak"/>
+        <exclude domain="file" path="userdata.json.tmp"/>
+        <exclude domain="file" path="userdata.json.bak"/>
+        <exclude domain="file" path="progress.json.tmp"/>
+        <exclude domain="file" path="progress.json.bak"/>
+        <exclude domain="file" path="reading_stats.json.tmp"/>
+        <exclude domain="file" path="reading_stats.json.bak"/>
     </cloud-backup>
-    <!--
+
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <include domain="file" path="library.json"/>
+        <include domain="file" path="userdata.json"/>
+        <include domain="file" path="progress.json"/>
+        <include domain="file" path="reading_stats.json"/>
+        <include domain="file" path="datastore/"/>
+        <!-- No quota here, so the books come too. -->
+        <include domain="file" path="books/"/>
+        <include domain="file" path="covers/"/>
+        <!-- fonts/ holds fonts the user imported by hand — small, and not
+             recoverable from the books. -->
+        <include domain="file" path="fonts/"/>
+
+        <exclude domain="file" path="library.json.tmp"/>
+        <exclude domain="file" path="library.json.bak"/>
+        <exclude domain="file" path="userdata.json.tmp"/>
+        <exclude domain="file" path="userdata.json.bak"/>
+        <exclude domain="file" path="progress.json.tmp"/>
+        <exclude domain="file" path="progress.json.bak"/>
+        <exclude domain="file" path="reading_stats.json.tmp"/>
+        <exclude domain="file" path="reading_stats.json.bak"/>
+        <!-- images/ and pagination/ are caches rebuilt from the books above. -->
     </device-transfer>
-    -->
+
+    <!-- Left out of both, and each for its own reason:
+         images/, pagination/ — caches, regenerated on first open.
+         boot_hints — a cold-start theme hint, re-derived on first launch.
+         frog_scanned_folders — persisted SAF tree URIs. A URI permission belongs
+         to this install; restoring the URI onto a new device would leave a folder
+         the app is no longer allowed to read. -->
 </data-extraction-rules>

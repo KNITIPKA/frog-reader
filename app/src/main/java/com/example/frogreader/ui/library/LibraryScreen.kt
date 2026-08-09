@@ -34,7 +34,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -725,6 +728,7 @@ internal fun filterEntries(
 
 // ----------------------------------------------------------------- header
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LibraryHeader(
     query: String,
@@ -745,7 +749,12 @@ private fun LibraryHeader(
             .fillMaxWidth()
             .clip(RoundedCornerShape(bottomStart = 36.dp, bottomEnd = 36.dp))
             .background(Brush.verticalGradient(listOf(frog.headerTop, frog.headerBottom)))
-            .statusBarsPadding()
+            // NOT statusBarsPadding(). The reader hides the system bars, so on
+            // the way back from a book this composes while the status bar is
+            // still gone: the inset reads 0, the header sits that much too
+            // high, and everything slides down as the bar animates back in.
+            // The reading surface already sizes itself the same way.
+            .padding(WindowInsets.statusBarsIgnoringVisibility.asPaddingValues())
             .padding(bottom = 8.dp),
     ) {
         Row(

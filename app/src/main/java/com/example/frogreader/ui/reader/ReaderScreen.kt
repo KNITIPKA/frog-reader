@@ -179,6 +179,19 @@ fun ReaderScreen(
         viewModel(key = "reader-$bookId", factory = ReaderViewModel.factory(bookId))
     val state by viewModel.state.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
+
+    // A book opens onto its text, not onto its menus.
+    //
+    // Owned HERE rather than in ReaderContent for two reasons. It survives the
+    // Loading→Ready swap — ReaderContent is only composed once the book is
+    // parsed, so its rememberSaveable was being recreated on every open. And
+    // the system bars now start hiding on the reader's very first frame:
+    // driven from ReaderContent they only went away once the text appeared,
+    // leaving the status and navigation bars sitting through the whole opening
+    // and then sliding out as a second, separate step.
+    var chromeVisible by rememberSaveable { mutableStateOf(false) }
+    SystemBarsEffect(appSettings.theme, chromeVisible)
 
     when (val current = state) {
         ReaderState.Loading -> Box(
@@ -216,6 +229,9 @@ fun ReaderScreen(
             ready = current,
             settings = settings,
             viewModel = viewModel,
+            appSettings = appSettings,
+            chromeVisible = chromeVisible,
+            onToggleChrome = { chromeVisible = !chromeVisible },
             onBack = onBack,
         )
     }
@@ -227,16 +243,16 @@ private fun ReaderContent(
     ready: ReaderState.Ready,
     settings: ReaderSettings,
     viewModel: ReaderViewModel,
+    appSettings: AppSettings,
+    chromeVisible: Boolean,
+    onToggleChrome: () -> Unit,
     onBack: () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
     val clipboard = LocalClipboardManager.current
 
-    val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
     val colors = readerColors(appSettings.theme)
     val liveBook by viewModel.book.collectAsStateWithLifecycle()
-
-    var chromeVisible by rememberSaveable { mutableStateOf(true) }
 
     // How far the settings drawer is pulled up (0 closed → 1 half-open and
     // beyond). The top bar slides out along this SAME value, so both move in
@@ -271,8 +287,6 @@ private fun ReaderContent(
     // with the finger instead of jumping when a page/paragraph settles.
     val livePagePosition = remember { mutableStateOf<Float?>(null) }
     val liveScrollPosition = remember { mutableStateOf<Float?>(null) }
-
-    SystemBarsEffect(appSettings.theme, chromeVisible)
 
     // Accumulate reading time while the reader is on screen and resumed.
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -434,7 +448,7 @@ private fun ReaderContent(
                         seekPosition = seekPosition,
                         onSeekPositionConsumed = { seekPosition = null },
                         onToggleChrome = {
-                            chromeVisible = !chromeVisible
+                            onToggleChrome()
                             searchHighlight = null
                         },
                         searchHighlight = searchHighlight,
@@ -461,7 +475,7 @@ private fun ReaderContent(
                         seekPosition = seekPosition,
                         onSeekPositionConsumed = { seekPosition = null },
                         onToggleChrome = {
-                            chromeVisible = !chromeVisible
+                            onToggleChrome()
                             searchHighlight = null
                         },
                         searchHighlight = searchHighlight,
@@ -1822,6 +1836,9 @@ private fun SystemBarsEffect(theme: AppTheme, chromeVisible: Boolean) {
         val window = activity?.window ?: return@LaunchedEffect
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         controller.isAppearanceLightStatusBars = !theme.isDark()
+        // Transient-by-swipe, not BEHAVIOR_DEFAULT: under DEFAULT anything that
+        // reveals the bars leaves them up for good, and immersion measurably
+        // lasted about three seconds before some system event ended it.
         controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         if (chromeVisible) {
@@ -1835,6 +1852,13 @@ private fun SystemBarsEffect(theme: AppTheme, chromeVisible: Boolean) {
         onDispose {
             val window = activity?.window ?: return@onDispose
             val controller = WindowCompat.getInsetsController(window, window.decorView)
+            // Reset the BEHAVIOUR first, and not just the visibility. Left in
+            // BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE, the status bar comes back
+            // as a TRANSIENT bar — which Android draws with its own translucent
+            // dark scrim — and only loses it once the system settles the bar
+            // into a normal one. That was the dark band flashing across the top
+            // of the library for a tenth of a second after closing a book.
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
             controller.show(WindowInsetsCompat.Type.systemBars())
             controller.isAppearanceLightStatusBars = !currentTheme.isDark()
         }

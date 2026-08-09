@@ -23,6 +23,18 @@ data class ReadingProgress(
     val totalPages: Int = 0,
 )
 
+/**
+ * Carries the "when was this last changed" stamp that merging two devices needs.
+ *
+ * Nothing reads it today. It exists now because it cannot be added later: a
+ * stamp that was never written has no value to backfill from, so the first sync
+ * would have to guess which side of a conflict is newer.
+ */
+interface Timestamped<T> {
+    val updatedAtMillis: Long
+    fun withUpdatedAt(millis: Long): T
+}
+
 /** A saved reading position with a short text preview. */
 @Serializable
 data class Bookmark(
@@ -31,25 +43,63 @@ data class Bookmark(
     val chapterIndex: Int,
     val preview: String,
     val createdAtMillis: Long,
-)
+    /** Set by the repository when the bookmark is stored; empty in transit. */
+    val bookId: String = "",
+    override val updatedAtMillis: Long = 0L,
+) : Timestamped<Bookmark> {
+    override fun withUpdatedAt(millis: Long) = copy(updatedAtMillis = millis)
+}
 
-/** A text fragment the user saved while reading. */
+/** A text fragment the user saved while reading, and what they made of it. */
 @Serializable
 data class Quote(
     val id: String,
     val text: String,
     val chapterIndex: Int,
     val createdAtMillis: Long,
-)
+    /** The user's own note about this quote. */
+    val note: String? = null,
+    /** Set by the repository when the quote is stored; empty in transit. */
+    val bookId: String = "",
+    override val updatedAtMillis: Long = 0L,
+) : Timestamped<Quote> {
+    override fun withUpdatedAt(millis: Long) = copy(updatedAtMillis = millis)
+}
 
+/**
+ * Where a book stands with the reader.
+ *
+ * The single source of truth: markStarted and markFinished set it as a side
+ * effect rather than the other way round. Deriving it from
+ * startedAtMillis/finishedAtMillis instead would leave two answers to the same
+ * question, and ABANDONED and WANT_TO_READ have no timestamp to derive from.
+ */
+@Serializable
+enum class ReadingStatus { NONE, WANT_TO_READ, READING, FINISHED, ABANDONED }
+
+/**
+ * One book, as the rest of the app sees it.
+ *
+ * Not what is on disk: the repository assembles this from three documents that
+ * are written at very different rates — see `Stores.kt`. Nothing above the
+ * repository needs to know that, which is the point.
+ */
 @Serializable
 data class Book(
     val id: String,
     val title: String,
     val author: String? = null,
     val format: BookFormat,
-    /** File name inside the app's private books directory. */
-    val fileName: String,
+    /**
+     * File name inside the app's private books directory.
+     *
+     * Null when the record exists but the file does not. Three quite different
+     * situations share that state, and all three want the same handling — show
+     * the book, offer to attach a file, keep everything the user wrote about it:
+     * a book on the want-to-read list that was never obtained, a book restored
+     * from a data-only backup, and (later) a book synced from another device.
+     */
+    val fileName: String? = null,
     /** File name inside the app's private covers directory, if the book has a cover. */
     val coverFileName: String? = null,
     val addedAtMillis: Long,
@@ -63,6 +113,12 @@ data class Book(
     val finishedAtMillis: Long? = null,
     /** Total time spent reading this book, in seconds. */
     val readingSeconds: Long = 0,
+    val status: ReadingStatus = ReadingStatus.NONE,
+    /** 1..5, or null when the book has not been rated. */
+    val rating: Int? = null,
+    /** The user's own review. */
+    val review: String? = null,
+    val reviewUpdatedAtMillis: Long? = null,
     /**
      * This book's own reading settings (font, size, margins, mode…).
      * Null = the book still follows the app-wide "last used" settings.
@@ -105,19 +161,10 @@ data class Shelf(
      * 0 = written by an older build, fall back to [createdAtMillis].
      */
     val sortKey: Long = 0L,
-)
-
-@Serializable
-data class LibraryIndex(
-    val books: List<Book> = emptyList(),
-    /**
-     * Defaulted on purpose: a `library.json` written before shelves existed
-     * must keep decoding. Declaring this without a default would make
-     * kotlinx.serialization throw MissingFieldException on every legacy file,
-     * which BookRepository would read as "corrupted" — i.e. an empty library.
-     */
-    val shelves: List<Shelf> = emptyList(),
-)
+    override val updatedAtMillis: Long = 0L,
+) : Timestamped<Shelf> {
+    override fun withUpdatedAt(millis: Long) = copy(updatedAtMillis = millis)
+}
 
 /**
  * Stable key for one grid slot, matching the UI's `LibraryEntry.id`. Prefixed

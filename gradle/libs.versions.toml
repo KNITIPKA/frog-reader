@@ -18,6 +18,8 @@ coreSplashscreen = "1.0.1"
 navigationCompose = "2.9.0"
 datastore = "1.1.7"
 glance = "1.1.1"
+work = "2.10.5"
+documentfile = "1.1.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
 espressoCore = "3.7.0"
@@ -43,6 +45,12 @@ coil-svg = { group = "io.coil-kt.coil3", name = "coil-svg", version.ref = "coil"
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 androidx-glance-appwidget = { group = "androidx.glance", name = "glance-appwidget", version.ref = "glance" }
+# Already on the classpath through Glance, which schedules widget updates with
+# it. Declared explicitly because the scheduled backup uses it directly, and
+# depending on a transitive dependency breaks the day the transitive path goes.
+androidx-work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
+# DocumentFile is how a tree Uri from the folder picker is listed and written to.
+androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 kxml2 = { group = "net.sf.kxml", name = "kxml2", version = "2.3.0" }
 xmlpull = { group = "xmlpull", name = "xmlpull", version = "1.1.3.1" }

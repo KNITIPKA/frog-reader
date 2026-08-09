@@ -9,7 +9,9 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.frogreader.FrogReaderApp
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.model.Book
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -75,6 +77,7 @@ class LibraryViewModel(
         // One background sweep per app start (the library screen is the
         // entry point): drop caches orphaned by failed imports.
         viewModelScope.launch { runCatching { repository.cleanOrphanCaches() } }
+        preloadContinueReading()
         if (settingsRepository != null) {
             viewModelScope.launch {
                 runCatching {
@@ -83,6 +86,24 @@ class LibraryViewModel(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Parses the book behind the "continue reading" card in the background, so
+     * the most likely next tap opens instantly instead of spending a second or
+     * two on the same work.
+     *
+     * After a beat on purpose: the library's own first frame comes first, and
+     * this competes for the same cores. Tapping the book before the delay is
+     * up costs nothing — the repository hands both callers the same parse.
+     */
+    private fun preloadContinueReading() {
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(PRELOAD_DELAY_MILLIS)
+            val next = repository.books.value.firstOrNull { it.lastOpenedAtMillis != null }
+                ?: return@launch
+            runCatching { repository.loadContent(next) }
         }
     }
 
@@ -176,6 +197,9 @@ class LibraryViewModel(
     }
 
     companion object {
+        /** Long enough for the library to have drawn itself first. */
+        private const val PRELOAD_DELAY_MILLIS = 1_200L
+
         val Factory = viewModelFactory {
             initializer {
                 val app = this[APPLICATION_KEY] as FrogReaderApp

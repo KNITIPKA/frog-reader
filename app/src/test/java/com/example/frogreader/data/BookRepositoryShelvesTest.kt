@@ -42,16 +42,12 @@ class BookRepositoryShelvesTest {
     @Before
     fun setUp() {
         testDir.mkdirs()
-        indexFile.delete()
-        bakFile.delete()
-        tmpFile.delete()
+        StoreFixture.clear(testDir)
     }
 
     @After
     fun tearDown() {
-        indexFile.delete()
-        bakFile.delete()
-        tmpFile.delete()
+        StoreFixture.clear(testDir)
     }
 
     /**
@@ -73,8 +69,7 @@ class BookRepositoryShelvesTest {
                   "author": "Old Author",
                   "format": "EPUB",
                   "fileName": "legacy-1.epub",
-                  "addedAtMillis": 500,
-                  "progress": { "chapterIndex": 2, "elementIndex": 7, "scrollOffset": 0, "fraction": 0.25 }
+                  "addedAtMillis": 500
                 }
               ]
             }
@@ -86,10 +81,44 @@ class BookRepositoryShelvesTest {
         assertEquals(1, repository.books.value.size)
         assertEquals("Old Book", repository.books.value[0].title)
         assertTrue(repository.shelves.value.isEmpty())
-        // New ReadingProgress fields default to "unknown" on legacy data.
+    }
+
+    @Test
+    fun testProgressFileWrittenBeforeTheNewerFieldsExistedStillLoads() {
+        indexFile.writeText(
+            """
+            {
+              "books": [
+                {
+                  "id": "legacy-1",
+                  "title": "Old Book",
+                  "format": "EPUB",
+                  "fileName": "legacy-1.epub",
+                  "addedAtMillis": 500
+                }
+              ]
+            }
+            """.trimIndent(),
+        )
+        // A position map missing pagesLeftInChapter and totalPages entirely.
+        File(testDir, "progress.json").writeText(
+            """
+            {
+              "progress": {
+                "legacy-1": {
+                  "position": { "chapterIndex": 2, "elementIndex": 7, "scrollOffset": 0, "fraction": 0.25 }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+
+        val repository = BookRepository(context = null)
+
+        assertEquals(0.25f, repository.books.value[0].progress.fraction, 0.0001f)
+        // The newer ReadingProgress fields default to "unknown".
         assertEquals(-1, repository.books.value[0].progress.pagesLeftInChapter)
         assertEquals(0, repository.books.value[0].progress.totalPages)
-        assertEquals(0.25f, repository.books.value[0].progress.fraction, 0.0001f)
     }
 
     @Test
@@ -97,7 +126,7 @@ class BookRepositoryShelvesTest {
         // target is OLDER, so a shelf keyed on "now" would jump above dragged.
         val target = book("target", addedAt = 1_000L)
         val dragged = book("dragged", addedAt = 5_000L)
-        indexFile.writeText(json.encodeToString(LibraryIndex(listOf(dragged, target))))
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(dragged, target))))
 
         val repository = BookRepository(context = null)
         val shelf = repository.createShelf(listOf(target.id, dragged.id))
@@ -115,7 +144,7 @@ class BookRepositoryShelvesTest {
 
     @Test
     fun testCreateShelfNeedsTwoRealBooks() = runTest {
-        indexFile.writeText(json.encodeToString(LibraryIndex(listOf(book("a")))))
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(book("a")))))
         val repository = BookRepository(context = null)
 
         assertNull(repository.createShelf(listOf("a")))
@@ -127,7 +156,7 @@ class BookRepositoryShelvesTest {
     @Test
     fun testABookBelongsToAtMostOneShelf() = runTest {
         val books = listOf(book("a"), book("b"), book("c"), book("d"))
-        indexFile.writeText(json.encodeToString(LibraryIndex(books)))
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(books)))
 
         val repository = BookRepository(context = null)
         val first = repository.createShelf(listOf("a", "b"))!!
@@ -143,7 +172,7 @@ class BookRepositoryShelvesTest {
 
     @Test
     fun testRemoveFromShelfDissolvesATwoBookShelf() = runTest {
-        indexFile.writeText(json.encodeToString(LibraryIndex(listOf(book("a"), book("b")))))
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(book("a"), book("b")))))
         val repository = BookRepository(context = null)
         val shelf = repository.createShelf(listOf("a", "b"))!!
 
@@ -155,7 +184,7 @@ class BookRepositoryShelvesTest {
 
     @Test
     fun testDeleteBookPurgesItFromShelves() = runTest {
-        indexFile.writeText(json.encodeToString(LibraryIndex(listOf(book("a"), book("b"), book("c")))))
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(book("a"), book("b"), book("c")))))
         val repository = BookRepository(context = null)
         val shelf = repository.createShelf(listOf("a", "b", "c"))!!
 
@@ -171,7 +200,7 @@ class BookRepositoryShelvesTest {
 
     @Test
     fun testShelvesSurviveBackupRecovery() = runTest {
-        indexFile.writeText(json.encodeToString(LibraryIndex(listOf(book("a"), book("b")))))
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(book("a"), book("b")))))
         val repository = BookRepository(context = null)
         repository.createShelf(listOf("a", "b"), name = "Favourites")
         // A second write is what produces the .bak from the first one.
@@ -194,7 +223,7 @@ class BookRepositoryShelvesTest {
             // "a" is already claimed by s1, leaving only "c" — too few to survive.
             Shelf(id = "s2", name = "Second", bookIds = listOf("a", "c"), createdAtMillis = 20L),
         )
-        indexFile.writeText(json.encodeToString(LibraryIndex(books, shelves)))
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(books, shelves)))
 
         val repository = BookRepository(context = null)
 

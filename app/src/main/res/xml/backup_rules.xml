@@ -1,13 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+   Auto Backup rules for Android 11 and below. Android 12+ reads
+   data_extraction_rules.xml instead, so any change here needs a matching change
+   there.
+
+   Naming an <include> switches Auto Backup from "everything" to "only this", and
+   that is the entire point of this file: the default swept up filesDir, which
+   holds the book files themselves. Auto Backup has a 25 MB quota per app and
+   drops the WHOLE backup when it is exceeded, so a library of any size meant no
+   cloud backup at all — silently.
+
+   What is worth uploading is only what the user cannot get back: quotes, notes,
+   ratings, reading positions. That is a few hundred KB. Books are re-downloadable
+   and covers, extracted images and pagination are all regenerated from them.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Library metadata and shelves. -->
+    <include domain="file" path="library.json"/>
+    <!-- Irreplaceable: quotes, notes, bookmarks, ratings, reviews, statuses. -->
+    <include domain="file" path="userdata.json"/>
+    <!-- Reading positions. -->
+    <include domain="file" path="progress.json"/>
+    <!-- Per-day reading time. -->
+    <include domain="file" path="reading_stats.json"/>
+    <!-- DataStore Preferences: reader and app settings. -->
+    <include domain="file" path="datastore/"/>
+
+    <!-- The .tmp and .bak siblings of the files above are write-path scaffolding.
+         Restoring a half-written .tmp over a good file would be worse than
+         restoring nothing. -->
+    <exclude domain="file" path="library.json.tmp"/>
+    <exclude domain="file" path="library.json.bak"/>
+    <exclude domain="file" path="userdata.json.tmp"/>
+    <exclude domain="file" path="userdata.json.bak"/>
+    <exclude domain="file" path="progress.json.tmp"/>
+    <exclude domain="file" path="progress.json.bak"/>
+    <exclude domain="file" path="reading_stats.json.tmp"/>
+    <exclude domain="file" path="reading_stats.json.bak"/>
+
+    <!-- Deliberately NOT backed up, and each for its own reason:
+         books/, covers/, images/, pagination/, fonts/ — large and regenerable.
+         boot_hints — a cold-start theme hint, re-derived on first launch.
+         frog_scanned_folders — persisted SAF tree URIs. A URI permission belongs
+         to this install; restoring the URI onto a new device would leave a folder
+         the app is no longer allowed to read. -->
 </full-backup-content>

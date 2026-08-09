@@ -130,17 +130,6 @@ class ReaderViewModel(
     var currentCharOffset: Int = 0
         private set
 
-    init {
-        load()
-        // Re-render the book when the footnote visibility setting changes.
-        viewModelScope.launch {
-            settings
-                .map { it.hideFootnotes }
-                .distinctUntilChanged()
-                .collect { if (loadedContent != null) rebuildReady() }
-        }
-    }
-
     /**
      * Recomputes pages in the background unless [key] is already available.
      * [quick] (optional) paginates just the chapter being read; its result
@@ -224,31 +213,49 @@ class ReaderViewModel(
                 return@launch
             }
             currentFlatIndex = book.progress.elementIndex
-            repository.markStarted(bookId)
-            // First open pins the current settings as THIS book's own: from
-            // now on, changes made in other books cannot touch it.
-            if (book.readerSettings == null) {
-                repository.saveReaderSettings(bookId, settingsRepository.settings.first())
-            }
             runCatching { repository.loadContent(book) }
                 .onSuccess { content ->
                     loadedBook = book
                     loadedContent = content
                     rebuildReady()
+                    // Only now. It is fire-and-forget on a scope that outlives
+                    // this screen, but starting it first put a full index
+                    // rewrite — fsync, .bak copy, widget rebuild — onto the IO
+                    // pool that the book itself was about to be read from, and
+                    // the open simply queued behind it.
+                    repository.noteOpened(bookId) { settingsRepository.settings.first() }
                 }
                 .onFailure { _state.value = ReaderState.Error }
         }
     }
 
-    /** Builds the Ready state, applying footnote display settings. */
-    private fun rebuildReady() {
+    /**
+     * Builds the Ready state, applying footnote display settings.
+     *
+     * The bookkeeping stays on Main so this VM's plain `var`s keep their
+     * single-threaded invariant; the walk over every element of the book, the
+     * font stats and `publisherStyleOf`'s second pass go to Default. It is only
+     * tens of milliseconds, but they used to land on the very frame the reader
+     * was trying to draw.
+     */
+    private suspend fun rebuildReady() {
         val book = loadedBook ?: return
         val content = loadedContent ?: return
         val hideFootnotes = settings.value.hideFootnotes
-        // Item texts are about to change — cached match offsets go stale.
-        searchJob?.cancel()
-        _searchResults.value = null
+        withContext(Dispatchers.Main.immediate) {
+            // Item texts are about to change — cached match offsets go stale.
+            searchJob?.cancel()
+            _searchResults.value = null
+        }
+        val next = withContext(Dispatchers.Default) { buildReady(book, content, hideFootnotes) }
+        withContext(Dispatchers.Main.immediate) { _state.value = next }
+    }
 
+    private fun buildReady(
+        book: Book,
+        content: BookContent,
+        hideFootnotes: Boolean,
+    ): ReaderState {
         val items = mutableListOf<ReaderItem>()
 
         // Title page: the cover opens the book before the text.
@@ -282,9 +289,9 @@ class ReaderViewModel(
         }
 
         if (items.isEmpty()) {
-            _state.value = ReaderState.Error
+            return ReaderState.Error
         } else {
-            _state.value = ReaderState.Ready(
+            return ReaderState.Ready(
                 book = book,
                 items = items,
                 chapterStarts = chapterStarts,
@@ -497,6 +504,29 @@ class ReaderViewModel(
             }
         }
         return ""
+    }
+
+    /**
+     * LAST in the class body, and it has to stay last.
+     *
+     * `load()` starts on Dispatchers.Main.immediate, so whatever runs before
+     * its first real suspension runs INSIDE this constructor — and Kotlin
+     * initialises properties in declaration order. Sitting above
+     * `_searchResults`, `loadedBook` and `loadedContent`, it used to get away
+     * with it only because the open always suspended early on a library-index
+     * write. The moment a cached book made `loadContent` return without
+     * suspending at all, `rebuildReady` reached a `_searchResults` that was
+     * still null and every re-open crashed.
+     */
+    init {
+        load()
+        // Re-render the book when the footnote visibility setting changes.
+        viewModelScope.launch {
+            settings
+                .map { it.hideFootnotes }
+                .distinctUntilChanged()
+                .collect { if (loadedContent != null) rebuildReady() }
+        }
     }
 
     companion object {

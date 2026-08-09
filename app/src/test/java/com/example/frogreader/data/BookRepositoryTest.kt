@@ -3,6 +3,9 @@ package com.example.frogreader.data
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.LibraryIndex
+import com.example.frogreader.data.model.Quote
+import com.example.frogreader.data.model.ReadingProgress
+import com.example.frogreader.data.model.UserDataStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -14,6 +17,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -26,6 +30,10 @@ class BookRepositoryTest {
     private val indexFile = File(testDir, "library.json")
     private val bakFile = File(testDir, "library.json.bak")
     private val tmpFile = File(testDir, "library.json.tmp")
+    private val userFile = File(testDir, "userdata.json")
+    private val userBakFile = File(testDir, "userdata.json.bak")
+    private val userTmpFile = File(testDir, "userdata.json.tmp")
+    private val progressFile = File(testDir, "progress.json")
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -47,45 +55,109 @@ class BookRepositoryTest {
     @Before
     fun setUp() {
         testDir.mkdirs()
-        indexFile.delete()
-        bakFile.delete()
-        tmpFile.delete()
+        StoreFixture.clear(testDir)
     }
 
     @After
     fun tearDown() {
-        indexFile.delete()
-        bakFile.delete()
-        tmpFile.delete()
+        StoreFixture.clear(testDir)
     }
 
     @Test
     fun testNormalAtomicWriteAndBackupCreation() = runTest {
         val initialBook = createSampleBook("book-1", "Initial Book")
-        indexFile.writeText(json.encodeToString(LibraryIndex(listOf(initialBook))))
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(initialBook))))
 
         val repository = BookRepository(context = null)
         assertEquals(1, repository.books.value.size)
 
-        // First update
+        // markStarted stamps startedAtMillis (user data) and lastOpenedAtMillis
+        // (progress). It says nothing about the book itself, so library.json is
+        // not rewritten — that is the point of the split.
         repository.markStarted("book-1")
-        assertTrue("Main index file should exist after update", indexFile.exists())
-        assertTrue("Backup index file should exist after second state update", bakFile.exists())
-        assertFalse("Temp file should be cleaned up after atomic move", tmpFile.exists())
+        assertTrue("userdata.json should exist after the first stamp", userFile.exists())
+        assertNotNull(StoreFixture.userDataOnDisk(testDir, "book-1")?.startedAtMillis)
+        assertNotNull(StoreFixture.progressOnDisk(testDir, "book-1")?.lastOpenedAtMillis)
+        assertFalse("Temp file should be cleaned up after atomic move", userTmpFile.exists())
 
-        val indexOnDisk = json.decodeFromString<LibraryIndex>(indexFile.readText())
-        assertNotNull(indexOnDisk.books.first().startedAtMillis)
-
-        // Second update to test backup content matches previous valid state
+        // A second write is what creates the backup: it holds the state before
+        // this write, not after it.
+        val startedFirst = StoreFixture.userDataOnDisk(testDir, "book-1")?.startedAtMillis
         repository.markFinished("book-1")
-        val bakOnDisk = json.decodeFromString<LibraryIndex>(bakFile.readText())
-        assertEquals(indexOnDisk.books.first().startedAtMillis, bakOnDisk.books.first().startedAtMillis)
+        assertTrue("userdata.json.bak should exist after the second write", userBakFile.exists())
+
+        val bakOnDisk = json.decodeFromString<UserDataStore>(userBakFile.readText())
+        assertEquals(startedFirst, bakOnDisk.userData["book-1"]?.startedAtMillis)
+        assertNull("the backup predates markFinished", bakOnDisk.userData["book-1"]?.finishedAtMillis)
+        assertNotNull(StoreFixture.userDataOnDisk(testDir, "book-1")?.finishedAtMillis)
+    }
+
+    @Test
+    fun testSavingProgressDoesNotRewriteTheLibraryOrTheUserData() = runTest {
+        val book = createSampleBook("book-1", "Initial Book")
+        StoreFixture.seed(testDir, listOf(book))
+
+        val repository = BookRepository(context = null)
+        repository.addQuote("book-1", Quote("q1", "a line worth keeping", 0, 1_000L))
+
+        val libraryBefore = indexFile.readText()
+        val userDataBefore = userFile.readText()
+
+        repository.saveProgress("book-1", ReadingProgress(chapterIndex = 3, fraction = 0.4f))
+        repository.saveProgress("book-1", ReadingProgress(chapterIndex = 4, fraction = 0.5f))
+
+        assertEquals("library.json must not be touched by a page turn", libraryBefore, indexFile.readText())
+        assertEquals("userdata.json must not be touched by a page turn", userDataBefore, userFile.readText())
+        assertEquals(4, StoreFixture.progressOnDisk(testDir, "book-1")?.position?.chapterIndex)
+        assertEquals("the quote is still there", 1, StoreFixture.quotesOnDisk(testDir, "book-1").size)
+    }
+
+    @Test
+    fun testDamagedProgressLosesPositionsButKeepsQuotes() = runTest {
+        val book = createSampleBook("book-1", "Initial Book")
+        StoreFixture.seed(testDir, listOf(book))
+        val repository = BookRepository(context = null)
+        repository.addQuote("book-1", Quote("q1", "a line worth keeping", 0, 1_000L))
+        repository.saveProgress("book-1", ReadingProgress(chapterIndex = 7))
+
+        // Both copies of the position map are gone.
+        progressFile.writeText("}{ truncated")
+        File(testDir, "progress.json.bak").writeText("also broken")
+
+        val reopened = BookRepository(context = null)
+        val reloaded = reopened.bookById("book-1")
+        assertNotNull(reloaded)
+        assertEquals("the position is lost, as expected", 0, reloaded?.progress?.chapterIndex)
+        assertEquals("the quote is not", 1, reloaded?.quotes?.size)
+        assertEquals("a line worth keeping", reloaded?.quotes?.first()?.text)
+    }
+
+    @Test
+    fun testDamagedUserDataRefusesToWriteRatherThanLoseQuotes() = runTest {
+        val book = createSampleBook("book-1", "Initial Book")
+        StoreFixture.seed(testDir, listOf(book))
+        val repository = BookRepository(context = null)
+        repository.addQuote("book-1", Quote("q1", "a line worth keeping", 0, 1_000L))
+
+        val damaged = ">>> CORRUPTED <<<"
+        userFile.writeText(damaged)
+        File(testDir, "userdata.json.bak").writeText(damaged)
+
+        val reopened = BookRepository(context = null)
+        try {
+            reopened.addQuote("book-1", Quote("q2", "another", 0, 2_000L))
+            fail("Expected a write to be refused while user data is unreadable")
+        } catch (e: LibraryIndexCorruptedException) {
+            // Expected: quotes are irreplaceable, so an unreadable store must
+            // never be treated as an empty one and written back.
+        }
+        assertEquals("the damaged file is left alone", damaged, userFile.readText())
     }
 
     @Test
     fun testCorruptedLibraryJsonFallbackRecoveryFromBak() = runTest {
         val originalBook = createSampleBook("book-bak", "Backup Book")
-        val validBakContent = json.encodeToString(LibraryIndex(listOf(originalBook)))
+        val validBakContent = json.encodeToString(StoreFixture.indexOf(listOf(originalBook)))
         bakFile.writeText(validBakContent)
 
         // Write corrupt data into library.json
@@ -106,7 +178,7 @@ class BookRepositoryTest {
     @Test
     fun testZeroByteLibraryJsonFallbackRecoveryFromBak() = runTest {
         val originalBook = createSampleBook("book-bak-0", "Zero Byte Fallback Book")
-        val validBakContent = json.encodeToString(LibraryIndex(listOf(originalBook)))
+        val validBakContent = json.encodeToString(StoreFixture.indexOf(listOf(originalBook)))
         bakFile.writeText(validBakContent)
 
         // Create 0-byte library.json
@@ -158,7 +230,7 @@ class BookRepositoryTest {
     @Test
     fun testThreadSafeConcurrentUpdatesAndReads() = runTest {
         val initialBook = createSampleBook("concurrent-book", "Concurrent Book")
-        indexFile.writeText(json.encodeToString(LibraryIndex(listOf(initialBook))))
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(initialBook))))
 
         val repository = BookRepository(context = null)
         val iterations = 30
@@ -177,7 +249,9 @@ class BookRepositoryTest {
         assertNotNull(finalBook)
         assertEquals(iterations.toLong(), finalBook?.readingSeconds)
 
-        val diskIndex = json.decodeFromString<LibraryIndex>(indexFile.readText())
-        assertEquals(iterations.toLong(), diskIndex.books.first().readingSeconds)
+        assertEquals(
+            iterations.toLong(),
+            StoreFixture.progressOnDisk(testDir, "concurrent-book")?.readingSeconds,
+        )
     }
 }

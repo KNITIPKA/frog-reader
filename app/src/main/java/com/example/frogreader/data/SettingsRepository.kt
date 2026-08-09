@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 @kotlinx.serialization.Serializable
@@ -24,7 +25,12 @@ enum class PageMargins { NARROW, NORMAL, WIDE }
 enum class PageTurnAnimation { SLIDE, CASCADE, PAGE_CURL }
 
 /** One theme for the whole app (every screen and the reading surface). */
+@kotlinx.serialization.Serializable
 enum class AppTheme { WHITE, SEPIA, OLED }
+
+/** How often the app writes a backup by itself. */
+@kotlinx.serialization.Serializable
+enum class BackupFrequency { OFF, DAILY, WEEKLY }
 
 /** Library card grid or list view mode. */
 @kotlinx.serialization.Serializable
@@ -70,6 +76,7 @@ data class ReaderSettings(
 )
 
 /** App-wide settings (theme, feedback, behavior, privacy). */
+@kotlinx.serialization.Serializable
 data class AppSettings(
     val theme: AppTheme = AppTheme.SEPIA,
     val haptics: Boolean = true,
@@ -114,6 +121,56 @@ class SettingsRepository(private val context: Context) {
         val autoInvertImages = booleanPreferencesKey("auto_invert_images")
         val dailyGoal = androidx.datastore.preferences.core.intPreferencesKey("daily_goal_minutes")
         val libraryViewMode = stringPreferencesKey("library_view_mode")
+        val deviceId = stringPreferencesKey("device_id")
+        val backupFolder = stringPreferencesKey("backup_folder_uri")
+        val backupFrequency = stringPreferencesKey("backup_frequency")
+        val lastBackupAt = androidx.datastore.preferences.core.longPreferencesKey("last_backup_at")
+    }
+
+    /** The tree Uri of the folder scheduled backups are written to. */
+    val backupFolder: Flow<String?> =
+        context.settingsDataStore.data.map { it[Keys.backupFolder] }
+
+    val backupFrequency: Flow<BackupFrequency> =
+        context.settingsDataStore.data.map {
+            enumOrDefault(it[Keys.backupFrequency], BackupFrequency.OFF)
+        }
+
+    val lastBackupAt: Flow<Long?> =
+        context.settingsDataStore.data.map { it[Keys.lastBackupAt] }
+
+    suspend fun setBackupFolder(uri: String?) {
+        context.settingsDataStore.edit { prefs ->
+            uri?.let { prefs[Keys.backupFolder] = it } ?: prefs.remove(Keys.backupFolder)
+        }
+    }
+
+    suspend fun setBackupFrequency(frequency: BackupFrequency) {
+        context.settingsDataStore.edit { it[Keys.backupFrequency] = frequency.name }
+    }
+
+    suspend fun recordBackupAt(millis: Long) {
+        context.settingsDataStore.edit { it[Keys.lastBackupAt] = millis }
+    }
+
+    /**
+     * A UUID minted once, on first ask, and kept for the life of the install.
+     *
+     * Nothing uses it yet. Syncing two phones needs a way to tell "my edit"
+     * from "the other phone's edit", and it has to be stable from before the
+     * first sync rather than invented during it. Not derived from any hardware
+     * identifier: a restore onto a new phone should carry the same id, and
+     * nothing here should be traceable to the device itself.
+     */
+    suspend fun deviceId(): String {
+        context.settingsDataStore.data.first()[Keys.deviceId]?.let { return it }
+        val minted = java.util.UUID.randomUUID().toString()
+        var result = minted
+        context.settingsDataStore.edit { prefs ->
+            // Another caller may have won the race between the read and here.
+            result = prefs[Keys.deviceId] ?: minted.also { prefs[Keys.deviceId] = it }
+        }
+        return result
     }
 
     val settings: Flow<ReaderSettings> =

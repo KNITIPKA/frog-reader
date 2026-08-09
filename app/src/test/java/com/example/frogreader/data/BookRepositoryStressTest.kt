@@ -3,6 +3,7 @@ package com.example.frogreader.data
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.LibraryIndex
+import com.example.frogreader.data.model.toRecord
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -49,9 +50,7 @@ class BookRepositoryStressTest {
 
     private fun cleanFiles() {
         testDir.mkdirs()
-        indexFile.delete()
-        bakFile.delete()
-        tmpFile.delete()
+        StoreFixture.clear(testDir)
         File(testDir, "books").deleteRecursively()
         File(testDir, "covers").deleteRecursively()
         File(testDir, "images").deleteRecursively()
@@ -75,7 +74,7 @@ class BookRepositoryStressTest {
     @Test
     fun testConcurrentBurstWritesAndReads() = runTest {
         val initialBook = createSampleBook("burst-book", "Burst Read Write Book")
-        indexFile.writeText(json.encodeToString(LibraryIndex(listOf(initialBook))))
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(initialBook))))
 
         val repository = BookRepository(context = null)
         val numWriters = 100
@@ -122,8 +121,11 @@ class BookRepositoryStressTest {
 
         // Verify state on disk
         assertTrue("library.json should exist on disk", indexFile.exists())
-        val diskIndex = json.decodeFromString<LibraryIndex>(indexFile.readText())
-        assertEquals("Total reading seconds on disk should equal total increment count", numWriters.toLong(), diskIndex.books.first().readingSeconds)
+        assertEquals(
+            "Total reading seconds on disk should equal total increment count",
+            numWriters.toLong(),
+            StoreFixture.progressOnDisk(testDir, "burst-book")?.readingSeconds,
+        )
 
         assertEquals("No exceptions should occur during concurrent reads", 0, readErrors.get())
         assertTrue("Readers should successfully observe state", successfulReads.get() > 0)
@@ -137,7 +139,7 @@ class BookRepositoryStressTest {
     fun testRecoveryFromZeroByteAndTruncatedIndexFile() = runTest {
         val book1 = createSampleBook("b1", "Recovered Book 1")
         val book2 = createSampleBook("b2", "Recovered Book 2")
-        val validBakIndex = LibraryIndex(listOf(book1, book2))
+        val validBakIndex = StoreFixture.indexOf(listOf(book1, book2))
         bakFile.writeText(json.encodeToString(validBakIndex))
 
         // Sub-case 2A: 0-byte library.json
@@ -195,6 +197,11 @@ class BookRepositoryStressTest {
         val totalCycles = 20
         var expectedBookCount = 0
 
+        // An empty library on disk to start from. A write only happens when
+        // something actually changed, so the no-op stamps below would otherwise
+        // leave library.json missing on the first cycle.
+        indexFile.writeText(json.encodeToString(LibraryIndex()))
+
         for (cycle in 1..totalCycles) {
             // Instantiate fresh repository (simulating app restart after crash)
             val repository = BookRepository(context = null)
@@ -214,7 +221,9 @@ class BookRepositoryStressTest {
             // Manually add next book into repository index
             val bookToAdd = createSampleBook(newBookId, newBookTitle)
             val diskIndexBeforeCrash = json.decodeFromString<LibraryIndex>(indexFile.readText())
-            val newIndexContent = json.encodeToString(LibraryIndex(listOf(bookToAdd) + diskIndexBeforeCrash.books))
+            val newIndexContent = json.encodeToString(
+                LibraryIndex(listOf(bookToAdd.toRecord()) + diskIndexBeforeCrash.books),
+            )
             
             // Perform atomic file save of valid state to both disk and backup before injecting forced crash
             indexFile.writeText(newIndexContent)
@@ -301,7 +310,7 @@ class BookRepositoryStressTest {
     @Test
     fun testWriteFailureBehaviorWhenDirectoryIsReadOnly() = runTest {
         val initialBook = createSampleBook("b1", "Initial Book")
-        indexFile.writeText(json.encodeToString(LibraryIndex(listOf(initialBook))))
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(initialBook))))
 
         val repository = BookRepository(context = null)
         assertEquals(1, repository.books.value.size)

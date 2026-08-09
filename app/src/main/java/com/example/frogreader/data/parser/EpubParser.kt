@@ -18,6 +18,9 @@ import java.util.zip.ZipFile
 /** EPUB 2/3 parser: container.xml → OPF (metadata/manifest/spine) → XHTML chapters. */
 object EpubParser {
 
+    /** Bump to force every book to re-extract its embedded fonts. */
+    private const val FONT_PIPELINE_VERSION = 1
+
     private class ManifestItem(
         val id: String,
         val href: String,
@@ -399,6 +402,16 @@ object EpubParser {
      * to raw sfnt; anything still failing the magic-byte check (WOFF2, real
      * DRM, junk) is skipped so a broken face can never crash text layout.
      */
+    /**
+     * Extracted faces are reused across opens, so the name has to carry an
+     * invalidation handle: bump [FONT_PIPELINE_VERSION] whenever the decode
+     * path changes and every book re-extracts, instead of a fixed pipeline
+     * being masked by the file an older, broken one left behind. Superseded
+     * files sit in the book's own images dir and go when the book does.
+     */
+    private fun fontFileName(entryPath: String): String =
+        "font_v${FONT_PIPELINE_VERSION}_" + entryPath.replace(Regex("[^A-Za-z0-9._-]"), "_")
+
     private fun extractFonts(
         resolver: CssResolver,
         zip: ZipFile,
@@ -411,6 +424,22 @@ object EpubParser {
             val entryPath = resolvePath(face.baseDir, face.src)
             val key = "$entryPath|${face.bold}|${face.italic}"
             if (key in out) continue
+            val target = File(imagesDir, fontFileName(entryPath))
+
+            // Already extracted by an earlier open. Re-reading the zip entry,
+            // de-obfuscating it and Brotli-decoding the WOFF2 only to write the
+            // same bytes back is the most expensive thing this parser does per
+            // face, and it did it every single time the book was opened.
+            if (target.length() > 0L) {
+                out[key] = BookFont(
+                    family = face.family,
+                    path = target.absolutePath,
+                    bold = face.bold,
+                    italic = face.italic,
+                )
+                continue
+            }
+
             val entry = zipEntry(zip, entryPath) ?: continue
             var bytes = runCatching {
                 zip.getInputStream(entry).use { it.readBytes() }
@@ -445,10 +474,15 @@ object EpubParser {
             }
             if (!looksLikeFont(bytes)) continue
             imagesDir.mkdirs()
-            val target = File(imagesDir, "font_" + entryPath.replace(Regex("[^A-Za-z0-9._-]"), "_"))
-            // Always overwrite: a stale pre-upgrade extraction (or a fixed
-            // pipeline) must not be masked by an old file.
-            target.writeBytes(bytes)
+            // Through a sibling temp file: the reuse check above trusts any
+            // non-empty target, so a write cut short by a crash would be
+            // believed forever after.
+            val partial = File(target.parentFile, target.name + ".tmp")
+            partial.writeBytes(bytes)
+            if (!partial.renameTo(target)) {
+                partial.delete()
+                continue
+            }
             out[key] = BookFont(
                 family = face.family,
                 path = target.absolutePath,

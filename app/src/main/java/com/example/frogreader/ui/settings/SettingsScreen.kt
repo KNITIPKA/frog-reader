@@ -52,6 +52,23 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.frogreader.R
 import com.example.frogreader.ui.theme.displayNameRes
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.rounded.Backup
+import androidx.compose.material.icons.rounded.Restore
+import com.example.frogreader.data.model.BackupManifest
+import com.example.frogreader.data.model.BackupMode
+import java.text.DateFormat
+import java.util.Date
+import android.net.Uri
+import androidx.compose.material3.RadioButton
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Schedule
+import com.example.frogreader.data.BackupFrequency
+import com.example.frogreader.data.backup.BackupRepository
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -63,6 +80,29 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var showThemeSheet by remember { mutableStateOf(false) }
+
+    val backupViewModel: BackupViewModel = viewModel(factory = BackupViewModel.Factory)
+    val backupState by backupViewModel.state.collectAsStateWithLifecycle()
+    val pendingRestore by backupViewModel.pending.collectAsStateWithLifecycle()
+    var showBackupModeDialog by remember { mutableStateOf(false) }
+    var chosenMode by remember { mutableStateOf(BackupMode.DATA) }
+
+    val createBackup = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip"),
+    ) { uri -> uri?.let { backupViewModel.export(it, chosenMode) } }
+
+    val pickBackup = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let { backupViewModel.inspect(it) } }
+
+    val backupFolder by backupViewModel.folder.collectAsStateWithLifecycle()
+    val backupFrequency by backupViewModel.frequency.collectAsStateWithLifecycle()
+    val lastBackupAt by backupViewModel.lastBackupAt.collectAsStateWithLifecycle()
+    var showFrequencyDialog by remember { mutableStateOf(false) }
+
+    val pickFolder = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri -> uri?.let { backupViewModel.setFolder(it) } }
 
     val biometricsAvailable = remember {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
@@ -190,6 +230,69 @@ fun SettingsScreen(
                 },
             )
 
+            SectionHeader(stringResource(R.string.settings_section_backup))
+
+            SettingActionRow(
+                icon = Icons.Rounded.Backup,
+                title = stringResource(R.string.backup_export),
+                subtitle = stringResource(R.string.backup_export_subtitle),
+                enabled = backupState !is BackupViewModel.State.Working,
+                onClick = { showBackupModeDialog = true },
+            )
+            SettingActionRow(
+                icon = Icons.Rounded.Restore,
+                title = stringResource(R.string.backup_restore),
+                subtitle = stringResource(R.string.backup_restore_subtitle),
+                enabled = backupState !is BackupViewModel.State.Working,
+                onClick = { pickBackup.launch(arrayOf("application/zip", "application/octet-stream")) },
+            )
+
+            SettingActionRow(
+                icon = Icons.Rounded.Folder,
+                title = stringResource(R.string.backup_folder),
+                subtitle = backupFolder?.let { Uri.decode(it.substringAfterLast('/')) }
+                    ?: stringResource(R.string.backup_folder_none),
+                enabled = true,
+                onClick = { pickFolder.launch(null) },
+            )
+            SettingActionRow(
+                icon = Icons.Rounded.Schedule,
+                title = stringResource(R.string.backup_schedule),
+                subtitle = stringResource(backupFrequency.labelRes()),
+                enabled = backupFolder != null,
+                onClick = { showFrequencyDialog = true },
+            )
+            Text(
+                text = if (backupFolder == null) {
+                    stringResource(R.string.backup_folder_hint)
+                } else {
+                    lastBackupAt?.let {
+                        stringResource(
+                            R.string.backup_last,
+                            DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(it)),
+                        )
+                    } ?: stringResource(R.string.backup_last_never)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            (backupState as? BackupViewModel.State.Working)?.let { working ->
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = stringResource(
+                            if (working.restoring) R.string.backup_working_restore
+                            else R.string.backup_working_export,
+                        ) + if (working.total > 0) "  ${working.done}/${working.total}" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
             Spacer(Modifier.height(32.dp))
 
             // Which build is installed — bumped with every update.
@@ -218,6 +321,240 @@ fun SettingsScreen(
             onPick = { theme -> viewModel.update { it.copy(theme = theme) } },
             onDismiss = { showThemeSheet = false },
         )
+    }
+
+    if (showBackupModeDialog) {
+        BackupModeDialog(
+            onDismiss = { showBackupModeDialog = false },
+            onPick = { mode ->
+                showBackupModeDialog = false
+                chosenMode = mode
+                createBackup.launch(backupViewModel.suggestedFileName())
+            },
+        )
+    }
+
+    pendingRestore?.let { pending ->
+        RestoreConfirmDialog(
+            manifest = pending.manifest,
+            onDismiss = { backupViewModel.cancelPending() },
+            onConfirm = { backupViewModel.confirmRestore() },
+        )
+    }
+
+    if (showFrequencyDialog) {
+        BackupFrequencyDialog(
+            current = backupFrequency,
+            onDismiss = { showFrequencyDialog = false },
+            onPick = {
+                showFrequencyDialog = false
+                backupViewModel.setFrequency(it)
+            },
+        )
+    }
+
+    BackupResultDialog(state = backupState, onDismiss = { backupViewModel.dismissResult() })
+}
+
+private fun BackupFrequency.labelRes(): Int = when (this) {
+    BackupFrequency.OFF -> R.string.backup_schedule_off
+    BackupFrequency.DAILY -> R.string.backup_schedule_daily
+    BackupFrequency.WEEKLY -> R.string.backup_schedule_weekly
+}
+
+@Composable
+private fun BackupFrequencyDialog(
+    current: BackupFrequency,
+    onDismiss: () -> Unit,
+    onPick: (BackupFrequency) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.backup_schedule_title)) },
+        text = {
+            Column {
+                BackupFrequency.entries.forEach { option ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { onPick(option) }
+                            .padding(vertical = 12.dp, horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = option == current, onClick = { onPick(option) })
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(option.labelRes()))
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(R.string.backup_keeps, BackupRepository.DEFAULT_KEEP),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.backup_cancel)) }
+        },
+    )
+}
+
+@Composable
+private fun BackupModeDialog(onDismiss: () -> Unit, onPick: (BackupMode) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.backup_mode_title)) },
+        text = {
+            Column {
+                BackupModeOption(
+                    title = stringResource(R.string.backup_mode_data),
+                    description = stringResource(R.string.backup_mode_data_desc),
+                    onClick = { onPick(BackupMode.DATA) },
+                )
+                Spacer(Modifier.height(8.dp))
+                BackupModeOption(
+                    title = stringResource(R.string.backup_mode_full),
+                    description = stringResource(R.string.backup_mode_full_desc),
+                    onClick = { onPick(BackupMode.FULL) },
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.backup_cancel)) }
+        },
+    )
+}
+
+@Composable
+private fun BackupModeOption(title: String, description: String, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun RestoreConfirmDialog(
+    manifest: BackupManifest,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val made = remember(manifest.createdAtMillis) {
+        DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(manifest.createdAtMillis))
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.backup_restore_title)) },
+        text = {
+            Column {
+                Text(
+                    stringResource(
+                        R.string.backup_restore_details,
+                        made,
+                        manifest.bookCount,
+                        manifest.quoteCount,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(
+                        if (manifest.mode == BackupMode.FULL) R.string.backup_restore_with_files
+                        else R.string.backup_restore_data_only,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    stringResource(R.string.backup_restore_warning),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text(stringResource(R.string.backup_restore_confirm)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.backup_cancel)) }
+        },
+    )
+}
+
+@Composable
+private fun BackupResultDialog(state: BackupViewModel.State, onDismiss: () -> Unit) {
+    val message = when (state) {
+        is BackupViewModel.State.ExportDone ->
+            stringResource(R.string.backup_export_done, state.books)
+        is BackupViewModel.State.RestoreDone -> if (state.booksWithoutFile > 0) {
+            stringResource(
+                R.string.backup_restore_done_missing,
+                state.books,
+                state.quotes,
+                state.booksWithoutFile,
+            )
+        } else {
+            stringResource(R.string.backup_restore_done, state.books, state.quotes)
+        }
+        is BackupViewModel.State.Failed -> stringResource(
+            if (state.restoring) R.string.backup_restore_failed else R.string.backup_failed,
+            state.message,
+        )
+        else -> return
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        text = { Text(message) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } },
+    )
+}
+
+@Composable
+private fun SettingActionRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+        )
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

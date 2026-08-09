@@ -36,7 +36,11 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -77,7 +81,10 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.core.graphics.drawable.toDrawable
+import androidx.activity.compose.LocalActivity
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -310,6 +317,27 @@ class MainActivity : ComponentActivity() {
                     NavTab.LIBRARY
                 }
 
+                // Give the system bars back the moment the reader stops being
+                // the destination — which is when the pop STARTS, not when the
+                // reader finally leaves composition a transition later.
+                //
+                // The reader reads in BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE,
+                // and under that behaviour a swipe from the screen edge asks
+                // the system for TRANSIENT bars, which Android draws with a
+                // dark scrim of its own. The back gesture is exactly such a
+                // swipe, so closing a book left a scrimmed status bar over the
+                // library until something put the window back in order. Doing
+                // it here is early enough that there is nothing to see.
+                val activity = LocalActivity.current
+                val inReader = destination?.hasRoute<ReaderRoute>() == true
+                LaunchedEffect(inReader) {
+                    if (inReader) return@LaunchedEffect
+                    val window = activity?.window ?: return@LaunchedEffect
+                    val controller = WindowCompat.getInsetsController(window, window.decorView)
+                    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+                    controller.show(WindowInsetsCompat.Type.systemBars())
+                }
+
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
                 var isImportingBook by remember { mutableStateOf(false) }
@@ -528,6 +556,7 @@ private const val SplashExitScale = 1.08f
  * bar out of view instead keeps the measured height, and the padding never
  * moves.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FrogNavigationBar(
     visible: Boolean,
@@ -547,6 +576,14 @@ private fun FrogNavigationBar(
     )
 
     NavigationBar(
+        // Same reason the library header uses the ignoring-visibility inset:
+        // the reader hides the system bars, so coming back from a book this
+        // measures while the navigation bar is still gone. The default inset
+        // reads 0, the bar is that much shorter, and it slides down into place
+        // as the system bar animates back. Reserving the space either way
+        // keeps it still.
+        windowInsets = WindowInsets.systemBarsIgnoringVisibility
+            .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
         modifier = Modifier
             .onSizeChanged { barHeight = it.height }
             .graphicsLayer { translationY = barHeight * hidden },
