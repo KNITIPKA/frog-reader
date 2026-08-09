@@ -22,11 +22,11 @@
     <string name="library_imported_many_partial">%1$d books added, %2$d couldn\'t be read</string>
 
     <!-- A book that is already in the library, compared side by side -->
-    <string name="dup_title_same_file">This book is already in your library</string>
-    <string name="dup_title_same_book">You may already have this book</string>
-    <string name="dup_title_no_file">This book is waiting for a file</string>
-    <string name="dup_message_same_file">The file you picked is exactly the one already saved.</string>
-    <string name="dup_message_same_book">The file you picked is different from the one already saved. Replacing keeps your quotes and rating; bookmarks are found again by their text, and your place in the book may shift by a page.</string>
+    <string name="dup_title_same_file">Already in your library</string>
+    <string name="dup_title_same_book">You may have this already</string>
+    <string name="dup_title_no_file">Waiting for a file</string>
+    <string name="dup_message_same_file">Exactly the file you already have, so replacing changes nothing.</string>
+    <string name="dup_message_same_book">A different file of what looks like the same book. Replacing keeps your quotes and rating; bookmarks are found again by their text, and your place may shift by a page.</string>
     <string name="dup_column_existing">In your library</string>
     <string name="dup_column_incoming">Adding</string>
     <string name="dup_progress">%1$d%% read</string>
