@@ -52,6 +52,16 @@ class StatsRepository(context: Context) {
             }
         }
     }
+
+    /** Swaps the whole history — what restoring a backup does. */
+    suspend fun replaceAll(replacement: ReadingStats) {
+        withContext(Dispatchers.IO) {
+            mutex.withLock {
+                _stats.value = replacement
+                store.write(replacement)
+            }
+        }
+    }
 }
 
 /**

@@ -11,6 +11,7 @@ import coil3.svg.SvgDecoder
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.StatsRepository
+import com.example.frogreader.data.backup.BackupRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -19,6 +20,9 @@ class FrogReaderApp : Application(), SingletonImageLoader.Factory {
     val bookRepository: BookRepository by lazy { BookRepository(this) }
     val settingsRepository: SettingsRepository by lazy { SettingsRepository(this) }
     val statsRepository: StatsRepository by lazy { StatsRepository(this) }
+    val backupRepository: BackupRepository by lazy {
+        BackupRepository(this, bookRepository, statsRepository, settingsRepository)
+    }
 
     @OptIn(ExperimentalFoundationApi::class)
     override fun onCreate() {

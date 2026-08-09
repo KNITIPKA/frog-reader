@@ -25,6 +25,7 @@ enum class PageMargins { NARROW, NORMAL, WIDE }
 enum class PageTurnAnimation { SLIDE, CASCADE, PAGE_CURL }
 
 /** One theme for the whole app (every screen and the reading surface). */
+@kotlinx.serialization.Serializable
 enum class AppTheme { WHITE, SEPIA, OLED }
 
 /** Library card grid or list view mode. */
@@ -71,6 +72,7 @@ data class ReaderSettings(
 )
 
 /** App-wide settings (theme, feedback, behavior, privacy). */
+@kotlinx.serialization.Serializable
 data class AppSettings(
     val theme: AppTheme = AppTheme.SEPIA,
     val haptics: Boolean = true,

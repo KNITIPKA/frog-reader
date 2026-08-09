@@ -469,6 +469,40 @@ open class BookRepository(private val context: Context? = null) {
         updateIndex { books -> listOf(book) + books.filterNot { it.id == book.id } }
     }
 
+    /** The book's own file, or null when it has none or the file is gone. */
+    internal fun bookFileFor(book: Book): File? =
+        book.fileName?.let { File(booksDir, it) }?.takeIf { it.exists() }
+
+    /**
+     * Swaps the entire library for [books] and [shelves].
+     *
+     * Restoring a backup is a replacement, not a merge, so book files that no
+     * longer belong to any record are swept: the user asked for the library to
+     * become this one, and leaving gigabytes of unreferenced files behind would
+     * make "restore" quietly mean "restore and also keep everything else".
+     */
+    internal suspend fun replaceAll(books: List<Book>, shelves: List<Shelf>) {
+        updateStored { before ->
+            split(books, before).copy(
+                index = LibraryIndex(books.map { it.toRecord() }, shelves),
+            )
+        }
+        withContext(Dispatchers.IO) {
+            val keptBooks = books.mapNotNullTo(HashSet()) { it.fileName }
+            val keptCovers = books.mapNotNullTo(HashSet()) { it.coverFileName }
+            val keptIds = books.mapTo(HashSet()) { it.id }
+            booksDir.listFiles()?.forEach { if (it.name !in keptBooks) it.delete() }
+            coversDir.listFiles()?.forEach { if (it.name !in keptCovers) it.delete() }
+            imagesDir.listFiles()?.forEach { if (it.isDirectory && it.name !in keptIds) it.deleteRecursively() }
+            context?.let { c ->
+                File(c.filesDir, "pagination").listFiles()?.forEach {
+                    if (it.nameWithoutExtension !in keptIds) it.delete()
+                }
+            }
+            releaseContentCache()
+        }
+    }
+
     /**
      * Binds a file to a book that did not have one, keeping everything the user
      * has already written about it.
