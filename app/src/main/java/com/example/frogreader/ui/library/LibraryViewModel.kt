@@ -8,8 +8,12 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.frogreader.FrogReaderApp
 import com.example.frogreader.data.BookRepository
+import com.example.frogreader.data.DuplicateMatch
+import com.example.frogreader.data.ImportMode
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.data.parser.mobi.MobiDrmException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -150,18 +154,47 @@ class LibraryViewModel(
             _importing.value = true
             runCatching { repository.importBook(uri) }
                 .onSuccess { _messages.send(LibraryMessage.Imported(it.title)) }
-                .onFailure { error ->
-                    _messages.send(
-                        if (error is com.example.frogreader.data.parser.mobi.MobiDrmException) {
-                            LibraryMessage.ImportFailedDrm
-                        } else {
-                            LibraryMessage.ImportFailed
-                        },
-                    )
-                }
+                .onFailure { error -> _messages.send(error.toMessage()) }
             _importing.value = false
         }
     }
+
+    /**
+     * "Open with Frog Reader" from a file manager: add the book if it is new,
+     * and hand back whichever book the reader should now open.
+     *
+     * A file the library already holds byte for byte opens the copy that is
+     * already there. Tapping the same download twice used to mint a second
+     * entry with its own reading position, silently — the one thing a reader
+     * never wants is to reopen their book at page one.
+     *
+     * Runs on the ViewModel's own scope rather than the caller's: the caller is
+     * a collector that MainActivity can cancel, and an import that is already
+     * copying a file should not be thrown away because of that.
+     */
+    suspend fun importFromIntent(uri: Uri): Result<Book> =
+        viewModelScope.async {
+            _importing.value = true
+            try {
+                runCatching {
+                    val staged = repository.stageImport(uri)
+                    val existing = staged.duplicateOf
+                        ?.takeIf { it.match == DuplicateMatch.SAME_FILE }
+                        ?.book
+                    if (existing != null) {
+                        repository.discardImport(staged)
+                        existing
+                    } else {
+                        repository.commitImport(staged, ImportMode.New)
+                    }
+                }
+            } finally {
+                _importing.value = false
+            }
+        }.await()
+
+    private fun Throwable.toMessage(): LibraryMessage =
+        if (this is MobiDrmException) LibraryMessage.ImportFailedDrm else LibraryMessage.ImportFailed
 
     fun deleteBook(book: Book) {
         coverCache.remove(book.id)

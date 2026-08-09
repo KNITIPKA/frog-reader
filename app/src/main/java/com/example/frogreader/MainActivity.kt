@@ -76,7 +76,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -96,7 +95,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.core.graphics.drawable.toDrawable
 import androidx.activity.compose.LocalActivity
@@ -106,6 +104,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavDestination
@@ -121,6 +120,7 @@ import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.parser.BookParsers
 import com.example.frogreader.ui.library.ImportBookSheet
 import com.example.frogreader.ui.library.LibraryScreen
+import com.example.frogreader.ui.library.LibraryViewModel
 import com.example.frogreader.ui.lock.LockScreen
 import com.example.frogreader.ui.lock.LockViewModel
 import com.example.frogreader.ui.nav.LibraryRoute
@@ -320,7 +320,6 @@ class MainActivity : ComponentActivity() {
         SharedTransitionLayout {
             CompositionLocalProvider(LocalSharedTransitionScope provides this) {
                 val navController = rememberNavController()
-                HandleIncomingIntents(navController)
 
                 val backStackEntry by navController.currentBackStackEntryAsState()
                 val destination = backStackEntry?.destination
@@ -356,9 +355,18 @@ class MainActivity : ComponentActivity() {
                     controller.show(WindowInsetsCompat.Type.systemBars())
                 }
 
-                val context = LocalContext.current
-                val scope = rememberCoroutineScope()
-                var isImportingBook by remember { mutableStateOf(false) }
+                // Hoisted to the activity on purpose. The add button and the
+                // import sheet live out here, OUTSIDE the NavHost, while the
+                // snackbar that reports what an import did lives inside the
+                // library screen. Left to `viewModel()` in each place, those are
+                // two different instances — which is exactly why the library's
+                // import messages have gone nowhere since the button started
+                // calling the repository directly. One instance, one channel.
+                val libraryViewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory)
+                val isImportingBook by libraryViewModel.importing.collectAsStateWithLifecycle()
+
+                HandleIncomingIntents(navController, libraryViewModel)
+
                 var showImportSheet by remember { mutableStateOf(false) }
                 var fabMenuExpanded by rememberSaveable { mutableStateOf(false) }
 
@@ -369,18 +377,9 @@ class MainActivity : ComponentActivity() {
                     if (!onLibrary) fabMenuExpanded = false
                 }
 
-                val importBook: (Uri) -> Unit = { uri ->
-                    val app = context.applicationContext as FrogReaderApp
-                    scope.launch {
-                        isImportingBook = true
-                        runCatching { app.bookRepository.importBook(uri) }
-                        isImportingBook = false
-                    }
-                }
-
                 val filePicker = rememberLauncherForActivityResult(
                     OpenSupportedBooksContract(),
-                ) { uri -> uri?.let(importBook) }
+                ) { uri -> libraryViewModel.importBook(uri) }
 
                 val onTabSelected: (NavTab) -> Unit = { tab ->
                     if (tab != selectedTab) {
@@ -455,6 +454,7 @@ class MainActivity : ComponentActivity() {
                         composable<LibraryRoute> {
                             CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
                                 LibraryScreen(
+                                    viewModel = libraryViewModel,
                                     contentPadding = innerPadding,
                                     onOpenBook = { book ->
                                         navController.navigate(ReaderRoute(book.id))
@@ -514,7 +514,7 @@ class MainActivity : ComponentActivity() {
                 if (showImportSheet) {
                     ImportBookSheet(
                         onDismiss = { showImportSheet = false },
-                        onImportUri = importBook,
+                        onImportUri = { uri -> libraryViewModel.importBook(uri) },
                         onOpenSystemPicker = {
                             if (!isImportingBook) filePicker.launch(BookParsers.SUPPORTED_MIME_TYPES)
                         },
@@ -526,7 +526,10 @@ class MainActivity : ComponentActivity() {
 
     /** Widget taps and "open with Frog Reader" from file managers. */
     @Composable
-    private fun HandleIncomingIntents(navController: NavHostController) {
+    private fun HandleIncomingIntents(
+        navController: NavHostController,
+        libraryViewModel: LibraryViewModel,
+    ) {
         // A single long-lived coroutine handles intents sequentially, so an
         // in-flight import is never cancelled by consuming the intent.
         LaunchedEffect(Unit) {
@@ -542,7 +545,12 @@ class MainActivity : ComponentActivity() {
                     }
 
                     incoming.action == Intent.ACTION_VIEW && incoming.data != null -> {
-                        runCatching { app.bookRepository.importBook(incoming.data!!) }
+                        // Toast, not the library's snackbar: the reader is about
+                        // to take the screen, so there is no snackbar host to
+                        // show one — and no room to ask a question either, which
+                        // is why the ViewModel resolves a duplicate here on its
+                        // own by opening the copy already in the library.
+                        libraryViewModel.importFromIntent(incoming.data!!)
                             .onSuccess { navController.navigate(ReaderRoute(it.id)) }
                             .onFailure { error ->
                                 Log.e("FrogReader", "Import from intent failed", error)
