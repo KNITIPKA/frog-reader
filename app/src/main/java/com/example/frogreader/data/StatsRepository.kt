@@ -23,10 +23,18 @@ data class ReadingStats(
 class StatsRepository(context: Context) {
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
-    private val statsFile = File(context.filesDir, "reading_stats.json")
     private val mutex = Mutex()
 
-    private val _stats = MutableStateFlow(read())
+    private val store = AtomicJsonFile(
+        file = File(context.filesDir, "reading_stats.json"),
+        json = json,
+        serializer = ReadingStats.serializer(),
+        // dailySeconds has a default, so any JSON object would decode into an
+        // empty history and then be written back over the real one.
+        looksValid = { it.contains("\"dailySeconds\"") },
+    )
+
+    private val _stats = MutableStateFlow(store.readOrDefault(ReadingStats()))
     val stats = _stats.asStateFlow()
 
     suspend fun addSeconds(date: LocalDate, seconds: Long) {
@@ -40,18 +48,10 @@ class StatsRepository(context: Context) {
                     },
                 )
                 _stats.value = updated
-                statsFile.writeText(json.encodeToString(updated))
+                store.write(updated)
             }
         }
     }
-
-    private fun read(): ReadingStats = runCatching {
-        if (statsFile.exists()) {
-            json.decodeFromString<ReadingStats>(statsFile.readText())
-        } else {
-            ReadingStats()
-        }
-    }.getOrDefault(ReadingStats())
 }
 
 /**

@@ -23,22 +23,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.util.UUID
 
 class LibraryIndexCorruptedException(
     message: String,
     cause: Throwable? = null,
-) : IOException(message, cause)
+) : JsonStoreCorruptedException(message, cause)
 
 /**
  * Owns the library: imported book files, extracted covers/images and the JSON
@@ -55,9 +49,19 @@ open class BookRepository(private val context: Context? = null) {
     private val indexLock = Any()
     @Volatile private var isIndexCorrupted = false
 
-    private val indexFile by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "library.json") }
-    private val bakFile by lazy { File(indexFile.parentFile ?: File("build/tmp/test_files"), "library.json.bak") }
-    private val tmpFile by lazy { File(indexFile.parentFile ?: File("build/tmp/test_files"), "library.json.tmp") }
+    private val indexStore by lazy {
+        AtomicJsonFile(
+            file = File(context?.filesDir ?: File("build/tmp/test_files"), "library.json"),
+            json = json,
+            serializer = LibraryIndex.serializer(),
+            // Sniff on "books" only. A file written before shelves existed has
+            // no "shelves" key, and requiring one here would reject every
+            // legacy library. Some sniff is essential: every field of
+            // LibraryIndex has a default, so an unrelated JSON object would
+            // otherwise decode into an empty library and then be written back.
+            looksValid = { it.contains("\"books\"") },
+        )
+    }
     private val booksDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "books") }
     private val coversDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "covers") }
     private val imagesDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "images") }
@@ -318,7 +322,7 @@ open class BookRepository(private val context: Context? = null) {
     open suspend fun cleanOrphanCaches() = withContext(Dispatchers.IO) {
         // A corrupt library.json reads as an empty list — don't wipe the
         // (regenerable, but expensive) caches on that failure mode.
-        if (isIndexCorrupted || (indexFile.exists() && _books.value.isEmpty())) return@withContext
+        if (isIndexCorrupted || (indexStore.file.exists() && _books.value.isEmpty())) return@withContext
         val ids = _books.value.mapTo(HashSet()) { it.id }
         imagesDir.listFiles()?.forEach { dir ->
             if (dir.isDirectory && dir.name !in ids) dir.deleteRecursively()
@@ -471,61 +475,24 @@ open class BookRepository(private val context: Context? = null) {
     /** Books only — the shape most callers (and the existing tests) want. */
     internal fun readIndex(): List<Book> = readSnapshot().books
 
-    /** Reads books AND shelves, with the same .bak recovery as before. */
+    /** Reads books AND shelves, recovering from library.json.bak as needed. */
     internal fun readSnapshot(): LibraryIndex = synchronized(indexLock) {
-        if (!indexFile.exists()) {
-            if (bakFile.exists()) {
-                val bakIndex = parseIndexFile(bakFile)
-                if (bakIndex != null) {
-                    runCatching { bakFile.copyTo(indexFile, overwrite = true) }
-                    isIndexCorrupted = false
-                    return@synchronized bakIndex
-                } else {
-                    isIndexCorrupted = true
-                    throw LibraryIndexCorruptedException("library.json is missing and library.json.bak is corrupted.")
-                }
-            } else {
-                isIndexCorrupted = false
-                return@synchronized LibraryIndex()
-            }
+        val stored = try {
+            indexStore.read()
+        } catch (e: JsonStoreCorruptedException) {
+            isIndexCorrupted = true
+            throw LibraryIndexCorruptedException(
+                e.message ?: "The library index is corrupted or unreadable.",
+                e,
+            )
         }
+        isIndexCorrupted = false
+        if (stored == null) return@synchronized LibraryIndex()
 
-        val mainIndex = parseIndexFile(indexFile)
-        if (mainIndex != null) {
-            isIndexCorrupted = false
-            return@synchronized mainIndex
-        }
-
-        if (bakFile.exists()) {
-            val bakIndex = parseIndexFile(bakFile)
-            if (bakIndex != null) {
-                runCatching { bakFile.copyTo(indexFile, overwrite = true) }
-                isIndexCorrupted = false
-                return@synchronized bakIndex
-            }
-        }
-
-        isIndexCorrupted = true
-        throw LibraryIndexCorruptedException("Both library.json and library.json.bak are corrupted or unreadable.")
-    }
-
-    private fun parseIndexFile(file: File): LibraryIndex? {
-        if (!file.exists() || file.length() == 0L) return null
-        return try {
-            val text = file.readText()
-            if (text.isBlank()) return null
-            // Sniff on "books" only. A file written before shelves existed has
-            // no "shelves" key, and requiring one here would reject every
-            // legacy library.
-            if (!text.contains("\"books\"")) return null
-            val index = json.decodeFromString<LibraryIndex>(text)
-            val books = index.books.sortedByDescending { it.sortTs }
-            // Sanitize in memory only — writing back here would run during the
-            // lazy first read, outside the corruption guards.
-            LibraryIndex(books, normalizeShelves(index.shelves, books))
-        } catch (e: Exception) {
-            null
-        }
+        val books = stored.books.sortedByDescending { it.sortTs }
+        // Sanitize in memory only — writing back here would run during the
+        // lazy first read, outside the corruption guards.
+        LibraryIndex(books, normalizeShelves(stored.shelves, books))
     }
 
     /**
@@ -579,33 +546,7 @@ open class BookRepository(private val context: Context? = null) {
                 _books.value = updated
                 _shelves.value = updatedShelves
 
-                val parentDir = indexFile.parentFile ?: File("build/tmp/test_files")
-                parentDir.mkdirs()
-
-                val jsonString = json.encodeToString(LibraryIndex(updated, updatedShelves))
-                FileOutputStream(tmpFile).use { fos ->
-                    fos.write(jsonString.toByteArray(Charsets.UTF_8))
-                    fos.flush()
-                    fos.fd.sync()
-                }
-
-                if (indexFile.exists() && indexFile.length() > 0) {
-                    indexFile.copyTo(bakFile, overwrite = true)
-                }
-
-                try {
-                    Files.move(
-                        tmpFile.toPath(),
-                        indexFile.toPath(),
-                        StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING
-                    )
-                } catch (e: Exception) {
-                    if (!tmpFile.renameTo(indexFile)) {
-                        tmpFile.copyTo(indexFile, overwrite = true)
-                        tmpFile.delete()
-                    }
-                }
+                indexStore.write(LibraryIndex(updated, updatedShelves))
             }
             // Keep the home-screen widget in sync with the library.
             runCatching { context?.let { ContinueReadingWidget().updateAll(it) } }
