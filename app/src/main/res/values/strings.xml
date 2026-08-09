@@ -7,6 +7,12 @@
     <string name="library_empty_subtitle">Add your first EPUB, FB2 or MOBI book and it will appear here.</string>
     <string name="library_add_book">Add book</string>
     <string name="library_importing">Adding…</string>
+    <!-- The two choices that rise above the plus button -->
+    <string name="fab_menu_open">Add books</string>
+    <string name="fab_menu_expanded">Expanded</string>
+    <string name="fab_menu_collapsed">Collapsed</string>
+    <string name="fab_add_book">Add a book</string>
+    <string name="fab_scan_folder">Scan a folder</string>
     <string name="library_imported">“%1$s” added to your library</string>
     <string name="library_import_failed">Couldn\'t add this book. It may be damaged or not an EPUB, FB2 or MOBI file.</string>
     <string name="library_import_failed_drm">This book is copy-protected (DRM) and can\'t be opened.</string>
