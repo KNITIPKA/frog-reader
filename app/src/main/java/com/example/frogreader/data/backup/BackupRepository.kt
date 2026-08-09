@@ -138,4 +138,8 @@ class BackupRepository(
     private fun appVersion(): String = runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName
     }.getOrNull() ?: ""
+
+    companion object {
+        const val DEFAULT_KEEP = DEFAULT_BACKUPS_KEPT
+    }
 }

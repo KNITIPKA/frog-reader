@@ -1,6 +1,12 @@
 package com.example.frogreader.ui.settings
 
 import android.net.Uri
+import android.content.Intent
+import com.example.frogreader.data.BackupFrequency
+import com.example.frogreader.data.backup.ScheduledBackupWorker
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.viewModelScope
@@ -52,7 +58,43 @@ class BackupViewModel(
     private val _pending = MutableStateFlow<Pending?>(null)
     val pending: StateFlow<Pending?> = _pending.asStateFlow()
 
+    val folder: StateFlow<String?> = app.settingsRepository.backupFolder
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val frequency: StateFlow<BackupFrequency> = app.settingsRepository.backupFrequency
+        .stateIn(viewModelScope, SharingStarted.Eagerly, BackupFrequency.OFF)
+
+    val lastBackupAt: StateFlow<Long?> = app.settingsRepository.lastBackupAt
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     fun suggestedFileName(): String = backups.suggestedFileName()
+
+    /**
+     * Remembers the folder scheduled backups go to.
+     *
+     * The permission has to be taken persistably here: without it the grant
+     * dies with the process, and the job would start failing silently at some
+     * point after the user stopped watching.
+     */
+    fun setFolder(uri: Uri) {
+        runCatching {
+            app.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        viewModelScope.launch {
+            app.settingsRepository.setBackupFolder(uri.toString())
+            ScheduledBackupWorker.apply(app, app.settingsRepository.backupFrequency.first())
+        }
+    }
+
+    fun setFrequency(value: BackupFrequency) {
+        viewModelScope.launch {
+            app.settingsRepository.setBackupFrequency(value)
+            ScheduledBackupWorker.apply(app, value)
+        }
+    }
 
     fun export(uri: Uri, mode: BackupMode) {
         _state.value = State.Working(restoring = false, done = 0, total = 0)

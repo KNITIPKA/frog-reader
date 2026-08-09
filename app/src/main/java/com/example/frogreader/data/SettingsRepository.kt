@@ -28,6 +28,10 @@ enum class PageTurnAnimation { SLIDE, CASCADE, PAGE_CURL }
 @kotlinx.serialization.Serializable
 enum class AppTheme { WHITE, SEPIA, OLED }
 
+/** How often the app writes a backup by itself. */
+@kotlinx.serialization.Serializable
+enum class BackupFrequency { OFF, DAILY, WEEKLY }
+
 /** Library card grid or list view mode. */
 @kotlinx.serialization.Serializable
 enum class LibraryViewMode { GRID, LIST }
@@ -118,6 +122,35 @@ class SettingsRepository(private val context: Context) {
         val dailyGoal = androidx.datastore.preferences.core.intPreferencesKey("daily_goal_minutes")
         val libraryViewMode = stringPreferencesKey("library_view_mode")
         val deviceId = stringPreferencesKey("device_id")
+        val backupFolder = stringPreferencesKey("backup_folder_uri")
+        val backupFrequency = stringPreferencesKey("backup_frequency")
+        val lastBackupAt = androidx.datastore.preferences.core.longPreferencesKey("last_backup_at")
+    }
+
+    /** The tree Uri of the folder scheduled backups are written to. */
+    val backupFolder: Flow<String?> =
+        context.settingsDataStore.data.map { it[Keys.backupFolder] }
+
+    val backupFrequency: Flow<BackupFrequency> =
+        context.settingsDataStore.data.map {
+            enumOrDefault(it[Keys.backupFrequency], BackupFrequency.OFF)
+        }
+
+    val lastBackupAt: Flow<Long?> =
+        context.settingsDataStore.data.map { it[Keys.lastBackupAt] }
+
+    suspend fun setBackupFolder(uri: String?) {
+        context.settingsDataStore.edit { prefs ->
+            uri?.let { prefs[Keys.backupFolder] = it } ?: prefs.remove(Keys.backupFolder)
+        }
+    }
+
+    suspend fun setBackupFrequency(frequency: BackupFrequency) {
+        context.settingsDataStore.edit { it[Keys.backupFrequency] = frequency.name }
+    }
+
+    suspend fun recordBackupAt(millis: Long) {
+        context.settingsDataStore.edit { it[Keys.lastBackupAt] = millis }
     }
 
     /**

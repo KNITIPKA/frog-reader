@@ -63,6 +63,12 @@ import com.example.frogreader.data.model.BackupManifest
 import com.example.frogreader.data.model.BackupMode
 import java.text.DateFormat
 import java.util.Date
+import android.net.Uri
+import androidx.compose.material3.RadioButton
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Schedule
+import com.example.frogreader.data.BackupFrequency
+import com.example.frogreader.data.backup.BackupRepository
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -88,6 +94,15 @@ fun SettingsScreen(
     val pickBackup = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let { backupViewModel.inspect(it) } }
+
+    val backupFolder by backupViewModel.folder.collectAsStateWithLifecycle()
+    val backupFrequency by backupViewModel.frequency.collectAsStateWithLifecycle()
+    val lastBackupAt by backupViewModel.lastBackupAt.collectAsStateWithLifecycle()
+    var showFrequencyDialog by remember { mutableStateOf(false) }
+
+    val pickFolder = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri -> uri?.let { backupViewModel.setFolder(it) } }
 
     val biometricsAvailable = remember {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
@@ -232,6 +247,36 @@ fun SettingsScreen(
                 onClick = { pickBackup.launch(arrayOf("application/zip", "application/octet-stream")) },
             )
 
+            SettingActionRow(
+                icon = Icons.Rounded.Folder,
+                title = stringResource(R.string.backup_folder),
+                subtitle = backupFolder?.let { Uri.decode(it.substringAfterLast('/')) }
+                    ?: stringResource(R.string.backup_folder_none),
+                enabled = true,
+                onClick = { pickFolder.launch(null) },
+            )
+            SettingActionRow(
+                icon = Icons.Rounded.Schedule,
+                title = stringResource(R.string.backup_schedule),
+                subtitle = stringResource(backupFrequency.labelRes()),
+                enabled = backupFolder != null,
+                onClick = { showFrequencyDialog = true },
+            )
+            Text(
+                text = if (backupFolder == null) {
+                    stringResource(R.string.backup_folder_hint)
+                } else {
+                    lastBackupAt?.let {
+                        stringResource(
+                            R.string.backup_last,
+                            DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(it)),
+                        )
+                    } ?: stringResource(R.string.backup_last_never)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
             (backupState as? BackupViewModel.State.Working)?.let { working ->
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -297,7 +342,64 @@ fun SettingsScreen(
         )
     }
 
+    if (showFrequencyDialog) {
+        BackupFrequencyDialog(
+            current = backupFrequency,
+            onDismiss = { showFrequencyDialog = false },
+            onPick = {
+                showFrequencyDialog = false
+                backupViewModel.setFrequency(it)
+            },
+        )
+    }
+
     BackupResultDialog(state = backupState, onDismiss = { backupViewModel.dismissResult() })
+}
+
+private fun BackupFrequency.labelRes(): Int = when (this) {
+    BackupFrequency.OFF -> R.string.backup_schedule_off
+    BackupFrequency.DAILY -> R.string.backup_schedule_daily
+    BackupFrequency.WEEKLY -> R.string.backup_schedule_weekly
+}
+
+@Composable
+private fun BackupFrequencyDialog(
+    current: BackupFrequency,
+    onDismiss: () -> Unit,
+    onPick: (BackupFrequency) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.backup_schedule_title)) },
+        text = {
+            Column {
+                BackupFrequency.entries.forEach { option ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { onPick(option) }
+                            .padding(vertical = 12.dp, horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = option == current, onClick = { onPick(option) })
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(option.labelRes()))
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    stringResource(R.string.backup_keeps, BackupRepository.DEFAULT_KEEP),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.backup_cancel)) }
+        },
+    )
 }
 
 @Composable

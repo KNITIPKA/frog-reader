@@ -77,6 +77,8 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.glance.appwidget)
+    implementation(libs.androidx.work.runtime)
+    implementation(libs.androidx.documentfile)
 
     testImplementation(libs.junit)
     // Real XML pull parser for JVM unit tests (Android provides its own at runtime).

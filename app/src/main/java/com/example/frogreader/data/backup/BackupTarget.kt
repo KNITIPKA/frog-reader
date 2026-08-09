@@ -41,6 +41,27 @@ interface BackupTarget {
     suspend fun delete(ref: BackupRef)
 }
 
+/** How many backups a folder keeps before the oldest is dropped. */
+const val DEFAULT_BACKUPS_KEPT = 5
+
+/**
+ * Keeps the [keep] newest backups here and deletes the rest.
+ *
+ * Without this a daily schedule fills the folder forever. With it, the folder
+ * holds a short history rather than a single file — which matters more than it
+ * sounds: the failure one rotating backup cannot survive is not a crash, it is
+ * noticing a week later that something had been going wrong all along.
+ *
+ * Failures are swallowed on purpose. Tidying up is not worth failing a backup
+ * that has already been written successfully.
+ */
+suspend fun BackupTarget.rotate(keep: Int = DEFAULT_BACKUPS_KEPT) {
+    runCatching { list() }
+        .getOrDefault(emptyList())
+        .drop(keep.coerceAtLeast(1))
+        .forEach { runCatching { delete(it) } }
+}
+
 /**
  * A single document the user picked through the system file picker.
  *
