@@ -281,6 +281,7 @@
     <!-- Scanning a folder for books -->
     <string name="import_author_unknown">Author unknown</string>
     <string name="scan_title">Looking for books…</string>
+    <string name="scan_folder_fallback">Selected folder</string>
     <string name="scan_looking">%1$d found so far…</string>
     <string name="scan_found">%1$d books · %2$d already in your library</string>
     <string name="scan_search_placeholder">Search title, author or file…</string>

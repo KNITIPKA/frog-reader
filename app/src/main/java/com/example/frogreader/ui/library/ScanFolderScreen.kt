@@ -119,7 +119,7 @@ fun ScanFolderScreen(
                         Column {
                             Text(
                                 text = FolderScanner.folderName(treeUri)
-                                    ?: stringResource(R.string.scan_title),
+                                    ?: stringResource(R.string.scan_folder_fallback),
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
