@@ -35,8 +35,8 @@ data class BookRecord(
     val title: String,
     val author: String? = null,
     val format: BookFormat,
-    /** File name inside the app's private books directory. */
-    val fileName: String,
+    /** File name inside the app's private books directory; null = no file yet. */
+    val fileName: String? = null,
     /** File name inside the app's private covers directory, if the book has a cover. */
     val coverFileName: String? = null,
     val addedAtMillis: Long,
@@ -50,27 +50,43 @@ data class BookRecord(
     val translators: List<String> = emptyList(),
     val description: String? = null,
     val language: String? = null,
-)
+    override val updatedAtMillis: Long = 0L,
+) : Timestamped<BookRecord> {
+    override fun withUpdatedAt(millis: Long) = copy(updatedAtMillis = millis)
+}
 
-/** What the user made: quotes, bookmarks, and their own choices about a book. */
+/**
+ * What the user decided about a book.
+ *
+ * Quotes and bookmarks are deliberately NOT here — they live in their own flat
+ * maps on [UserDataStore], keyed by their own ids. Merging two devices means
+ * merging by key; merging two nested lists means guessing.
+ */
 @Serializable
 data class UserBookData(
-    val bookmarks: List<Bookmark> = emptyList(),
-    val quotes: List<Quote> = emptyList(),
     /** When the book was first opened for reading. */
     val startedAtMillis: Long? = null,
     /** When the reader reached the end of the book. */
     val finishedAtMillis: Long? = null,
+    val status: ReadingStatus = ReadingStatus.NONE,
+    /** 1..5, or null when the book has not been rated. */
+    val rating: Int? = null,
+    val review: String? = null,
+    val reviewUpdatedAtMillis: Long? = null,
     /**
      * This book's own reading settings (font, size, margins, mode…).
      * Null = the book still follows the app-wide "last used" settings.
      */
     val readerSettings: com.example.frogreader.data.ReaderSettings? = null,
-) {
+    override val updatedAtMillis: Long = 0L,
+) : Timestamped<UserBookData> {
+    override fun withUpdatedAt(millis: Long) = copy(updatedAtMillis = millis)
+
     /** True when there is nothing here worth a line in userdata.json. */
     val isEmpty: Boolean
-        get() = bookmarks.isEmpty() && quotes.isEmpty() &&
-            startedAtMillis == null && finishedAtMillis == null && readerSettings == null
+        get() = startedAtMillis == null && finishedAtMillis == null &&
+            status == ReadingStatus.NONE && rating == null && review == null &&
+            readerSettings == null
 }
 
 /** Where the reading got to. The one part that is written constantly. */
@@ -80,7 +96,10 @@ data class BookProgress(
     val lastOpenedAtMillis: Long? = null,
     /** Total time spent reading this book, in seconds. */
     val readingSeconds: Long = 0,
-) {
+    override val updatedAtMillis: Long = 0L,
+) : Timestamped<BookProgress> {
+    override fun withUpdatedAt(millis: Long) = copy(updatedAtMillis = millis)
+
     val isEmpty: Boolean
         get() = position == ReadingProgress() && lastOpenedAtMillis == null && readingSeconds == 0L
 }
@@ -106,6 +125,20 @@ data class LibraryIndex(
 @Serializable
 data class UserDataStore(
     val userData: Map<String, UserBookData> = emptyMap(),
+    /** Keyed by quote id, not by book id. */
+    val quotes: Map<String, Quote> = emptyMap(),
+    /** Keyed by bookmark id. */
+    val bookmarks: Map<String, Bookmark> = emptyMap(),
+    /**
+     * Ids of books, quotes and bookmarks the user deleted, and when.
+     *
+     * Unused today; unrecoverable if not recorded from the start. Merging two
+     * devices without it means a book deleted on one comes back from the other,
+     * every time, because "absent here, present there" reads as "new there".
+     * There is no way to reconstruct this after the fact — the record of a
+     * deletion is precisely what a deletion destroys.
+     */
+    val deletedIds: Map<String, Long> = emptyMap(),
 )
 
 @Serializable
@@ -116,7 +149,12 @@ data class ProgressStore(
 // ------------------------------------------------------------ split and merge
 
 /** Assembles the whole [Book] that everything above the repository sees. */
-fun BookRecord.withUserData(user: UserBookData?, prog: BookProgress?): Book = Book(
+fun BookRecord.withUserData(
+    user: UserBookData?,
+    prog: BookProgress?,
+    quotes: List<Quote> = emptyList(),
+    bookmarks: List<Bookmark> = emptyList(),
+): Book = Book(
     id = id,
     title = title,
     author = author,
@@ -126,11 +164,15 @@ fun BookRecord.withUserData(user: UserBookData?, prog: BookProgress?): Book = Bo
     addedAtMillis = addedAtMillis,
     lastOpenedAtMillis = prog?.lastOpenedAtMillis,
     progress = prog?.position ?: ReadingProgress(),
-    bookmarks = user?.bookmarks ?: emptyList(),
-    quotes = user?.quotes ?: emptyList(),
+    bookmarks = bookmarks,
+    quotes = quotes,
     startedAtMillis = user?.startedAtMillis,
     finishedAtMillis = user?.finishedAtMillis,
     readingSeconds = prog?.readingSeconds ?: 0L,
+    status = user?.status ?: ReadingStatus.NONE,
+    rating = user?.rating,
+    review = user?.review,
+    reviewUpdatedAtMillis = user?.reviewUpdatedAtMillis,
     readerSettings = user?.readerSettings,
     genres = genres,
     series = series,
@@ -163,12 +205,14 @@ fun Book.toRecord(): BookRecord = BookRecord(
     language = language,
 )
 
-/** The user-authored half of a [Book], for `userdata.json`. */
+/** The decisions half of a [Book], for `userdata.json`. */
 fun Book.toUserData(): UserBookData = UserBookData(
-    bookmarks = bookmarks,
-    quotes = quotes,
     startedAtMillis = startedAtMillis,
     finishedAtMillis = finishedAtMillis,
+    status = status,
+    rating = rating,
+    review = review,
+    reviewUpdatedAtMillis = reviewUpdatedAtMillis,
     readerSettings = readerSettings,
 )
 

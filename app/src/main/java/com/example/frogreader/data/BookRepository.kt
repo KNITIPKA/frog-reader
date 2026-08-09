@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookContent
+import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.BookProgress
 import com.example.frogreader.data.model.BookRecord
 import com.example.frogreader.data.model.Bookmark
@@ -12,7 +13,9 @@ import com.example.frogreader.data.model.LibraryIndex
 import com.example.frogreader.data.model.ProgressStore
 import com.example.frogreader.data.model.Quote
 import com.example.frogreader.data.model.ReadingProgress
+import com.example.frogreader.data.model.ReadingStatus
 import com.example.frogreader.data.model.Shelf
+import com.example.frogreader.data.model.Timestamped
 import com.example.frogreader.data.model.UserBookData
 import com.example.frogreader.data.model.UserDataStore
 import com.example.frogreader.data.model.sortTs
@@ -42,6 +45,9 @@ class LibraryIndexCorruptedException(
     message: String,
     cause: Throwable? = null,
 ) : JsonStoreCorruptedException(message, cause)
+
+/** How long a deletion is remembered; see [UserDataStore.deletedIds]. */
+private const val TOMBSTONE_LIFETIME_MILLIS = 365L * 24 * 60 * 60 * 1000
 
 /**
  * Owns the library: imported book files, extracted covers/images and the JSON
@@ -140,10 +146,22 @@ open class BookRepository(private val context: Context? = null) {
     open val shelves: StateFlow<List<Shelf>> get() = _shelves.asStateFlow()
 
     /** Puts the three documents back together into the [Book]s callers expect. */
-    private fun mergeBooks(from: Stored): List<Book> =
-        from.index.books
-            .map { it.withUserData(from.user.userData[it.id], from.progress.progress[it.id]) }
+    private fun mergeBooks(from: Stored): List<Book> {
+        // Grouped once rather than filtered per book: with a few thousand
+        // quotes, per-book filtering would make every write quadratic.
+        val quotesByBook = from.user.quotes.values.groupBy { it.bookId }
+        val bookmarksByBook = from.user.bookmarks.values.groupBy { it.bookId }
+        return from.index.books
+            .map { record ->
+                record.withUserData(
+                    user = from.user.userData[record.id],
+                    prog = from.progress.progress[record.id],
+                    quotes = quotesByBook[record.id]?.sortedBy { it.createdAtMillis } ?: emptyList(),
+                    bookmarks = bookmarksByBook[record.id]?.sortedBy { it.flatIndex } ?: emptyList(),
+                )
+            }
             .sortedByDescending { it.sortTs }
+    }
 
     open fun coverFileFor(book: Book): File? =
         book.coverFileName?.let { File(coversDir, it) }?.takeIf { it.exists() }
@@ -205,7 +223,7 @@ open class BookRepository(private val context: Context? = null) {
         val book = _books.value.firstOrNull { it.id == bookId } ?: return@withContext
         if (cachedContentId == bookId) releaseContentCache()
         updateIndex { books -> books.filterNot { it.id == bookId } }
-        File(booksDir, book.fileName).delete()
+        book.fileName?.let { File(booksDir, it).delete() }
         book.coverFileName?.let { File(coversDir, it).delete() }
         File(imagesDir, book.id).deleteRecursively()
         val c = context
@@ -259,7 +277,8 @@ open class BookRepository(private val context: Context? = null) {
     }
 
     private fun parseAndCache(book: Book): BookContent {
-        val file = File(booksDir, book.fileName)
+        val name = book.fileName ?: throw IOException("This book has no file attached yet")
+        val file = File(booksDir, name)
         if (!file.exists()) throw IOException("Book file is missing")
         val content = BookParsers.parseContent(file, book.format, File(imagesDir, book.id))
         synchronized(contentLock) {
@@ -319,6 +338,13 @@ open class BookRepository(private val context: Context? = null) {
                     book.copy(
                         startedAtMillis = book.startedAtMillis ?: now,
                         lastOpenedAtMillis = now,
+                        // Opening a book is what moves it off the want-to-read
+                        // list. A book already finished or abandoned keeps that
+                        // status until the user says otherwise.
+                        status = when (book.status) {
+                            ReadingStatus.NONE, ReadingStatus.WANT_TO_READ -> ReadingStatus.READING
+                            else -> book.status
+                        },
                     )
                 } else {
                     book
@@ -332,7 +358,10 @@ open class BookRepository(private val context: Context? = null) {
         updateIndex { books ->
             books.map { book ->
                 if (book.id == bookId && book.finishedAtMillis == null) {
-                    book.copy(finishedAtMillis = System.currentTimeMillis())
+                    book.copy(
+                        finishedAtMillis = System.currentTimeMillis(),
+                        status = ReadingStatus.FINISHED,
+                    )
                 } else {
                     book
                 }
@@ -369,6 +398,135 @@ open class BookRepository(private val context: Context? = null) {
                     book
                 }
             }
+        }
+    }
+
+    /** Moves a book between the reading lists. */
+    open suspend fun setStatus(bookId: String, status: ReadingStatus) {
+        updateIndex { books ->
+            books.map { if (it.id == bookId) it.copy(status = status) else it }
+        }
+    }
+
+    /** [stars] is 1..5, or null to clear the rating. */
+    open suspend fun setRating(bookId: String, stars: Int?) {
+        val clamped = stars?.coerceIn(1, 5)
+        updateIndex { books ->
+            books.map { if (it.id == bookId) it.copy(rating = clamped) else it }
+        }
+    }
+
+    open suspend fun setReview(bookId: String, review: String?) {
+        val text = review?.takeIf { it.isNotBlank() }
+        updateIndex { books ->
+            books.map { book ->
+                if (book.id != bookId) return@map book
+                if (book.review == text) return@map book
+                book.copy(review = text, reviewUpdatedAtMillis = System.currentTimeMillis())
+            }
+        }
+    }
+
+    /** The user's own note about a saved quote. */
+    open suspend fun setQuoteNote(bookId: String, quoteId: String, note: String?) {
+        val text = note?.takeIf { it.isNotBlank() }
+        updateIndex { books ->
+            books.map { book ->
+                if (book.id != bookId) return@map book
+                book.copy(
+                    quotes = book.quotes.map { if (it.id == quoteId) it.copy(note = text) else it },
+                )
+            }
+        }
+    }
+
+    /**
+     * Adds a book the user wants to read but has no file for.
+     *
+     * The same shape as a book restored from a data-only backup: a real record
+     * with no [Book.fileName], which [attachFile] can later fill in without
+     * disturbing anything written about it in the meantime.
+     */
+    open suspend fun addWishlistBook(title: String, author: String? = null): Book {
+        val book = Book(
+            id = UUID.randomUUID().toString(),
+            title = title.trim().ifBlank { "Untitled" },
+            author = author?.takeIf { it.isNotBlank() },
+            format = BookFormat.EPUB,
+            fileName = null,
+            addedAtMillis = System.currentTimeMillis(),
+            status = ReadingStatus.WANT_TO_READ,
+        )
+        updateIndex { listOf(book) + it }
+        return book
+    }
+
+    /**
+     * Puts a whole book into the library exactly as given, replacing any record
+     * with the same id. What restoring a backup is made of.
+     */
+    internal suspend fun addBookForRestore(book: Book) {
+        updateIndex { books -> listOf(book) + books.filterNot { it.id == book.id } }
+    }
+
+    /**
+     * Binds a file to a book that did not have one, keeping everything the user
+     * has already written about it.
+     *
+     * Deliberately not importBook: that mints a new id, which would strand the
+     * quotes, the rating and the reading position on the old record.
+     */
+    open suspend fun attachFile(bookId: String, uri: Uri): Book = withContext(Dispatchers.IO) {
+        val c = context ?: throw IOException("Cannot open the selected file")
+        val existing = bookById(bookId) ?: throw IOException("No such book")
+        if (existing.fileName != null) throw IOException("This book already has a file")
+
+        val temp = File.createTempFile("attach-", null, c.cacheDir)
+        try {
+            c.contentResolver.openInputStream(uri)?.use { input ->
+                temp.outputStream().use { input.copyTo(it) }
+            } ?: throw IOException("Cannot open the selected file")
+
+            val (format, stored) = BookParsers.detectAndStore(temp, booksDir, bookId)
+            try {
+                val metadata = BookParsers.parseMetadata(stored, format)
+                val coverFileName = existing.coverFileName ?: metadata.coverBytes?.let { bytes ->
+                    coversDir.mkdirs()
+                    val name = "$bookId.img"
+                    File(coversDir, name).writeBytes(bytes)
+                    name
+                }
+                updateIndex { books ->
+                    books.map { book ->
+                        if (book.id != bookId) return@map book
+                        book.copy(
+                            // What the user typed wins over what the file says:
+                            // they named this book before it had one.
+                            title = book.title,
+                            author = book.author ?: metadata.authors.takeIf { it.isNotEmpty() }
+                                ?.joinToString(", ") ?: metadata.author,
+                            format = format,
+                            fileName = stored.name,
+                            coverFileName = coverFileName,
+                            genres = book.genres.ifEmpty { metadata.genres },
+                            series = book.series ?: metadata.series,
+                            seriesNumber = book.seriesNumber ?: metadata.seriesNumber,
+                            publisher = book.publisher ?: metadata.publisher,
+                            year = book.year ?: metadata.year,
+                            isbn = book.isbn ?: metadata.isbn,
+                            translators = book.translators.ifEmpty { metadata.translators },
+                            description = book.description ?: metadata.description,
+                            language = book.language ?: metadata.language,
+                        )
+                    }
+                }
+                bookById(bookId) ?: existing
+            } catch (e: Exception) {
+                stored.delete()
+                throw e
+            }
+        } finally {
+            temp.delete()
         }
     }
 
@@ -605,17 +763,87 @@ open class BookRepository(private val context: Context? = null) {
     private fun split(books: List<Book>, before: Stored): Stored {
         val user = LinkedHashMap<String, UserBookData>(books.size)
         val progress = LinkedHashMap<String, BookProgress>(books.size)
+        val quotes = LinkedHashMap<String, Quote>()
+        val bookmarks = LinkedHashMap<String, Bookmark>()
         books.forEach { book ->
             // Books with nothing to say are left out entirely, which keeps both
             // documents small and makes deletion cascade for free: a book that
             // is no longer in the list cannot leave a key behind.
             book.toUserData().takeIf { !it.isEmpty }?.let { user[book.id] = it }
             book.toProgress().takeIf { !it.isEmpty }?.let { progress[book.id] = it }
+            // Callers build quotes and bookmarks without knowing which book they
+            // will end up on, so the owning id is stamped here rather than being
+            // one more thing every call site has to remember.
+            book.quotes.forEach { quotes[it.id] = it.copy(bookId = book.id) }
+            book.bookmarks.forEach { bookmarks[it.id] = it.copy(bookId = book.id) }
         }
         return before.copy(
             index = before.index.copy(books = books.map { it.toRecord() }),
-            user = UserDataStore(user),
+            user = before.user.copy(
+                userData = user,
+                quotes = quotes,
+                bookmarks = bookmarks,
+            ),
             progress = ProgressStore(progress),
+        )
+    }
+
+    /**
+     * Stamps every record that actually changed, and records a tombstone for
+     * every one that disappeared.
+     *
+     * Both are derived by comparing before and after rather than being left to
+     * each caller, for the same reason the write routing is: a caller that
+     * forgets to stamp produces a record that silently loses the next merge,
+     * and a caller that forgets a tombstone produces a deletion that silently
+     * comes back. Neither failure is visible until a sync exists to expose it.
+     *
+     * Nothing reads any of this yet — see [UserDataStore.deletedIds].
+     */
+    private fun restamp(after: Stored, before: Stored, now: Long): Stored {
+        fun <T : Timestamped<T>> stamp(fresh: T, old: T?): T =
+            if (old != null && fresh.withUpdatedAt(0L) == old.withUpdatedAt(0L)) {
+                fresh.withUpdatedAt(old.updatedAtMillis)
+            } else {
+                fresh.withUpdatedAt(now)
+            }
+
+        val oldRecords = before.index.books.associateBy { it.id }
+        val oldShelves = before.index.shelves.associateBy { it.id }
+
+        val tombstones = LinkedHashMap(before.user.deletedIds)
+        fun buryMissing(oldKeys: Set<String>, newKeys: Set<String>) {
+            (oldKeys - newKeys).forEach { tombstones[it] = now }
+        }
+        buryMissing(oldRecords.keys, after.index.books.mapTo(HashSet()) { it.id })
+        buryMissing(before.user.quotes.keys, after.user.quotes.keys)
+        buryMissing(before.user.bookmarks.keys, after.user.bookmarks.keys)
+        buryMissing(oldShelves.keys, after.index.shelves.mapTo(HashSet()) { it.id })
+        // An id that came back is no longer deleted. Restoring a backup over a
+        // library that once held the same book is exactly this case.
+        val alive = after.index.books.map { it.id } + after.user.quotes.keys +
+            after.user.bookmarks.keys + after.index.shelves.map { it.id }
+        alive.forEach { tombstones.remove(it) }
+        // Bound the growth. A device offline for longer than this could
+        // resurrect a book it never heard was deleted; a year is far outside
+        // the gap between two phones in daily use.
+        val horizon = now - TOMBSTONE_LIFETIME_MILLIS
+        tombstones.entries.removeAll { it.value < horizon }
+
+        return after.copy(
+            index = LibraryIndex(
+                books = after.index.books.map { stamp(it, oldRecords[it.id]) },
+                shelves = after.index.shelves.map { stamp(it, oldShelves[it.id]) },
+            ),
+            user = after.user.copy(
+                userData = after.user.userData.mapValues { (id, v) -> stamp(v, before.user.userData[id]) },
+                quotes = after.user.quotes.mapValues { (id, v) -> stamp(v, before.user.quotes[id]) },
+                bookmarks = after.user.bookmarks.mapValues { (id, v) -> stamp(v, before.user.bookmarks[id]) },
+                deletedIds = tombstones,
+            ),
+            progress = ProgressStore(
+                after.progress.progress.mapValues { (id, v) -> stamp(v, before.progress.progress[id]) },
+            ),
         )
     }
 
@@ -649,8 +877,10 @@ open class BookRepository(private val context: Context? = null) {
                 // reads sort anyway — but a file meant to be readable by hand
                 // should not shuffle itself on every write.
                 val merged = mergeBooks(out.copy(index = out.index.copy(shelves = shelves)))
-                val after = out.copy(
-                    index = LibraryIndex(merged.map { it.toRecord() }, shelves),
+                val after = restamp(
+                    after = out.copy(index = LibraryIndex(merged.map { it.toRecord() }, shelves)),
+                    before = before,
+                    now = System.currentTimeMillis(),
                 )
 
                 mutableStored = after

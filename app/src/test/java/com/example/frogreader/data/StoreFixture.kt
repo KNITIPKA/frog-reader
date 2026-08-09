@@ -4,6 +4,7 @@ import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookProgress
 import com.example.frogreader.data.model.LibraryIndex
 import com.example.frogreader.data.model.ProgressStore
+import com.example.frogreader.data.model.Quote
 import com.example.frogreader.data.model.Shelf
 import com.example.frogreader.data.model.UserBookData
 import com.example.frogreader.data.model.UserDataStore
@@ -37,7 +38,11 @@ object StoreFixture {
     fun indexOf(vararg books: Book): LibraryIndex = indexOf(books.toList())
 
     fun userDataOf(books: List<Book>): UserDataStore = UserDataStore(
-        books.mapNotNull { b -> b.toUserData().takeIf { !it.isEmpty }?.let { b.id to it } }.toMap(),
+        userData = books.mapNotNull { b ->
+            b.toUserData().takeIf { !it.isEmpty }?.let { b.id to it }
+        }.toMap(),
+        quotes = books.flatMap { b -> b.quotes.map { it.id to it.copy(bookId = b.id) } }.toMap(),
+        bookmarks = books.flatMap { b -> b.bookmarks.map { it.id to it.copy(bookId = b.id) } }.toMap(),
     )
 
     fun progressOf(books: List<Book>): ProgressStore = ProgressStore(
@@ -50,7 +55,7 @@ object StoreFixture {
         File(dir, "library.json").writeText(json.encodeToString(indexOf(books, shelves)))
 
         val user = userDataOf(books)
-        if (user.userData.isNotEmpty()) {
+        if (user.userData.isNotEmpty() || user.quotes.isNotEmpty() || user.bookmarks.isNotEmpty()) {
             File(dir, "userdata.json").writeText(json.encodeToString(user))
         }
         val progress = progressOf(books)
@@ -70,8 +75,17 @@ object StoreFixture {
             .takeIf { it.exists() }
             ?.let { json.decodeFromString<ProgressStore>(it.readText()) }
             ?: ProgressStore()
+        val quotesByBook = user.quotes.values.groupBy { it.bookId }
+        val bookmarksByBook = user.bookmarks.values.groupBy { it.bookId }
         return index.books
-            .map { it.withUserData(user.userData[it.id], progress.progress[it.id]) }
+            .map {
+                it.withUserData(
+                    user = user.userData[it.id],
+                    prog = progress.progress[it.id],
+                    quotes = quotesByBook[it.id].orEmpty().sortedBy { q -> q.createdAtMillis },
+                    bookmarks = bookmarksByBook[it.id].orEmpty().sortedBy { b -> b.flatIndex },
+                )
+            }
             .sortedByDescending { it.sortTs }
     }
 
@@ -79,6 +93,21 @@ object StoreFixture {
         File(dir, "userdata.json")
             .takeIf { it.exists() }
             ?.let { json.decodeFromString<UserDataStore>(it.readText()).userData[bookId] }
+
+    fun quotesOnDisk(dir: File, bookId: String): List<Quote> =
+        File(dir, "userdata.json")
+            .takeIf { it.exists() }
+            ?.let { f ->
+                json.decodeFromString<UserDataStore>(f.readText())
+                    .quotes.values.filter { it.bookId == bookId }
+            }
+            ?: emptyList()
+
+    fun tombstonesOnDisk(dir: File): Map<String, Long> =
+        File(dir, "userdata.json")
+            .takeIf { it.exists() }
+            ?.let { json.decodeFromString<UserDataStore>(it.readText()).deletedIds }
+            ?: emptyMap()
 
     fun progressOnDisk(dir: File, bookId: String): BookProgress? =
         File(dir, "progress.json")

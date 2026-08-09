@@ -109,11 +109,7 @@ class BookRepositoryTest {
         assertEquals("library.json must not be touched by a page turn", libraryBefore, indexFile.readText())
         assertEquals("userdata.json must not be touched by a page turn", userDataBefore, userFile.readText())
         assertEquals(4, StoreFixture.progressOnDisk(testDir, "book-1")?.position?.chapterIndex)
-        assertEquals(
-            "the quote is still there",
-            1,
-            StoreFixture.userDataOnDisk(testDir, "book-1")?.quotes?.size,
-        )
+        assertEquals("the quote is still there", 1, StoreFixture.quotesOnDisk(testDir, "book-1").size)
     }
 
     @Test

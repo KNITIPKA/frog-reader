@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 @kotlinx.serialization.Serializable
@@ -114,6 +115,27 @@ class SettingsRepository(private val context: Context) {
         val autoInvertImages = booleanPreferencesKey("auto_invert_images")
         val dailyGoal = androidx.datastore.preferences.core.intPreferencesKey("daily_goal_minutes")
         val libraryViewMode = stringPreferencesKey("library_view_mode")
+        val deviceId = stringPreferencesKey("device_id")
+    }
+
+    /**
+     * A UUID minted once, on first ask, and kept for the life of the install.
+     *
+     * Nothing uses it yet. Syncing two phones needs a way to tell "my edit"
+     * from "the other phone's edit", and it has to be stable from before the
+     * first sync rather than invented during it. Not derived from any hardware
+     * identifier: a restore onto a new phone should carry the same id, and
+     * nothing here should be traceable to the device itself.
+     */
+    suspend fun deviceId(): String {
+        context.settingsDataStore.data.first()[Keys.deviceId]?.let { return it }
+        val minted = java.util.UUID.randomUUID().toString()
+        var result = minted
+        context.settingsDataStore.edit { prefs ->
+            // Another caller may have won the race between the read and here.
+            result = prefs[Keys.deviceId] ?: minted.also { prefs[Keys.deviceId] = it }
+        }
+        return result
     }
 
     val settings: Flow<ReaderSettings> =
