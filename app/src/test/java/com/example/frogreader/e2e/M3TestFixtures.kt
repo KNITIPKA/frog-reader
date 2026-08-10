@@ -2,7 +2,10 @@ package com.example.frogreader.e2e
 
 import android.net.Uri
 import com.example.frogreader.data.BookRepository
+import com.example.frogreader.data.ImportMode
+import com.example.frogreader.data.StagedImport
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.data.model.BookMetadata
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.Shelf
 import com.example.frogreader.data.model.ReadingProgress
@@ -60,11 +63,30 @@ class TestBookRepository(
         // No-op in unit test fixture
     }
 
-    override suspend fun importBook(uri: Uri): Book {
-        val newBook = M3TestFixtures.createTestBook(title = "Imported Book")
+    // Staging and committing, not importBook: the view model stopped calling
+    // importBook when the import was split in two, so an override of it alone
+    // was dead code — and the tests were quietly driving the REAL stageImport,
+    // which has no Context here and threw on every call. importBook is left to
+    // the base class, which is stage-then-commit over these two.
+    override suspend fun stageImport(uri: Uri): StagedImport = StagedImport(
+        file = File("build/tmp/test_files/staged-test.epub"),
+        metadata = BookMetadata("Imported Book", "Test Author", null),
+        format = BookFormat.EPUB,
+        title = "Imported Book",
+        author = "Test Author",
+        contentHash = "test-hash-${UUID.randomUUID()}",
+        sizeBytes = 1024,
+        coverBytes = null,
+        duplicateOf = null,
+    )
+
+    override suspend fun commitImport(staged: StagedImport, mode: ImportMode): Book {
+        val newBook = M3TestFixtures.createTestBook(title = staged.title)
         _testBooks.value = listOf(newBook) + _testBooks.value
         return newBook
     }
+
+    override suspend fun discardImport(staged: StagedImport) = Unit
 
     override suspend fun deleteBook(bookId: String) {
         _testBooks.value = _testBooks.value.filterNot { it.id == bookId }
