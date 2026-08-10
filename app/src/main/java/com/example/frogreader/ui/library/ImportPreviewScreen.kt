@@ -1,44 +1,46 @@
 package com.example.frogreader.ui.library
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoStories
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,13 +59,12 @@ import com.example.frogreader.ui.theme.LocalFrogColors
  * library entry, and a book the user wanted to look at first — is this the
  * right translation? the right edition? — was decided for them.
  *
- * What it shows is deliberately short: cover, title, author, and the four facts
- * that actually settle "is this the file I wanted" — format, size, year,
- * publisher. Everything else a parser can dig out of a book (genres, ISBN,
- * translators, language tags) is inventory, not a reason to say yes, and a
- * column of it pushes the annotation — which IS a reason — off the screen.
+ * Laid out as a title page: the cover centred with its own colour glowing
+ * behind it, the title under it, then the few facts that settle "which edition
+ * is this", then the annotation. Everything a parser can dig out beyond that —
+ * genres, ISBN, translators — is inventory, not a reason to say yes, and it
+ * costs the annotation its place on the screen.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ImportPreviewScreen(
     staged: StagedImport,
@@ -74,6 +75,17 @@ fun ImportPreviewScreen(
     val scheme = MaterialTheme.colorScheme
     val haptics = LocalHapticFeedback.current
     val metadata = staged.metadata
+
+    // Decoding even a thumbnail is too much for a frame, so the glow arrives a
+    // moment late and fades in rather than popping.
+    val accent by produceState<Color?>(initialValue = null, staged.contentHash) {
+        value = staged.coverBytes?.let { CoverAccent.of(it) }
+    }
+    val glow by animateFloatAsState(
+        targetValue = if (accent != null) 1f else 0f,
+        animationSpec = tween(450),
+        label = "coverGlow",
+    )
 
     Dialog(
         onDismissRequest = onCancel,
@@ -89,40 +101,38 @@ fun ImportPreviewScreen(
         ) {
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(bottomStart = 36.dp, bottomEnd = 36.dp))
-                    .background(Brush.verticalGradient(listOf(frog.headerTop, frog.headerBottom)))
-                    .padding(WindowInsets.statusBarsIgnoringVisibility.asPaddingValues())
-                    .padding(bottom = 22.dp),
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .statusBarsPadding(),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Row(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp)) {
-                    GlassIconButton(
-                        icon = Icons.Rounded.Close,
-                        contentDescription = stringResource(R.string.dup_action_cancel),
-                        onClick = onCancel,
-                    )
-                }
+                Spacer(Modifier.height(28.dp))
 
-                Spacer(Modifier.height(14.dp))
+                Box(contentAlignment = Alignment.Center) {
+                    // The book's own colour, thrown onto the page behind it.
+                    // A cover on a flat dark rectangle is a thumbnail; a cover
+                    // sitting in its own light is the book.
+                    accent?.let { colour ->
+                        Box(
+                            modifier = Modifier
+                                .size(width = 300.dp, height = 300.dp)
+                                .background(
+                                    Brush.radialGradient(
+                                        colors = listOf(
+                                            colour.copy(alpha = 0.42f * glow),
+                                            colour.copy(alpha = 0.10f * glow),
+                                            Color.Transparent,
+                                        ),
+                                    ),
+                                ),
+                        )
+                    }
 
-                // Cover left, everything the book says about itself to the
-                // right of it — the shape a book has on a shelf, and the shape
-                // the library's own hero card already uses.
-                //
-                // Centred against the cover, not hung from its top edge. A
-                // title, an author and a row of facts come to about two thirds
-                // of the cover's height, so aligning to the top left a dead
-                // rectangle beside the bottom of every book that did not happen
-                // to have a four-line title.
-                Row(
-                    modifier = Modifier.padding(horizontal = 20.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
                     Box(
                         modifier = Modifier
-                            .size(width = 112.dp, height = 164.dp)
-                            .shadow(12.dp, RoundedCornerShape(12.dp))
-                            .clip(RoundedCornerShape(12.dp))
+                            .size(width = 152.dp, height = 224.dp)
+                            .shadow(18.dp, RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(14.dp))
                             .background(scheme.surfaceContainerHighest),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -137,110 +147,135 @@ fun ImportPreviewScreen(
                             Icon(
                                 Icons.Rounded.AutoStories,
                                 contentDescription = null,
-                                modifier = Modifier.size(38.dp),
+                                modifier = Modifier.size(44.dp),
                                 tint = frog.ink2.copy(alpha = 0.5f),
                             )
                         }
                     }
+                }
 
-                    Spacer(Modifier.width(16.dp))
+                Spacer(Modifier.height(26.dp))
 
-                    Column(modifier = Modifier.weight(1f)) {
+                // Shrinks to fit rather than ellipsizing. A title is the one
+                // thing on this screen that must be readable whole — «Защита
+                // от тёмных искусств. Путеводитель по миру паранормальных
+                // явлений» cut off at "Путеводит…" answers nothing.
+                Text(
+                    text = staged.title,
+                    fontSize = 25.sp,
+                    lineHeight = 30.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.4).sp,
+                    color = scheme.onSurface,
+                    textAlign = TextAlign.Center,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                    autoSize = TextAutoSize.StepBased(
+                        minFontSize = 15.sp,
+                        maxFontSize = 25.sp,
+                        stepSize = 0.5.sp,
+                    ),
+                    modifier = Modifier.padding(horizontal = 28.dp),
+                )
+
+                staged.author?.let { author ->
+                    Spacer(Modifier.height(7.dp))
+                    Text(
+                        text = author,
+                        fontSize = 15.sp,
+                        lineHeight = 20.sp,
+                        color = scheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 32.dp),
+                    )
+                }
+
+                // Publisher and year read as one fact — this edition, from this
+                // press, that year — so they are set as one line.
+                val imprint = listOfNotNull(
+                    metadata.publisher?.takeIf { it.isNotBlank() },
+                    metadata.year?.takeIf { it.isNotBlank() },
+                ).joinToString(" · ")
+                if (imprint.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = imprint,
+                        fontSize = 13.sp,
+                        lineHeight = 17.sp,
+                        color = frog.ink2.copy(alpha = 0.75f),
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 32.dp),
+                    )
+                }
+
+                Spacer(Modifier.height(22.dp))
+
+                // The file's own facts, set into the rule that closes the title
+                // page. They belong to the download, not to the book, and this
+                // is how you say that without a label.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    HorizontalDivider(
+                        modifier = Modifier.weight(1f),
+                        color = scheme.outlineVariant.copy(alpha = 0.45f),
+                    )
+                    Text(
+                        text = "${staged.format.name} · ${formatFileSize(staged.sizeBytes)}",
+                        fontSize = 10.sp,
+                        lineHeight = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.1.sp,
+                        color = frog.ink2,
+                        maxLines = 1,
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.weight(1f),
+                        color = scheme.outlineVariant.copy(alpha = 0.45f),
+                    )
+                }
+
+                metadata.description?.takeIf { it.isNotBlank() }?.let { description ->
+                    Spacer(Modifier.height(24.dp))
+                    Column(modifier = Modifier.padding(horizontal = 24.dp)) {
                         Text(
-                            text = staged.title,
-                            fontSize = 18.sp,
-                            lineHeight = 23.sp,
+                            text = stringResource(R.string.details_description).uppercase(),
+                            fontSize = 10.sp,
+                            lineHeight = 13.sp,
                             fontWeight = FontWeight.Bold,
-                            letterSpacing = (-0.3).sp,
-                            color = frog.ink,
-                            maxLines = 4,
-                            overflow = TextOverflow.Ellipsis,
+                            letterSpacing = 1.3.sp,
+                            color = frog.ink2.copy(alpha = 0.7f),
                         )
-
-                        staged.author?.let { author ->
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = author,
-                                fontSize = 13.5.sp,
-                                lineHeight = 18.sp,
-                                color = frog.ink2,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-
                         Spacer(Modifier.height(12.dp))
-
-                        // Every fact about this edition in one family. The
-                        // publisher used to sit under these as a bare string in
-                        // a weight nothing else on the screen used — with no
-                        // label, so the name of a press read as a word that had
-                        // wandered in from somewhere. It belongs with the other
-                        // three: they all answer "which edition is this".
-                        //
-                        // Wrapping, not a fixed Row: the cover takes 112dp out
-                        // of the width, and a publisher's name will not fit
-                        // beside three other pills on a narrow screen.
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            MetaPill(staged.format.name)
-                            MetaPill(formatFileSize(staged.sizeBytes))
-                            metadata.year?.takeIf { it.isNotBlank() }?.let { MetaPill(it) }
-                            metadata.publisher?.takeIf { it.isNotBlank() }?.let { MetaPill(it) }
-                        }
+                        Text(
+                            text = description,
+                            fontSize = 14.5.sp,
+                            lineHeight = 23.sp,
+                            color = scheme.onSurfaceVariant,
+                        )
                     }
                 }
+
+                Spacer(Modifier.height(28.dp))
             }
 
-            val description = metadata.description?.takeIf { it.isNotBlank() }
             Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp),
-            ) {
-                if (description != null) {
-                    Spacer(Modifier.height(20.dp))
-                    SectionLabel(stringResource(R.string.details_description))
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        text = description,
-                        fontSize = 14.sp,
-                        lineHeight = 21.sp,
-                        color = scheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(24.dp))
-                }
-            }
-
-            HorizontalDivider(color = scheme.outlineVariant.copy(alpha = 0.4f))
-
-            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(scheme.surface)
                     .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    .padding(horizontal = 24.dp)
+                    .padding(top = 10.dp, bottom = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                MorphingButton(
-                    onClick = onCancel,
-                    color = frog.chip,
-                    modifier = Modifier
-                        .width(112.dp)
-                        .height(52.dp),
-                ) {
-                    Text(
-                        text = stringResource(R.string.dup_action_cancel).uppercase(),
-                        fontSize = 11.5.sp,
-                        lineHeight = 14.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 1.sp,
-                        color = frog.ink2,
-                    )
-                }
                 MorphingButton(
                     onClick = {
                         haptics.performHapticFeedback(HapticFeedbackType.Confirm)
@@ -248,44 +283,36 @@ fun ImportPreviewScreen(
                     },
                     color = scheme.primary,
                     modifier = Modifier
-                        .weight(1f)
-                        .height(52.dp),
+                        .fillMaxWidth()
+                        .height(56.dp),
                 ) {
                     Text(
                         text = stringResource(R.string.preview_add).uppercase(),
-                        fontSize = 11.5.sp,
-                        lineHeight = 14.sp,
+                        fontSize = 12.sp,
+                        lineHeight = 15.sp,
                         fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 1.sp,
+                        letterSpacing = 1.2.sp,
                         color = scheme.onPrimary,
                         maxLines = 1,
                     )
                 }
+
+                // Plain text, not a second button. Declining is the quiet
+                // option and should look like one; the back gesture does the
+                // same thing.
+                Text(
+                    text = stringResource(R.string.dup_action_cancel).uppercase(),
+                    fontSize = 11.5.sp,
+                    lineHeight = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.2.sp,
+                    color = frog.ink2,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable(onClick = onCancel)
+                        .padding(horizontal = 28.dp, vertical = 14.dp),
+                )
             }
         }
-    }
-}
-
-@Composable
-private fun MetaPill(text: String) {
-    val frog = LocalFrogColors.current
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(9.dp))
-            .background(frog.chip)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
-    ) {
-        Text(
-            text = text.uppercase(),
-            fontSize = 9.5.sp,
-            lineHeight = 12.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.8.sp,
-            color = frog.ink2,
-            maxLines = 1,
-            // A publisher goes in one of these too, and some of them are a
-            // sentence long.
-            overflow = TextOverflow.Ellipsis,
-        )
     }
 }
