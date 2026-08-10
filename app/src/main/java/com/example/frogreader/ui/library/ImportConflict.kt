@@ -80,6 +80,46 @@ internal fun coversDiffer(existing: File?, incoming: ByteArray?): Boolean = when
 }
 
 /**
+ * Lets an import stop and show the user the book before adding it.
+ *
+ * For files arriving from outside — a tap in a browser, a messenger, a file
+ * manager. Those used to land in the library unannounced and open straight
+ * into the reader, so a mis-tap silently became a book, and a book the user
+ * meant to look at first was decided for them.
+ */
+class ImportOffer {
+
+    private val _current = MutableStateFlow<StagedImport?>(null)
+
+    /** The book being offered, or null when nothing is being asked. */
+    val current: StateFlow<StagedImport?> = _current.asStateFlow()
+
+    private var pending: CompletableDeferred<Boolean>? = null
+
+    /** Suspends until the user accepts or declines. */
+    suspend fun ask(staged: StagedImport): Boolean {
+        val answer = CompletableDeferred<Boolean>()
+        pending = answer
+        _current.value = staged
+        try {
+            return answer.await()
+        } finally {
+            pending = null
+            _current.value = null
+        }
+    }
+
+    fun answer(add: Boolean) {
+        pending?.complete(add)
+    }
+
+    /** Releases a waiter that would otherwise be stuck for good. */
+    fun reset() {
+        pending?.complete(false)
+    }
+}
+
+/**
  * Lets an import stop and wait for an answer.
  *
  * The import loop is the queue: it suspends in place on [ask] and the next file

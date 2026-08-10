@@ -166,8 +166,15 @@ class LibraryViewModel(
     /** Questions this import needs answered before it can finish. */
     val conflicts = ConflictPrompt()
 
+    /** A book from outside the app, waiting to be looked at before it is kept. */
+    val offers = ImportOffer()
+
     fun answerConflict(choice: ConflictChoice, applyToRest: Boolean = false) {
         conflicts.answer(choice, applyToRest)
+    }
+
+    fun answerOffer(add: Boolean) {
+        offers.answer(add)
     }
 
     /**
@@ -256,36 +263,62 @@ class LibraryViewModel(
     }
 
     /**
-     * "Open with Frog Reader" from a file manager: add the book if it is new,
-     * and hand back whichever book the reader should now open.
+     * "Open with Frog Reader" from a browser, a messenger, a file manager.
      *
-     * A file the library already holds byte for byte opens the copy that is
-     * already there. Tapping the same download twice used to mint a second
-     * entry with its own reading position, silently — the one thing a reader
-     * never wants is to reopen their book at page one.
+     * Always asks. A file arriving from outside used to be added on the spot
+     * and opened, so a mis-tap silently became a library entry and a book the
+     * user wanted to look at first was decided for them. One already in the
+     * library raises the same comparison the picker does; anything else is
+     * shown — cover, metadata, annotation — before it is kept.
+     *
+     * Returns the book to open, or null when the user said no.
      *
      * Runs on the ViewModel's own scope rather than the caller's: the caller is
      * a collector that MainActivity can cancel, and an import that is already
      * copying a file should not be thrown away because of that.
      */
-    suspend fun importFromIntent(uri: Uri): Result<Book> =
+    suspend fun importFromIntent(uri: Uri): Result<Book?> =
         viewModelScope.async {
-            _importing.value = true
-            try {
-                runCatching {
-                    val staged = repository.stageImport(uri)
-                    val existing = staged.duplicateOf
-                        ?.takeIf { it.match == DuplicateMatch.SAME_FILE }
-                        ?.book
-                    if (existing != null) {
-                        repository.discardImport(staged)
-                        existing
-                    } else {
-                        repository.commitImport(staged, ImportMode.New)
-                    }
+            runCatching {
+                _importing.value = true
+                val staged = try {
+                    repository.stageImport(uri)
+                } finally {
+                    // Down before the question, or the library sits behind the
+                    // offer with a spinner running for as long as the user
+                    // takes to read the description.
+                    _importing.value = false
                 }
-            } finally {
-                _importing.value = false
+
+                var committed = false
+                try {
+                    val duplicate = staged.duplicateOf
+                    val mode: ImportMode? = if (duplicate != null) {
+                        // Already here: the same comparison the picker shows.
+                        when (conflicts.ask(repository.conflictFor(staged, duplicate, remaining = 0))) {
+                            ConflictChoice.CANCEL -> null
+                            ConflictChoice.CLONE -> ImportMode.Clone
+                            ConflictChoice.REPLACE -> ImportMode.Replace(duplicate.book.id)
+                        }
+                    } else {
+                        // New: show the book itself and let them decide.
+                        if (offers.ask(staged)) ImportMode.New else null
+                    }
+                    if (mode == null) return@runCatching null
+
+                    _importing.value = true
+                    val book = try {
+                        repository.commitImport(staged, mode)
+                    } finally {
+                        _importing.value = false
+                    }
+                    committed = true
+                    book
+                } finally {
+                    if (!committed) withContext(NonCancellable) { repository.discardImport(staged) }
+                    conflicts.reset()
+                    offers.reset()
+                }
             }
         }.await()
 

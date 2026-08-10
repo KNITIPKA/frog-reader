@@ -726,17 +726,9 @@ fun LibraryScreen(
         )
     }
 
-    // An import that found something already in the library is suspended
-    // waiting on this. It is hosted here because the library is what the
-    // question is about — and because the answer belongs to the same view model
-    // that asked it.
-    val conflict by viewModel.conflicts.current.collectAsStateWithLifecycle()
-    conflict?.let { pending ->
-        DuplicateBookDialog(
-            conflict = pending,
-            onChoice = { choice, applyToRest -> viewModel.answerConflict(choice, applyToRest) },
-        )
-    }
+    // The duplicate dialog and the import preview are hosted by MainActivity,
+    // not here: a book opened from another app can arrive while the reader is
+    // on screen, and this composable would not be there to ask.
 }
 
 /** Case-insensitive substring match over titles, authors and shelf names. */

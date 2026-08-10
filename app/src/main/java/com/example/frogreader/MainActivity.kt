@@ -119,6 +119,8 @@ import androidx.navigation.toRoute
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.parser.BookParsers
+import com.example.frogreader.ui.library.DuplicateBookDialog
+import com.example.frogreader.ui.library.ImportPreviewScreen
 import com.example.frogreader.ui.library.LibraryScreen
 import com.example.frogreader.ui.library.ScanFolderScreen
 import com.example.frogreader.ui.library.LibraryViewModel
@@ -558,6 +560,29 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                // Hosted here rather than inside the library screen: a book
+                // opened from another app can arrive while the reader is on
+                // screen, and a question rendered by a screen that is not
+                // composed is a question nobody ever gets asked.
+                val conflict by libraryViewModel.conflicts.current.collectAsStateWithLifecycle()
+                conflict?.let { pending ->
+                    DuplicateBookDialog(
+                        conflict = pending,
+                        onChoice = { choice, applyToRest ->
+                            libraryViewModel.answerConflict(choice, applyToRest)
+                        },
+                    )
+                }
+
+                val offered by libraryViewModel.offers.current.collectAsStateWithLifecycle()
+                offered?.let { staged ->
+                    ImportPreviewScreen(
+                        staged = staged,
+                        onCancel = { libraryViewModel.answerOffer(false) },
+                        onAdd = { libraryViewModel.answerOffer(true) },
+                    )
+                }
+
                 scanningFolder?.let { folder ->
                     ScanFolderScreen(
                         treeUri = folder,
@@ -599,7 +624,9 @@ class MainActivity : ComponentActivity() {
                         // is why the ViewModel resolves a duplicate here on its
                         // own by opening the copy already in the library.
                         libraryViewModel.importFromIntent(incoming.data!!)
-                            .onSuccess { navController.navigate(ReaderRoute(it.id)) }
+                            // Null means the user said no. Nothing was added,
+                            // so there is nothing to open and nothing to say.
+                            .onSuccess { book -> book?.let { navController.navigate(ReaderRoute(it.id)) } }
                             .onFailure { error ->
                                 Log.e("FrogReader", "Import from intent failed", error)
                                 val message =

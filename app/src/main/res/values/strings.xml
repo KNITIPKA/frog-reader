@@ -21,6 +21,10 @@
     <string name="library_imported_many">%1$d books added to your library</string>
     <string name="library_imported_many_partial">%1$d books added, %2$d couldn\'t be read</string>
 
+    <!-- A book opened from another app, shown before it is kept -->
+    <string name="preview_about">About this book</string>
+    <string name="preview_add">Add to library</string>
+
     <!-- A book that is already in the library, compared side by side -->
     <string name="dup_title_same_file">Already in your library</string>
     <string name="dup_title_same_book">You may have this already</string>
