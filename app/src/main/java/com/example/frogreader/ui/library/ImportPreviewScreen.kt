@@ -108,7 +108,16 @@ fun ImportPreviewScreen(
                 // Cover left, everything the book says about itself to the
                 // right of it — the shape a book has on a shelf, and the shape
                 // the library's own hero card already uses.
-                Row(modifier = Modifier.padding(horizontal = 20.dp)) {
+                //
+                // Centred against the cover, not hung from its top edge. A
+                // title, an author and a row of facts come to about two thirds
+                // of the cover's height, so aligning to the top left a dead
+                // rectangle beside the bottom of every book that did not happen
+                // to have a four-line title.
+                Row(
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Box(
                         modifier = Modifier
                             .size(width = 112.dp, height = 164.dp)
@@ -162,9 +171,16 @@ fun ImportPreviewScreen(
 
                         Spacer(Modifier.height(12.dp))
 
+                        // Every fact about this edition in one family. The
+                        // publisher used to sit under these as a bare string in
+                        // a weight nothing else on the screen used — with no
+                        // label, so the name of a press read as a word that had
+                        // wandered in from somewhere. It belongs with the other
+                        // three: they all answer "which edition is this".
+                        //
                         // Wrapping, not a fixed Row: the cover takes 112dp out
-                        // of the width, and a long size or a four-digit year on
-                        // a narrow screen would otherwise push a pill off.
+                        // of the width, and a publisher's name will not fit
+                        // beside three other pills on a narrow screen.
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -172,19 +188,7 @@ fun ImportPreviewScreen(
                             MetaPill(staged.format.name)
                             MetaPill(formatFileSize(staged.sizeBytes))
                             metadata.year?.takeIf { it.isNotBlank() }?.let { MetaPill(it) }
-                        }
-
-                        metadata.publisher?.takeIf { it.isNotBlank() }?.let { publisher ->
-                            Spacer(Modifier.height(10.dp))
-                            Text(
-                                text = publisher,
-                                fontSize = 12.sp,
-                                lineHeight = 16.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = frog.ink2,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                            metadata.publisher?.takeIf { it.isNotBlank() }?.let { MetaPill(it) }
                         }
                     }
                 }
@@ -279,6 +283,9 @@ private fun MetaPill(text: String) {
             letterSpacing = 0.8.sp,
             color = frog.ink2,
             maxLines = 1,
+            // A publisher goes in one of these too, and some of them are a
+            // sentence long.
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
