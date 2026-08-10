@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -26,8 +27,8 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.runtime.Composable
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,7 +39,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,11 +57,11 @@ import com.example.frogreader.ui.theme.LocalFrogColors
  * library entry, and a book the user wanted to look at first — is this the
  * right translation? the right edition? — was decided for them.
  *
- * So this is the book's own page rather than a confirmation box. Everything the
- * file actually knows about itself is on it: the cover at a size worth looking
- * at, the title, the author, whatever the metadata carries, and the publisher's
- * own annotation. That is the material a person uses to answer "do I want
- * this?", and a dialog with two buttons and no content cannot ask the question.
+ * What it shows is deliberately short: cover, title, author, and the four facts
+ * that actually settle "is this the file I wanted" — format, size, year,
+ * publisher. Everything else a parser can dig out of a book (genres, ISBN,
+ * translators, language tags) is inventory, not a reason to say yes, and a
+ * column of it pushes the annotation — which IS a reason — off the screen.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -87,16 +87,13 @@ fun ImportPreviewScreen(
                 .fillMaxSize()
                 .background(scheme.surface),
         ) {
-            // The cover sits ON the gradient, the way the hero card does in the
-            // library — the book arrives into the app's own shelf, not onto a
-            // blank sheet.
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(bottomStart = 36.dp, bottomEnd = 36.dp))
                     .background(Brush.verticalGradient(listOf(frog.headerTop, frog.headerBottom)))
                     .padding(WindowInsets.statusBarsIgnoringVisibility.asPaddingValues())
-                    .padding(bottom = 24.dp),
+                    .padding(bottom = 22.dp),
             ) {
                 Row(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp)) {
                     GlassIconButton(
@@ -106,17 +103,17 @@ fun ImportPreviewScreen(
                     )
                 }
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
+                Spacer(Modifier.height(14.dp))
+
+                // Cover left, everything the book says about itself to the
+                // right of it — the shape a book has on a shelf, and the shape
+                // the library's own hero card already uses.
+                Row(modifier = Modifier.padding(horizontal = 20.dp)) {
                     Box(
                         modifier = Modifier
-                            .size(width = 132.dp, height = 194.dp)
-                            .shadow(14.dp, RoundedCornerShape(14.dp))
-                            .clip(RoundedCornerShape(14.dp))
+                            .size(width = 112.dp, height = 164.dp)
+                            .shadow(12.dp, RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(12.dp))
                             .background(scheme.surfaceContainerHighest),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -131,94 +128,77 @@ fun ImportPreviewScreen(
                             Icon(
                                 Icons.Rounded.AutoStories,
                                 contentDescription = null,
-                                modifier = Modifier.size(44.dp),
+                                modifier = Modifier.size(38.dp),
                                 tint = frog.ink2.copy(alpha = 0.5f),
                             )
                         }
                     }
 
-                    Spacer(Modifier.height(18.dp))
+                    Spacer(Modifier.width(16.dp))
 
-                    Text(
-                        text = staged.title,
-                        fontSize = 21.sp,
-                        lineHeight = 26.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = (-0.3).sp,
-                        color = frog.ink,
-                        textAlign = TextAlign.Center,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-
-                    staged.author?.let { author ->
-                        Spacer(Modifier.height(5.dp))
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = author,
-                            fontSize = 14.sp,
-                            lineHeight = 18.sp,
-                            color = frog.ink2,
-                            textAlign = TextAlign.Center,
-                            maxLines = 2,
+                            text = staged.title,
+                            fontSize = 18.sp,
+                            lineHeight = 23.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.3).sp,
+                            color = frog.ink,
+                            maxLines = 4,
                             overflow = TextOverflow.Ellipsis,
                         )
-                    }
 
-                    Spacer(Modifier.height(14.dp))
+                        staged.author?.let { author ->
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = author,
+                                fontSize = 13.5.sp,
+                                lineHeight = 18.sp,
+                                color = frog.ink2,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
 
-                    // Format, size and year up front as pills: the three facts
-                    // that decide "is this the file I wanted" at a glance,
-                    // before anyone reads a single row below.
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        MetaPill(staged.format.name)
-                        MetaPill(formatFileSize(staged.sizeBytes))
-                        metadata.year?.takeIf { it.isNotBlank() }?.let { MetaPill(it) }
+                        Spacer(Modifier.height(12.dp))
+
+                        // Wrapping, not a fixed Row: the cover takes 112dp out
+                        // of the width, and a long size or a four-digit year on
+                        // a narrow screen would otherwise push a pill off.
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            MetaPill(staged.format.name)
+                            MetaPill(formatFileSize(staged.sizeBytes))
+                            metadata.year?.takeIf { it.isNotBlank() }?.let { MetaPill(it) }
+                        }
+
+                        metadata.publisher?.takeIf { it.isNotBlank() }?.let { publisher ->
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                text = publisher,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = frog.ink2,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
             }
 
+            val description = metadata.description?.takeIf { it.isNotBlank() }
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp),
             ) {
-                Spacer(Modifier.height(20.dp))
-
-                val rows = buildList {
-                    metadata.series?.takeIf { it.isNotBlank() }?.let {
-                        val number = metadata.seriesNumber
-                        add(
-                            stringResource(R.string.details_series) to
-                                if (number != null) "$it #${number.toInt()}" else it,
-                        )
-                    }
-                    metadata.publisher?.takeIf { it.isNotBlank() }
-                        ?.let { add(stringResource(R.string.details_publisher) to it) }
-                    metadata.year?.takeIf { it.isNotBlank() }
-                        ?.let { add(stringResource(R.string.details_year) to it) }
-                    metadata.genres.takeIf { it.isNotEmpty() }
-                        ?.let { add(stringResource(R.string.details_genres) to it.joinToString(", ")) }
-                    metadata.translators.takeIf { it.isNotEmpty() }
-                        ?.let { add(stringResource(R.string.details_translators) to it.joinToString(", ")) }
-                    metadata.language?.takeIf { it.isNotBlank() }
-                        ?.let { add(stringResource(R.string.details_language) to it) }
-                    metadata.isbn?.takeIf { it.isNotBlank() }
-                        ?.let { add(stringResource(R.string.details_isbn) to it) }
-                    add(stringResource(R.string.details_format) to staged.format.name)
-                }
-
-                if (rows.isNotEmpty()) {
-                    SectionLabel(stringResource(R.string.preview_about))
-                    Spacer(Modifier.height(10.dp))
-                    rows.forEach { (label, value) -> PreviewRow(label, value) }
-                }
-
-                val description = metadata.description?.takeIf { it.isNotBlank() }
                 if (description != null) {
-                    Spacer(Modifier.height(18.dp))
-                    HorizontalDivider(color = scheme.outlineVariant.copy(alpha = 0.5f))
-                    Spacer(Modifier.height(18.dp))
+                    Spacer(Modifier.height(20.dp))
                     SectionLabel(stringResource(R.string.details_description))
                     Spacer(Modifier.height(10.dp))
                     Text(
@@ -227,10 +207,11 @@ fun ImportPreviewScreen(
                         lineHeight = 21.sp,
                         color = scheme.onSurfaceVariant,
                     )
+                    Spacer(Modifier.height(24.dp))
                 }
-
-                Spacer(Modifier.height(24.dp))
             }
+
+            HorizontalDivider(color = scheme.outlineVariant.copy(alpha = 0.4f))
 
             Row(
                 modifier = Modifier
@@ -298,28 +279,6 @@ private fun MetaPill(text: String) {
             letterSpacing = 0.8.sp,
             color = frog.ink2,
             maxLines = 1,
-        )
-    }
-}
-
-/** Label left, value right — the shape a details row has everywhere in the app. */
-@Composable
-private fun PreviewRow(label: String, value: String) {
-    Row(modifier = Modifier.padding(vertical = 5.dp)) {
-        Text(
-            text = label,
-            fontSize = 13.sp,
-            lineHeight = 18.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(112.dp),
-        )
-        Text(
-            text = value,
-            fontSize = 13.sp,
-            lineHeight = 18.sp,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
         )
     }
 }
