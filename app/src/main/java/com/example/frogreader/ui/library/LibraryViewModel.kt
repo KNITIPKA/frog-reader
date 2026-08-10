@@ -169,6 +169,21 @@ class LibraryViewModel(
     /** A book from outside the app, waiting to be looked at before it is kept. */
     val offers = ImportOffer()
 
+    private val _arrived = MutableStateFlow<String?>(null)
+
+    /**
+     * The book that has just been added, for the library to grow into place.
+     *
+     * An id rather than a flag: the grid has to know WHICH tile is the new one,
+     * and by the time the library sees it the book is already just another
+     * entry in a sorted list.
+     */
+    val arrived: StateFlow<String?> = _arrived.asStateFlow()
+
+    fun consumeArrival() {
+        _arrived.value = null
+    }
+
     fun answerConflict(choice: ConflictChoice, applyToRest: Boolean = false) {
         conflicts.answer(choice, applyToRest)
     }
@@ -313,6 +328,7 @@ class LibraryViewModel(
                         _importing.value = false
                     }
                     committed = true
+                    _arrived.value = book.id
                     book
                 } finally {
                     if (!committed) withContext(NonCancellable) { repository.discardImport(staged) }

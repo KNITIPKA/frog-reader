@@ -197,7 +197,13 @@ private const val GhostLandScale = 0.34f
  */
 @Stable
 private class ShelfPopState {
-    var shelfId by mutableStateOf<String?>(null)
+    /**
+     * The book or folder that has just appeared, so it can grow into place
+     * while the tiles around it slide aside. Books use it too now: one arriving
+     * from outside the app should be visible as an arrival, not just be there
+     * the next time you look.
+     */
+    var entryId by mutableStateOf<String?>(null)
 }
 
 /** Scale a brand-new folder grows from. */
@@ -218,8 +224,8 @@ private const val ModeSwapScale = 0.92f
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun rememberShelfArrival(shelfId: String, pop: ShelfPopState): State<Float> {
-    val justCreated = pop.shelfId == shelfId
+private fun rememberEntryArrival(entryId: String, pop: ShelfPopState): State<Float> {
+    val justCreated = pop.entryId == entryId
     val spec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
     val arrival = remember { Animatable(if (justCreated) 0f else 1f) }
 
@@ -230,7 +236,7 @@ private fun rememberShelfArrival(shelfId: String, pop: ShelfPopState): State<Flo
             // thread — so start from scratch rather than trust the initial.
             arrival.snapTo(0f)
             arrival.animateTo(1f, spec)
-            pop.shelfId = null
+            pop.entryId = null
         } else if (arrival.value != 1f) {
             // A second folder created mid-animation cancels this effect. Never
             // leave a tile stranded at two-thirds size.
@@ -369,6 +375,15 @@ fun LibraryScreen(
 
     val drag = remember { LibraryDragState() }
     val pop = remember { ShelfPopState() }
+
+    // A book added from outside the app: hand its id to the grid so the tile
+    // grows into place, and clear it so a rotation does not replay the arrival.
+    val arrived by viewModel.arrived.collectAsStateWithLifecycle()
+    LaunchedEffect(arrived) {
+        val id = arrived ?: return@LaunchedEffect
+        pop.entryId = id
+        viewModel.consumeArrival()
+    }
     val gridState = rememberLazyGridState()
 
     // Toggling the mode swaps every tile for a row of a completely different
@@ -465,7 +480,7 @@ fun LibraryScreen(
                     // and tells that one tile to play its arrival.
                     onCreated = { shelfId ->
                         drag.retargetLanding(shelfOrderKey(shelfId))
-                        pop.shelfId = shelfId
+                        pop.entryId = shelfId
                     },
                 )
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
@@ -601,6 +616,7 @@ fun LibraryScreen(
                                     book = entry.book,
                                     coverFile = viewModel.coverFileFor(entry.book),
                                     drag = drag,
+                                    pop = pop,
                                     entryId = entry.id,
                                     onClick = { onOpenBook(entry.book) },
                                     modifier = itemModifier.padding(top = 6.dp),
@@ -610,6 +626,7 @@ fun LibraryScreen(
                                     book = entry.book,
                                     coverFile = viewModel.coverFileFor(entry.book),
                                     drag = drag,
+                                    pop = pop,
                                     entryId = entry.id,
                                     onClick = { onOpenBook(entry.book) },
                                     modifier = itemModifier,
@@ -1065,17 +1082,9 @@ private fun HeroCover(
     val rotation by animateFloatAsState(if (pressed) -1.5f else 0f, spec, label = "heroCoverTilt")
     val corner by animateFloatAsState(if (pressed) 30f else 16f, spec, label = "heroCoverCorner")
 
-    // Where a book being added from outside the app is flying to. Reported as
-    // it is laid out, so the flight aims at a measured target rather than a
-    // position guessed from paddings that change with the status bar.
-    val flight = LocalImportFlight.current
-
     Box(
         modifier = Modifier
             .size(width = 98.dp, height = 147.dp)
-            .onGloballyPositioned {
-                flight?.heroCover = Rect(it.positionInRoot(), it.size.toSize())
-            }
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -1285,15 +1294,27 @@ private fun BookGridTile(
     book: Book,
     coverFile: java.io.File?,
     drag: LibraryDragState,
+    pop: ShelfPopState,
     entryId: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // A book that has just been added grows into its slot while the tiles
+    // around it slide aside — the same arrival a new folder gets.
+    val arrival by rememberEntryArrival(book.id, pop)
     val frog = LocalFrogColors.current
     val fraction = book.progress.fraction.let { if (it.isNaN()) 0f else it.coerceIn(0f, 1f) }
     val percent = (fraction * 100).roundToInt()
 
-    Column(modifier = modifier) {
+    Column(
+        modifier = modifier.graphicsLayer {
+            // Grows from ShelfPopFrom into place. A layer, so the arrival
+            // costs a draw and not a re-measure of the row it lands in.
+            scaleX = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
+            scaleY = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
+            alpha = arrival
+        },
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1359,7 +1380,7 @@ private fun ShelfGridTile(
 ) {
     val frog = LocalFrogColors.current
     val extra = entry.books.size - 4
-    val arrival = rememberShelfArrival(entry.shelf.id, pop)
+    val arrival = rememberEntryArrival(entry.shelf.id, pop)
 
     Column(modifier = modifier) {
         Box(
@@ -1470,10 +1491,12 @@ private fun BookListRow(
     book: Book,
     coverFile: java.io.File?,
     drag: LibraryDragState,
+    pop: ShelfPopState,
     entryId: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val arrival by rememberEntryArrival(book.id, pop)
     val frog = LocalFrogColors.current
     val scheme = MaterialTheme.colorScheme
     val fraction = book.progress.fraction.let { if (it.isNaN()) 0f else it.coerceIn(0f, 1f) }
@@ -1486,6 +1509,11 @@ private fun BookListRow(
 
     Box(
         modifier = modifier
+            .graphicsLayer {
+                scaleX = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
+                scaleY = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
+                alpha = arrival
+            }
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .background(scheme.surfaceContainer)
@@ -1576,7 +1604,7 @@ private fun ShelfListRow(
     val scheme = MaterialTheme.colorScheme
     val spines = entry.books.take(6)
     val extra = entry.books.size - spines.size
-    val arrival = rememberShelfArrival(entry.shelf.id, pop)
+    val arrival = rememberEntryArrival(entry.shelf.id, pop)
 
     Column(
         modifier = modifier

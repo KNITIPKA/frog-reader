@@ -82,7 +82,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
@@ -122,9 +121,6 @@ import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.parser.BookParsers
 import com.example.frogreader.ui.library.DuplicateBookDialog
 import com.example.frogreader.ui.library.ImportPreviewScreen
-import com.example.frogreader.ui.library.CoverFlight
-import com.example.frogreader.ui.library.ImportFlightState
-import com.example.frogreader.ui.library.LocalImportFlight
 import com.example.frogreader.ui.library.LibraryScreen
 import com.example.frogreader.ui.library.ScanFolderScreen
 import com.example.frogreader.ui.library.LibraryViewModel
@@ -357,16 +353,8 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalSharedTransitionApi::class)
     @Composable
     private fun AppNavigation() {
-        // Above SharedTransitionLayout so both the library's hero card, which
-        // writes its position into it, and the flight overlay, which reads it,
-        // see the same instance.
-        val importFlight = remember { ImportFlightState() }
-
         SharedTransitionLayout {
-            CompositionLocalProvider(
-                LocalSharedTransitionScope provides this,
-                LocalImportFlight provides importFlight,
-            ) {
+            CompositionLocalProvider(LocalSharedTransitionScope provides this) {
                 val navController = rememberNavController()
 
                 val backStackEntry by navController.currentBackStackEntryAsState()
@@ -586,32 +574,12 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                // The cover in mid-air after the book has been accepted. Kept
-                // out here rather than in the preview, because the preview is
-                // gone the instant the import has its answer — what is left is
-                // one picture that still has somewhere to be.
-                var flightFrom by remember { mutableStateOf<Rect?>(null) }
-                var flightArt by remember { mutableStateOf<ByteArray?>(null) }
-
                 val offered by libraryViewModel.offers.current.collectAsStateWithLifecycle()
                 offered?.let { staged ->
                     ImportPreviewScreen(
                         staged = staged,
                         onCancel = { libraryViewModel.answerOffer(false) },
-                        onAdd = { bounds ->
-                            flightFrom = bounds
-                            flightArt = staged.coverBytes
-                            libraryViewModel.answerOffer(true)
-                        },
-                    )
-                }
-
-                flightFrom?.let { from ->
-                    CoverFlight(
-                        art = flightArt,
-                        from = from,
-                        to = importFlight.heroCover,
-                        onFinished = { flightFrom = null; flightArt = null },
+                        onAdd = { libraryViewModel.answerOffer(true) },
                     )
                 }
 

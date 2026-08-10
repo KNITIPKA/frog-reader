@@ -30,22 +30,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -53,7 +48,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.toSize
 import coil3.compose.AsyncImage
 import com.example.frogreader.R
 import com.example.frogreader.data.StagedImport
@@ -81,8 +75,7 @@ import com.example.frogreader.ui.theme.LocalFrogColors
 fun ImportPreviewScreen(
     staged: StagedImport,
     onCancel: () -> Unit,
-    /** Hands back where the cover was, so it can be thrown from there. */
-    onAdd: (coverBounds: Rect?) -> Unit,
+    onAdd: () -> Unit,
 ) {
     val frog = LocalFrogColors.current
     val scheme = MaterialTheme.colorScheme
@@ -99,8 +92,6 @@ fun ImportPreviewScreen(
         animationSpec = tween(500),
         label = "coverGlow",
     )
-
-    var coverBounds by remember { mutableStateOf<Rect?>(null) }
 
     BackHandler(onBack = onCancel)
 
@@ -166,9 +157,7 @@ fun ImportPreviewScreen(
                     .shadow(22.dp, RoundedCornerShape(16.dp))
                     .clip(RoundedCornerShape(16.dp))
                     .background(scheme.surfaceContainerHighest)
-                    .onGloballyPositioned {
-                        coverBounds = Rect(it.positionInRoot(), it.size.toSize())
-                    },
+,
                 contentAlignment = Alignment.Center,
             ) {
                 if (staged.coverBytes != null) {
@@ -304,7 +293,7 @@ fun ImportPreviewScreen(
             MorphingButton(
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                    onAdd(coverBounds)
+                    onAdd()
                 },
                 color = scheme.primary,
                 modifier = Modifier
