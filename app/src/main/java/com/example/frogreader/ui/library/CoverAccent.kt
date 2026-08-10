@@ -46,6 +46,11 @@ internal object CoverAccent {
         val value = FloatArray(BUCKETS)
         val hsv = FloatArray(3)
         var considered = 0
+        // Kept in parallel for the black-and-white case below.
+        var greyHue = 0f
+        var greySaturation = 0f
+        var greyValue = 0f
+        var greyCount = 0
 
         for (y in 0 until bitmap.height) {
             for (x in 0 until bitmap.width) {
@@ -53,6 +58,12 @@ internal object CoverAccent {
                 if ((pixel ushr 24 and 0xFF) < 128) continue
                 android.graphics.Color.colorToHSV(pixel, hsv)
                 val (h, s, v) = hsv
+
+                greyHue += h
+                greySaturation += s
+                greyValue += v
+                greyCount++
+
                 // Grey, nearly black, nearly white: all true of most of a cover
                 // and none of them what it looks like.
                 if (s < MIN_SATURATION || v < MIN_VALUE || v > MAX_VALUE) continue
@@ -64,20 +75,30 @@ internal object CoverAccent {
             }
         }
         bitmap.recycle()
-        if (considered == 0) return null
 
-        var best = 0
-        for (i in 1 until BUCKETS) if (counts[i] > counts[best]) best = i
-        if (counts[best] == 0) return null
+        if (considered > 0) {
+            var best = 0
+            for (i in 1 until BUCKETS) if (counts[i] > counts[best]) best = i
+            val n = counts[best]
+            return Color.hsv(
+                hue = (best + 0.5f) * (360f / BUCKETS),
+                // Pulled into a usable band: a washed-out cover would give a
+                // glow indistinguishable from the background, and a fluorescent
+                // one a glow that shouts over the artwork it sits behind.
+                saturation = (saturation[best] / n).coerceIn(0.45f, 0.85f),
+                value = (value[best] / n).coerceIn(0.5f, 0.9f),
+            )
+        }
 
-        val n = counts[best]
+        // Nothing coloured at all — a black-and-white photograph, a typographic
+        // cover. Returning null here left those books with no light behind them
+        // whatsoever, which is exactly the set of covers that most needed some.
+        // The faint cast such a picture does have, lifted until it reads.
+        if (greyCount == 0) return null
         return Color.hsv(
-            hue = (best + 0.5f) * (360f / BUCKETS),
-            // Pulled into a usable band: a washed-out cover would give a glow
-            // indistinguishable from the background, and a fluorescent one a
-            // glow that shouts over the artwork it is meant to sit behind.
-            saturation = (saturation[best] / n).coerceIn(0.35f, 0.8f),
-            value = (value[best] / n).coerceIn(0.45f, 0.85f),
+            hue = greyHue / greyCount,
+            saturation = (greySaturation / greyCount).coerceIn(0.06f, 0.3f),
+            value = (greyValue / greyCount).coerceIn(0.55f, 0.85f),
         )
     }
 

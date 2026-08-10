@@ -1065,9 +1065,17 @@ private fun HeroCover(
     val rotation by animateFloatAsState(if (pressed) -1.5f else 0f, spec, label = "heroCoverTilt")
     val corner by animateFloatAsState(if (pressed) 30f else 16f, spec, label = "heroCoverCorner")
 
+    // Where a book being added from outside the app is flying to. Reported as
+    // it is laid out, so the flight aims at a measured target rather than a
+    // position guessed from paddings that change with the status bar.
+    val flight = LocalImportFlight.current
+
     Box(
         modifier = Modifier
             .size(width = 98.dp, height = 147.dp)
+            .onGloballyPositioned {
+                flight?.heroCover = Rect(it.positionInRoot(), it.size.toSize())
+            }
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
