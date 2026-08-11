@@ -6,10 +6,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
-import android.util.Log
 import android.view.KeyEvent
 import android.view.animation.AccelerateInterpolator
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -35,10 +33,16 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -55,8 +59,6 @@ import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FloatingActionButtonMenu
-import androidx.compose.material3.FloatingActionButtonMenuItem
 import androidx.compose.material3.ToggleFloatingActionButton
 import androidx.compose.material3.ToggleFloatingActionButtonDefaults.animateIcon
 import androidx.compose.material3.animateFloatingActionButton
@@ -66,6 +68,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -618,31 +621,11 @@ class MainActivity : ComponentActivity() {
                     }
 
                     incoming.action == Intent.ACTION_VIEW && incoming.data != null -> {
-                        // Toast, not the library's snackbar: the reader is about
-                        // to take the screen, so there is no snackbar host to
-                        // show one — and no room to ask a question either, which
-                        // is why the ViewModel resolves a duplicate here on its
-                        // own by opening the copy already in the library.
+                        // The same path as a file picked inside the app: the
+                        // book is shown before it is kept, and adding it puts it
+                        // on the shelf rather than opening it. Failures reach
+                        // the library's snackbar like every other import.
                         libraryViewModel.importFromIntent(incoming.data!!)
-                            // Deliberately does NOT open the book. The user
-                            // asked to add it, not to start reading it — the
-                            // cover flies to the shelf and the library is what
-                            // they are left looking at.
-                            .onSuccess { }
-                            .onFailure { error ->
-                                Log.e("FrogReader", "Import from intent failed", error)
-                                val message =
-                                    if (error is com.example.frogreader.data.parser.mobi.MobiDrmException) {
-                                        R.string.library_import_failed_drm
-                                    } else {
-                                        R.string.library_import_failed
-                                    }
-                                Toast.makeText(
-                                    this@MainActivity,
-                                    getString(message),
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                            }
                     }
                 }
 
@@ -776,73 +759,145 @@ private fun ImportFabMenu(
     val expandedLabel = stringResource(R.string.fab_menu_expanded)
     val collapsedLabel = stringResource(R.string.fab_menu_collapsed)
 
-    FloatingActionButtonMenu(
-        // Puts the button back exactly where the plain FAB sat. The menu pads
-        // itself by 16dp horizontally and below the button, to leave room for
-        // the items; Scaffold then positions the padded whole, so without this
-        // the button would drift up and to the left of its old resting place
-        // for no reason the user could name. Offset, not padding: it moves at
-        // placement and leaves the measured size — and therefore Scaffold's
-        // arithmetic — alone.
-        modifier = Modifier.offset(x = FabMenuInset, y = FabMenuInset),
-        expanded = expanded,
-        button = {
-            ToggleFloatingActionButton(
-                checked = expanded,
-                onCheckedChange = onExpandedChange,
-                modifier = Modifier
-                    .semantics {
-                        // The button comes before its own menu in the traversal
-                        // order, or a screen reader announces the choices before
-                        // saying what opened them.
-                        traversalIndex = -1f
-                        stateDescription = if (expanded) expandedLabel else collapsedLabel
-                        contentDescription = toggleLabel
-                    }
-                    .animateFloatingActionButton(
-                        // Stays put while the menu is open even if the route
-                        // changes underneath it: hiding the button that owns an
-                        // open menu would strand the menu on screen.
-                        visible = visible || expanded,
-                        alignment = Alignment.BottomEnd,
-                    ),
-            ) {
-                if (importing) {
-                    LoadingIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                } else {
-                    val icon by remember {
-                        derivedStateOf {
-                            if (checkedProgress > 0.5f) Icons.Rounded.Close else Icons.Rounded.Add
-                        }
-                    }
-                    Icon(
-                        painter = rememberVectorPainter(icon),
-                        contentDescription = null,
-                        modifier = Modifier.animateIcon({ checkedProgress }),
-                    )
-                }
-            }
-        },
+    // Hand-rolled rather than FloatingActionButtonMenu. That component staggers
+    // its items by animating an INTEGER — the count of visible ones — with a
+    // spring, and reveals them as `index >= itemCount - value`. Across six
+    // items that reads as a cascade. Across two it steps 2 → 1 → 0, so each
+    // item switches off in a discrete jump and the pair leaves at visibly
+    // different moments. One shared pair of springs instead: both items rise
+    // and fade as one thing.
+    Column(
+        // Constant height whether open or closed, so the Scaffold measures this
+        // slot once instead of on every frame of the animation — and the button
+        // does not drift while the items come and go. No inset to cancel out
+        // either: this column is exactly as wide as its widest child, so
+        // Scaffold puts the button back where a plain FAB would sit.
+        horizontalAlignment = Alignment.End,
     ) {
-        FloatingActionButtonMenuItem(
+        FabMenuItem(
+            icon = Icons.Rounded.FileOpen,
+            label = stringResource(R.string.fab_add_book),
+            visible = expanded,
             onClick = {
                 onExpandedChange(false)
                 onAddBook()
             },
-            icon = { Icon(Icons.Rounded.FileOpen, contentDescription = null) },
-            text = { Text(stringResource(R.string.fab_add_book)) },
         )
-        FloatingActionButtonMenuItem(
+        Spacer(Modifier.size(10.dp))
+        FabMenuItem(
+            icon = Icons.Rounded.FolderOpen,
+            label = stringResource(R.string.fab_scan_folder),
+            visible = expanded,
             onClick = {
                 onExpandedChange(false)
                 onScanFolder()
             },
-            icon = { Icon(Icons.Rounded.FolderOpen, contentDescription = null) },
-            text = { Text(stringResource(R.string.fab_scan_folder)) },
         )
+        Spacer(Modifier.size(16.dp))
+
+        ToggleFloatingActionButton(
+            checked = expanded,
+            onCheckedChange = onExpandedChange,
+            modifier = Modifier
+                .semantics {
+                    // The button comes before its own menu in the traversal
+                    // order, or a screen reader announces the choices before
+                    // saying what opened them.
+                    traversalIndex = -1f
+                    stateDescription = if (expanded) expandedLabel else collapsedLabel
+                    contentDescription = toggleLabel
+                }
+                .animateFloatingActionButton(
+                    // Stays put while the menu is open even if the route
+                    // changes underneath it: hiding the button that owns an
+                    // open menu would strand the menu on screen.
+                    visible = visible || expanded,
+                    alignment = Alignment.BottomEnd,
+                ),
+        ) {
+            if (importing) {
+                LoadingIndicator(
+                    modifier = Modifier.size(24.dp),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            } else {
+                val icon by remember {
+                    derivedStateOf {
+                        if (checkedProgress > 0.5f) Icons.Rounded.Close else Icons.Rounded.Add
+                    }
+                }
+                Icon(
+                    painter = rememberVectorPainter(icon),
+                    contentDescription = null,
+                    modifier = Modifier.animateIcon({ checkedProgress }),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One choice above the add button.
+ *
+ * Composed whether or not the menu is open, and hidden by a layer rather than
+ * by leaving the tree: a slot that changes height mid-animation makes Scaffold
+ * re-measure every frame, which is the other half of what read as jitter.
+ * Disabled while hidden, so an invisible pill cannot be tapped.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun FabMenuItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    visible: Boolean,
+    onClick: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    // Two specs on purpose, the same lesson as the button's own show and hide:
+    // the spatial spring may overshoot, because that reads as weight; alpha may
+    // not, because there it reads as a flicker.
+    val rise by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "fabItemRise",
+    )
+    val fade by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "fabItemFade",
+    )
+
+    Surface(
+        onClick = onClick,
+        enabled = visible,
+        shape = CircleShape,
+        color = scheme.primaryContainer,
+        contentColor = scheme.onPrimaryContainer,
+        shadowElevation = 3.dp,
+        modifier = Modifier.graphicsLayer {
+            alpha = fade
+            val scale = 0.82f + 0.18f * rise
+            scaleX = scale
+            scaleY = scale
+            translationY = (1f - rise) * 20.dp.toPx()
+            // Grows out of the button rather than from its own middle.
+            transformOrigin = TransformOrigin(1f, 1f)
+        },
+    ) {
+        Row(
+            modifier = Modifier
+                .height(56.dp)
+                .padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, contentDescription = null)
+            Spacer(Modifier.size(12.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+            )
+        }
     }
 }
 
@@ -868,10 +923,10 @@ private fun FabMenuScrim(
 ) {
     val alpha by animateFloatAsState(
         targetValue = if (visible) FabScrimAlpha else 0f,
-        // The menu items stagger in on an effects spring; the dim behind them
-        // has to arrive on the same kind of curve or it reads as a separate,
-        // slower thing happening.
-        animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
+        // The menu items rise on the motion scheme's fast springs; the dim
+        // behind them has to arrive on the same kind of curve or it reads as a
+        // separate, slower thing happening.
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
         label = "fabMenuScrim",
     )
     if (alpha <= 0.001f) return
@@ -893,9 +948,6 @@ private fun FabMenuScrim(
 
 /** How dark the library goes behind an open FAB menu. */
 private const val FabScrimAlpha = 0.32f
-
-/** The padding FloatingActionButtonMenu adds around itself, cancelled out. */
-private val FabMenuInset = 16.dp
 
 private val NavFade = spring<Float>(
     dampingRatio = Spring.DampingRatioLowBouncy,

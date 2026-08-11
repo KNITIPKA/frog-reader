@@ -222,7 +222,17 @@ class LibraryViewModel(
             var failed = 0
             try {
                 uris.forEachIndexed { index, uri ->
-                    runCatching { addOne(uri, remaining = uris.size - index - 1) }
+                    runCatching {
+                        addOne(
+                            uri = uri,
+                            remaining = uris.size - index - 1,
+                            // One file is a decision still being made, and the
+                            // book gets shown before it is kept. Several is a
+                            // decision already taken in bulk — a preview each
+                            // would be ten screens to dismiss.
+                            offerPreview = uris.size == 1,
+                        )
+                    }
                         .onSuccess { message ->
                             if (message !is LibraryMessage.ImportCancelled) added++
                             // One file gets a name; a batch gets a count, sent
@@ -239,6 +249,7 @@ class LibraryViewModel(
             } finally {
                 _importing.value = false
                 conflicts.reset()
+                offers.reset()
             }
         }
     }
@@ -250,13 +261,17 @@ class LibraryViewModel(
      * file left in staging every time someone backs out mid-question. It would
      * be swept eventually; "eventually" is half an hour of the user's storage.
      */
-    private suspend fun addOne(uri: Uri, remaining: Int): LibraryMessage {
+    private suspend fun addOne(
+        uri: Uri,
+        remaining: Int,
+        offerPreview: Boolean = false,
+    ): LibraryMessage {
         val staged = repository.stageImport(uri)
         var committed = false
         try {
             val duplicate = staged.duplicateOf
             val mode = if (duplicate == null) {
-                ImportMode.New
+                if (offerPreview && !offers.ask(staged)) null else ImportMode.New
             } else {
                 when (conflicts.ask(repository.conflictFor(staged, duplicate, remaining))) {
                     ConflictChoice.CANCEL -> null
@@ -267,6 +282,7 @@ class LibraryViewModel(
 
             val book = repository.commitImport(staged, mode)
             committed = true
+            _arrived.value = book.id
             return if (mode is ImportMode.Replace) {
                 LibraryMessage.Replaced(book.title)
             } else {
@@ -280,63 +296,14 @@ class LibraryViewModel(
     /**
      * "Open with Frog Reader" from a browser, a messenger, a file manager.
      *
-     * Always asks. A file arriving from outside used to be added on the spot
-     * and opened, so a mis-tap silently became a library entry and a book the
-     * user wanted to look at first was decided for them. One already in the
-     * library raises the same comparison the picker does; anything else is
-     * shown — cover, metadata, annotation — before it is kept.
-     *
-     * Returns the book to open, or null when the user said no.
-     *
-     * Runs on the ViewModel's own scope rather than the caller's: the caller is
-     * a collector that MainActivity can cancel, and an import that is already
-     * copying a file should not be thrown away because of that.
+     * The same path as one file picked in the app, because it is the same act:
+     * a book the user has not seen yet, offered before it is kept. It used to
+     * be added on the spot and opened, so a mis-tap silently became a library
+     * entry and a book they wanted to look at first was decided for them.
      */
-    suspend fun importFromIntent(uri: Uri): Result<Book?> =
-        viewModelScope.async {
-            runCatching {
-                _importing.value = true
-                val staged = try {
-                    repository.stageImport(uri)
-                } finally {
-                    // Down before the question, or the library sits behind the
-                    // offer with a spinner running for as long as the user
-                    // takes to read the description.
-                    _importing.value = false
-                }
-
-                var committed = false
-                try {
-                    val duplicate = staged.duplicateOf
-                    val mode: ImportMode? = if (duplicate != null) {
-                        // Already here: the same comparison the picker shows.
-                        when (conflicts.ask(repository.conflictFor(staged, duplicate, remaining = 0))) {
-                            ConflictChoice.CANCEL -> null
-                            ConflictChoice.CLONE -> ImportMode.Clone
-                            ConflictChoice.REPLACE -> ImportMode.Replace(duplicate.book.id)
-                        }
-                    } else {
-                        // New: show the book itself and let them decide.
-                        if (offers.ask(staged)) ImportMode.New else null
-                    }
-                    if (mode == null) return@runCatching null
-
-                    _importing.value = true
-                    val book = try {
-                        repository.commitImport(staged, mode)
-                    } finally {
-                        _importing.value = false
-                    }
-                    committed = true
-                    _arrived.value = book.id
-                    book
-                } finally {
-                    if (!committed) withContext(NonCancellable) { repository.discardImport(staged) }
-                    conflicts.reset()
-                    offers.reset()
-                }
-            }
-        }.await()
+    fun importFromIntent(uri: Uri) {
+        importBooks(listOf(uri))
+    }
 
     private fun Throwable.toMessage(): LibraryMessage =
         if (this is MobiDrmException) LibraryMessage.ImportFailedDrm else LibraryMessage.ImportFailed
