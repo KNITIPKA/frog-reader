@@ -52,18 +52,70 @@
     <string name="library_search_clear">Clear search</string>
     <string name="library_search_empty">Nothing matched your search.</string>
     <string name="library_all_books">All books</string>
-    <string name="library_drag_hint">Drag one onto another</string>
     <string name="library_read_label">read</string>
     <string name="library_pages_left_in_chapter">%1$d pages left in chapter</string>
     <string name="library_percent_left">%1$d%% left</string>
     <string name="library_status_reading">reading</string>
     <string name="library_status_not_started">not started</string>
     <string name="library_menu_info">Info</string>
+
+    <!-- Long-press menu, shared by books and shelves -->
+    <string name="library_menu_select">Select</string>
+    <string name="library_menu_add_to_shelf">Add to shelf</string>
+    <string name="library_menu_remove">Remove from library</string>
+    <string name="library_menu_more">More actions</string>
+
+    <!-- Selecting several at once -->
+    <string name="library_selected_count">%1$d selected</string>
+    <string name="library_select_all">Select all</string>
+    <string name="library_clear_selection">Clear</string>
+    <string name="library_selection_delete_title">Remove selected?</string>
+    <plurals name="library_selection_delete_books">
+        <item quantity="one">%1$d book and its reading progress will be removed.</item>
+        <item quantity="other">%1$d books and their reading progress will be removed.</item>
+    </plurals>
+    <plurals name="library_selection_delete_shelves">
+        <item quantity="one">%1$d shelf is dissolved; the books in it stay.</item>
+        <item quantity="other">%1$d shelves are dissolved; the books in them stay.</item>
+    </plurals>
+
     <!-- Shelves -->
     <string name="shelf_unnamed">New shelf</string>
     <string name="shelf_name_hint">Shelf name</string>
-    <string name="shelf_books_count">%1$d books</string>
-    <string name="shelf_panel_hint">%1$d books · drag one out of the folder to put it back on the grid</string>
+    <plurals name="shelf_books_count">
+        <item quantity="one">%1$d book</item>
+        <item quantity="other">%1$d books</item>
+    </plurals>
+    <string name="shelf_in_progress">%1$d in progress</string>
+    <string name="shelf_search_hint">Search this shelf</string>
+    <string name="shelf_search_open">Search this shelf</string>
+    <string name="shelf_search_close">Close search</string>
+    <string name="shelf_empty">Nothing here yet</string>
+    <string name="shelf_empty_hint">Tap to pick some books</string>
+    <string name="shelf_add_books">Add books</string>
+    <string name="shelf_add_books_count">Add %1$d</string>
+    <string name="shelf_add_books_none">Pick some books</string>
+    <string name="shelf_add_books_empty">Every book you have is already on a shelf.</string>
+    <string name="shelf_add_books_search">Search your library</string>
+    <string name="shelf_add_books_moves_from">Now on “%1$s”</string>
+    <string name="shelf_search_empty">No book in this shelf matches.</string>
+    <string name="shelf_page">Page %1$d of %2$d</string>
+    <string name="fab_new_shelf">New shelf</string>
+
+    <!-- Adding books to a shelf -->
+    <string name="shelf_add_title">Add to shelf</string>
+    <string name="shelf_add_new">New shelf</string>
+    <string name="shelf_add_new_hint">Make one and name it</string>
+    <string name="shelf_menu_rename">Rename</string>
+    <string name="shelf_menu_delete">Delete</string>
+    <string name="shelf_menu_remove_from_shelf">Remove from shelf</string>
+
+    <!-- Deleting a shelf: the folder, or the folder and its books -->
+    <string name="shelf_delete_title">Delete this shelf?</string>
+    <string name="shelf_delete_remove_shelf">Remove shelf</string>
+    <string name="shelf_delete_remove_shelf_hint">The books go back to your library</string>
+    <string name="shelf_delete_books">Delete books</string>
+    <string name="shelf_delete_books_hint">The shelf and everything in it is removed</string>
 
     <!-- Reader screen -->
     <string name="reader_error_title">Couldn\'t open this book</string>

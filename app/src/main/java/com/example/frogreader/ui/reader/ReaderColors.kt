@@ -33,9 +33,12 @@ class ReaderColors(
 fun readerColors(theme: AppTheme): ReaderColors {
     val scheme = colorSchemeFor(theme)
     return ReaderColors(
-        // The page is the same surface the library sits on, so switching
-        // between the two no longer shifts the paper tone.
-        background = scheme.surface,
+        // Pure white in the light theme, not the library's very slightly green
+        // surface: a book's own artwork is almost always on a white ground, and
+        // against anything else every illustration sits in a faint box of its
+        // own. Sepia and OLED keep their surface — the beige page IS the theme,
+        // and OLED's surface is already pure black.
+        background = if (theme == AppTheme.WHITE) Color.White else scheme.surface,
         text = scheme.onSurface,
         secondaryText = scheme.onSurfaceVariant,
         // Floating bars match the nav bar's tone.

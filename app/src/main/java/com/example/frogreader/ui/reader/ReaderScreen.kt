@@ -156,7 +156,6 @@ import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.FOOTNOTE_TAG
 import com.example.frogreader.data.model.LINK_TAG
 import com.example.frogreader.data.model.ParagraphStyle
-import com.example.frogreader.ui.nav.sharedBookCover
 import com.example.frogreader.ui.theme.isDark
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -986,11 +985,6 @@ private fun ScrollReader(
                     footnotes = footnotes,
                     quotes = quotes,
                     searchHighlight = searchHighlight,
-                    imageModifier = if (index == 0 && ready.hasCoverItem) {
-                        Modifier.sharedBookCover(ready.book.id)
-                    } else {
-                        Modifier
-                    },
                 )
             }
             item(key = "completion") {
@@ -1283,7 +1277,6 @@ private fun PagedReader(
                             ReaderMetrics.horizontalPadding(renderSettings.pageMargins) * 2,
                         bookFonts = ready.bookFonts,
                         language = ready.language,
-                        hasCover = ready.hasCoverItem,
                         bookId = ready.book.id,
                         footnotes = footnotes,
                         quotes = quotes,
@@ -1346,7 +1339,6 @@ private fun PageView(
     contentWidth: androidx.compose.ui.unit.Dp,
     bookFonts: Map<String, androidx.compose.ui.text.font.FontFamily>,
     language: String?,
-    hasCover: Boolean,
     bookId: String,
     footnotes: FootnoteHandler?,
     quotes: List<String>,
@@ -1378,11 +1370,6 @@ private fun PageView(
                 footnotes = footnotes,
                 quotes = quotes,
                 searchHighlight = searchHighlight,
-                imageModifier = if (part.itemIndex == 0 && hasCover) {
-                    Modifier.sharedBookCover(bookId)
-                } else {
-                    Modifier
-                },
                 tableLayout = part.tableLayout,
                 tableRowStart = part.rowStart,
                 tableRowEnd = part.rowEnd,
@@ -1545,7 +1532,6 @@ private fun RenderPart(
     footnotes: FootnoteHandler? = null,
     quotes: List<String> = emptyList(),
     searchHighlight: String? = null,
-    imageModifier: Modifier = Modifier,
     tableLayout: TableLayout? = null,
     tableRowStart: Int = -1,
     tableRowEnd: Int = -1,
@@ -1769,7 +1755,7 @@ private fun RenderPart(
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
                 colorFilter = imageColorFilter(actuallyInvert),
-                modifier = imageModifier
+                modifier = Modifier
                     .fillMaxWidth(element.widthFrac ?: 1f)
                     .padding(horizontal = basePadding, vertical = vTop)
                     .then(heightModifier),

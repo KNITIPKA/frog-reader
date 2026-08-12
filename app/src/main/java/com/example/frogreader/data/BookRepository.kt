@@ -1109,54 +1109,77 @@ open class BookRepository(private val context: Context? = null) {
     // --------------------------------------------------------------- shelves
 
     /**
-     * Groups [bookIds] into a new shelf and returns it, or null when fewer than
-     * two of the ids resolve to real books (a one-book shelf doesn't exist).
+     * Groups [bookIds] into a new shelf and returns it.
+     *
+     * A shelf with one book, or none at all, is a real shelf: the user can make
+     * an empty one and fill it afterwards. Ids that resolve to nothing are
+     * dropped rather than failing the whole call.
      *
      * **`bookIds[0]` is the anchor**: the shelf inherits its grid position, so
-     * the caller passes the DROP TARGET first and the dragged book second.
+     * the caller passes the book whose slot the shelf should take first. With
+     * no books to anchor to, `sortKey` stays 0 and [Shelf.sortTs] falls back to
+     * `createdAtMillis` — the top of the grid, where the user is looking.
      */
-    open suspend fun createShelf(bookIds: List<String>, name: String = ""): Shelf? {
+    open suspend fun createShelf(bookIds: List<String>, name: String = ""): Shelf {
         val byId = _books.value.associateBy { it.id }
         val ids = bookIds.distinct().filter { it in byId }
-        if (ids.size < 2) return null
         val shelf = Shelf(
             id = UUID.randomUUID().toString(),
             name = name.trim(),
             bookIds = ids,
             createdAtMillis = System.currentTimeMillis(),
-            sortKey = byId.getValue(ids.first()).sortTs,
+            sortKey = ids.firstOrNull()?.let { byId.getValue(it).sortTs } ?: 0L,
         )
         updateShelves { shelves -> shelves + shelf }
-        return _shelves.value.firstOrNull { it.id == shelf.id }
+        return _shelves.value.firstOrNull { it.id == shelf.id } ?: shelf
     }
 
     open suspend fun renameShelf(id: String, name: String): Unit = updateShelves { shelves ->
         shelves.map { if (it.id == id) it.copy(name = name.trim()) else it }
     }
 
-    /** Moves [bookId] into [shelfId], taking it out of whatever shelf held it. */
-    open suspend fun addToShelf(shelfId: String, bookId: String): Unit = updateShelves { shelves ->
+    /** Moves [bookIds] into [shelfId], taking them out of whatever shelf held them. */
+    open suspend fun addToShelf(shelfId: String, bookIds: List<String>): Unit = updateShelves { shelves ->
         if (shelves.none { it.id == shelfId }) return@updateShelves shelves
         shelves.map { shelf ->
             if (shelf.id == shelfId) {
                 // Append, so the anchor stays at [0].
-                if (bookId in shelf.bookIds) shelf else shelf.copy(bookIds = shelf.bookIds + bookId)
+                shelf.copy(bookIds = shelf.bookIds + bookIds.filterNot { it in shelf.bookIds })
             } else {
-                shelf.copy(bookIds = shelf.bookIds - bookId)
+                shelf.copy(bookIds = shelf.bookIds - bookIds.toSet())
             }
         }
     }
 
-    /** Takes [bookId] back to the top level; a shelf left with <2 books dissolves. */
-    open suspend fun removeFromShelf(shelfId: String, bookId: String): Unit = updateShelves { shelves ->
-        shelves.map { shelf ->
-            if (shelf.id == shelfId) shelf.copy(bookIds = shelf.bookIds - bookId) else shelf
+    /** Takes [bookIds] back to the top level; the shelf itself stays, even empty. */
+    open suspend fun removeFromShelf(shelfId: String, bookIds: List<String>): Unit =
+        updateShelves { shelves ->
+            shelves.map { shelf ->
+                if (shelf.id == shelfId) {
+                    shelf.copy(bookIds = shelf.bookIds - bookIds.toSet())
+                } else {
+                    shelf
+                }
+            }
         }
-    }
 
     /** Dissolves the shelf; its books return to the top level untouched. */
     open suspend fun deleteShelf(id: String): Unit = updateShelves { shelves ->
         shelves.filterNot { it.id == id }
+    }
+
+    /**
+     * Dissolves the shelf AND deletes every book that was in it — the "delete
+     * books" half of the folder's delete menu, against "remove shelf" above.
+     *
+     * Order matters: the shelf goes first, so a failure part-way through leaves
+     * surviving books loose in the library rather than inside a shelf that is
+     * half gone.
+     */
+    open suspend fun deleteShelfWithBooks(id: String) {
+        val bookIds = _shelves.value.firstOrNull { it.id == id }?.bookIds.orEmpty()
+        deleteShelf(id)
+        bookIds.forEach { deleteBook(it) }
     }
 
     // ---------------------------------------------------------------- index
@@ -1203,9 +1226,13 @@ open class BookRepository(private val context: Context? = null) {
 
     /**
      * The single place every shelf invariant is enforced, applied on read and
-     * after every write transform: unknown book ids are dropped, a book can be
-     * claimed by at most one shelf, and a shelf left with fewer than two books
-     * dissolves. This is why [deleteBook] needs no shelf-specific code.
+     * after every write transform: unknown book ids are dropped and a book can
+     * be claimed by at most one shelf. This is why [deleteBook] needs no
+     * shelf-specific code.
+     *
+     * A shelf is NOT dissolved for being small. Emptiness is a state the user
+     * can ask for — the FAB makes an empty shelf to fill afterwards — so the
+     * only thing that removes a shelf is being told to.
      */
     private fun normalizeShelves(shelves: List<Shelf>, books: List<BookRecord>): List<Shelf> {
         if (shelves.isEmpty()) return emptyList()
@@ -1217,7 +1244,6 @@ open class BookRepository(private val context: Context? = null) {
             // `claimed.add` is a side-effecting predicate: correct only because
             // filter/map are ordered — the earlier shelf wins a contested book.
             .map { shelf -> shelf.copy(bookIds = shelf.bookIds.filter { it in known && claimed.add(it) }) }
-            .filter { it.bookIds.size >= 2 }
             .sortedWith(compareByDescending<Shelf> { it.sortTs }.thenBy { it.id })
     }
 

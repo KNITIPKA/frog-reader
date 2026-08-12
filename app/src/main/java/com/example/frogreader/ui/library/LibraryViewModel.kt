@@ -313,32 +313,66 @@ class LibraryViewModel(
         viewModelScope.launch { repository.deleteBook(book.id) }
     }
 
+    fun deleteBooks(bookIds: Collection<String>) {
+        if (bookIds.isEmpty()) return
+        val ids = bookIds.toList()
+        ids.forEach { coverCache.remove(it) }
+        viewModelScope.launch { ids.forEach { runCatching { repository.deleteBook(it) } } }
+    }
+
     // --------------------------------------------------------------- shelves
 
+    private val _openShelfRequest = MutableStateFlow<String?>(null)
+
     /**
-     * A book was dropped onto another book. The TARGET goes first: the new
-     * shelf inherits its position so it appears exactly where the target was.
-     * Emits the new shelf id — not to open the shelf (a launcher doesn't), but
-     * so the screen can play the arrival animation on that one tile.
+     * A shelf the screen should open, asked for from somewhere that cannot open
+     * it itself — the FAB lives in MainActivity, outside the library composable,
+     * and "add to a brand-new shelf" only learns the id once the write lands.
+     *
+     * Same shape as [arrived], and for the same reason: an id, consumed once.
      */
-    fun createShelf(draggedBookId: String, targetBookId: String, onCreated: (String) -> Unit = {}) {
+    val openShelfRequest: StateFlow<String?> = _openShelfRequest.asStateFlow()
+
+    fun consumeOpenShelfRequest() {
+        _openShelfRequest.value = null
+    }
+
+    /**
+     * Makes a shelf out of [bookIds] — none of them, for the empty shelf the
+     * FAB creates — and asks the screen to open it so the user can name it.
+     */
+    fun createShelf(bookIds: List<String> = emptyList()) {
         viewModelScope.launch {
-            runCatching { repository.createShelf(listOf(targetBookId, draggedBookId)) }
+            runCatching { repository.createShelf(bookIds) }
                 .getOrNull()
-                ?.let { onCreated(it.id) }
+                ?.let { _openShelfRequest.value = it.id }
         }
     }
 
-    fun addToShelf(shelfId: String, bookId: String) {
-        viewModelScope.launch { runCatching { repository.addToShelf(shelfId, bookId) } }
+    fun addToShelf(shelfId: String, bookIds: List<String>) {
+        if (bookIds.isEmpty()) return
+        viewModelScope.launch { runCatching { repository.addToShelf(shelfId, bookIds) } }
     }
 
-    fun removeFromShelf(shelfId: String, bookId: String) {
-        viewModelScope.launch { runCatching { repository.removeFromShelf(shelfId, bookId) } }
+    fun removeFromShelf(shelfId: String, bookIds: List<String>) {
+        if (bookIds.isEmpty()) return
+        viewModelScope.launch { runCatching { repository.removeFromShelf(shelfId, bookIds) } }
     }
 
     fun renameShelf(shelfId: String, name: String) {
         viewModelScope.launch { runCatching { repository.renameShelf(shelfId, name) } }
+    }
+
+    /** Dissolves the shelf; the books it held go back on the grid. */
+    fun deleteShelf(shelfId: String) {
+        viewModelScope.launch { runCatching { repository.deleteShelf(shelfId) } }
+    }
+
+    /** Dissolves the shelf and removes every book in it from the library. */
+    fun deleteShelfWithBooks(shelfId: String) {
+        val ids = repository.shelves.value.firstOrNull { it.id == shelfId }?.bookIds.orEmpty()
+        ids.forEach { coverCache.remove(it) }
+        viewModelScope.launch { runCatching { repository.deleteShelfWithBooks(shelfId) } }
     }
 
     companion object {

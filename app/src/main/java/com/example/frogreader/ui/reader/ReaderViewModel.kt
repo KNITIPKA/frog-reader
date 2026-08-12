@@ -52,8 +52,6 @@ sealed interface ReaderState {
         val chapterTitles: List<String?>,
         /** Nesting depth of each chapter (0 = top level) — the TOC tree. */
         val chapterDepths: List<Int>,
-        /** True when items[0] is the cover image (title page). */
-        val hasCoverItem: Boolean,
         /** Footnote key → note text, for tappable [53]-style references. */
         val notes: Map<String, androidx.compose.ui.text.AnnotatedString>,
         /** Link key → flat item index, for Contents entries and references. */
@@ -260,10 +258,8 @@ class ReaderViewModel(
         val items = mutableListOf<ReaderItem>()
 
         // Title page: the cover opens the book before the text.
-        var hasCoverItem = false
         repository.coverFileFor(book)?.let { cover: File ->
             items += ReaderItem(0, ContentElement.Image(cover.absolutePath))
-            hasCoverItem = true
         }
 
         val chapterStarts = mutableListOf<Int>()
@@ -298,7 +294,6 @@ class ReaderViewModel(
                 chapterStarts = chapterStarts,
                 chapterTitles = chapterTitles,
                 chapterDepths = chapterDepths,
-                hasCoverItem = hasCoverItem,
                 notes = if (hideFootnotes) emptyMap() else content.notes,
                 // (chapter, element) → flat index the readers actually seek to.
                 linkTargets = content.linkTargets.mapNotNull { (key, target) ->

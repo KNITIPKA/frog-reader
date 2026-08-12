@@ -19,8 +19,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -130,8 +128,6 @@ import com.example.frogreader.ui.library.LibraryViewModel
 import com.example.frogreader.ui.lock.LockScreen
 import com.example.frogreader.ui.lock.LockViewModel
 import com.example.frogreader.ui.nav.LibraryRoute
-import com.example.frogreader.ui.nav.LocalNavAnimatedVisibilityScope
-import com.example.frogreader.ui.nav.LocalSharedTransitionScope
 import com.example.frogreader.ui.nav.NavTab
 import com.example.frogreader.ui.nav.ReaderRoute
 import com.example.frogreader.ui.nav.SettingsRoute
@@ -150,6 +146,10 @@ import com.example.frogreader.widget.ContinueReadingWidget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.rounded.CreateNewFolder
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.layout.layout
+import androidx.compose.animation.core.animateDpAsState
 
 /**
  * The root of the device's own storage, for the picker to open at.
@@ -353,250 +353,243 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @OptIn(ExperimentalSharedTransitionApi::class)
     @Composable
     private fun AppNavigation() {
-        SharedTransitionLayout {
-            CompositionLocalProvider(LocalSharedTransitionScope provides this) {
-                val navController = rememberNavController()
+        val navController = rememberNavController()
 
-                val backStackEntry by navController.currentBackStackEntryAsState()
-                val destination = backStackEntry?.destination
-                // Null for the first frame, before the start destination is on
-                // the back stack. That start destination IS the library, so
-                // reading null as top-level keeps the bar from flying in.
-                val onTopLevel = destination == null || destination.isTopLevel()
-                val onLibrary = destination == null || destination.hasRoute<LibraryRoute>()
-                val selectedTab = if (destination?.hasRoute<ProfileRoute>() == true) {
-                    NavTab.PROFILE
-                } else {
-                    NavTab.LIBRARY
+        val backStackEntry by navController.currentBackStackEntryAsState()
+        val destination = backStackEntry?.destination
+        // Null for the first frame, before the start destination is on
+        // the back stack. That start destination IS the library, so
+        // reading null as top-level keeps the bar from flying in.
+        val onTopLevel = destination == null || destination.isTopLevel()
+        val onLibrary = destination == null || destination.hasRoute<LibraryRoute>()
+        val selectedTab = if (destination?.hasRoute<ProfileRoute>() == true) {
+            NavTab.PROFILE
+        } else {
+            NavTab.LIBRARY
+        }
+
+        // Give the system bars back the moment the reader stops being
+        // the destination — which is when the pop STARTS, not when the
+        // reader finally leaves composition a transition later.
+        //
+        // The reader reads in BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE,
+        // and under that behaviour a swipe from the screen edge asks
+        // the system for TRANSIENT bars, which Android draws with a
+        // dark scrim of its own. The back gesture is exactly such a
+        // swipe, so closing a book left a scrimmed status bar over the
+        // library until something put the window back in order. Doing
+        // it here is early enough that there is nothing to see.
+        val activity = LocalActivity.current
+        val inReader = destination?.hasRoute<ReaderRoute>() == true
+        LaunchedEffect(inReader) {
+            if (inReader) return@LaunchedEffect
+            val window = activity?.window ?: return@LaunchedEffect
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+
+        // Hoisted to the activity on purpose. The add button and the
+        // import sheet live out here, OUTSIDE the NavHost, while the
+        // snackbar that reports what an import did lives inside the
+        // library screen. Left to `viewModel()` in each place, those are
+        // two different instances — which is exactly why the library's
+        // import messages have gone nowhere since the button started
+        // calling the repository directly. One instance, one channel.
+        val libraryViewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory)
+        val isImportingBook by libraryViewModel.importing.collectAsStateWithLifecycle()
+
+        HandleIncomingIntents(navController, libraryViewModel)
+
+        // The folder being scanned, or null. Not rememberSaveable: the
+        // tree grant is one-shot and does not survive process death, so
+        // restoring the screen would restore it onto a folder it can no
+        // longer read.
+        var scanningFolder by remember { mutableStateOf<Uri?>(null) }
+        var fabMenuExpanded by rememberSaveable { mutableStateOf(false) }
+        // The library hides the button while it has a folder open or a
+        // selection running. Not saveable on purpose: the screen tells
+        // us again on its first composition after a restore.
+        var libraryFabVisible by remember { mutableStateOf(true) }
+
+        BackHandler(fabMenuExpanded) { fabMenuExpanded = false }
+        // Switching tabs with the menu open would leave two choices
+        // hanging over a screen they have nothing to do with.
+        LaunchedEffect(onLibrary) {
+            if (!onLibrary) fabMenuExpanded = false
+        }
+
+        val filePicker = rememberLauncherForActivityResult(
+            OpenSupportedBooksContract(),
+        ) { uris -> libraryViewModel.importBooks(uris) }
+
+        // No takePersistableUriPermission. The folder is read once,
+        // straight away, and every book found is copied into private
+        // storage — so a grant that outlives the scan buys nothing and
+        // costs a slot against the per-app cap that nothing ever
+        // released. The old scan leaked one per folder ever added.
+        val folderPicker = rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocumentTree(),
+        ) { treeUri -> if (treeUri != null) scanningFolder = treeUri }
+
+        val onTabSelected: (NavTab) -> Unit = { tab ->
+            if (tab != selectedTab) {
+                val route: Any = when (tab) {
+                    NavTab.LIBRARY -> LibraryRoute
+                    NavTab.PROFILE -> ProfileRoute
                 }
-
-                // Give the system bars back the moment the reader stops being
-                // the destination — which is when the pop STARTS, not when the
-                // reader finally leaves composition a transition later.
-                //
-                // The reader reads in BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE,
-                // and under that behaviour a swipe from the screen edge asks
-                // the system for TRANSIENT bars, which Android draws with a
-                // dark scrim of its own. The back gesture is exactly such a
-                // swipe, so closing a book left a scrimmed status bar over the
-                // library until something put the window back in order. Doing
-                // it here is early enough that there is nothing to see.
-                val activity = LocalActivity.current
-                val inReader = destination?.hasRoute<ReaderRoute>() == true
-                LaunchedEffect(inReader) {
-                    if (inReader) return@LaunchedEffect
-                    val window = activity?.window ?: return@LaunchedEffect
-                    val controller = WindowCompat.getInsetsController(window, window.decorView)
-                    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
-                    controller.show(WindowInsetsCompat.Type.systemBars())
+                navController.navigate(route) {
+                    popUpTo(LibraryRoute) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
                 }
+            }
+        }
 
-                // Hoisted to the activity on purpose. The add button and the
-                // import sheet live out here, OUTSIDE the NavHost, while the
-                // snackbar that reports what an import did lives inside the
-                // library screen. Left to `viewModel()` in each place, those are
-                // two different instances — which is exactly why the library's
-                // import messages have gone nowhere since the button started
-                // calling the repository directly. One instance, one channel.
-                val libraryViewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory)
-                val isImportingBook by libraryViewModel.importing.collectAsStateWithLifecycle()
-
-                HandleIncomingIntents(navController, libraryViewModel)
-
-                // The folder being scanned, or null. Not rememberSaveable: the
-                // tree grant is one-shot and does not survive process death, so
-                // restoring the screen would restore it onto a folder it can no
-                // longer read.
-                var scanningFolder by remember { mutableStateOf<Uri?>(null) }
-                var fabMenuExpanded by rememberSaveable { mutableStateOf(false) }
-
-                BackHandler(fabMenuExpanded) { fabMenuExpanded = false }
-                // Switching tabs with the menu open would leave two choices
-                // hanging over a screen they have nothing to do with.
-                LaunchedEffect(onLibrary) {
-                    if (!onLibrary) fabMenuExpanded = false
-                }
-
-                val filePicker = rememberLauncherForActivityResult(
-                    OpenSupportedBooksContract(),
-                ) { uris -> libraryViewModel.importBooks(uris) }
-
-                // No takePersistableUriPermission. The folder is read once,
-                // straight away, and every book found is copied into private
-                // storage — so a grant that outlives the scan buys nothing and
-                // costs a slot against the per-app cap that nothing ever
-                // released. The old scan leaked one per folder ever added.
-                val folderPicker = rememberLauncherForActivityResult(
-                    ActivityResultContracts.OpenDocumentTree(),
-                ) { treeUri -> if (treeUri != null) scanningFolder = treeUri }
-
-                val onTabSelected: (NavTab) -> Unit = { tab ->
-                    if (tab != selectedTab) {
-                        val route: Any = when (tab) {
-                            NavTab.LIBRARY -> LibraryRoute
-                            NavTab.PROFILE -> ProfileRoute
-                        }
-                        navController.navigate(route) {
-                            popUpTo(LibraryRoute) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    }
-                }
-
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    // Zero on purpose. Every screen already applies its own
-                    // status-bar inset, and the bottom comes from the bar,
-                    // which carries the system navigation-bar inset itself —
-                    // Scaffold adding either again would double it.
-                    contentWindowInsets = WindowInsets(0, 0, 0, 0),
-                    bottomBar = {
-                        // The Box measures to the bar, so the slot's height —
-                        // and with it every screen's bottom content padding —
-                        // is exactly what it was.
-                        Box {
-                            FrogNavigationBar(
-                                visible = onTopLevel,
-                                selectedTab = selectedTab,
-                                onTabSelected = onTabSelected,
-                            )
-                            FabMenuScrim(
-                                visible = fabMenuExpanded,
-                                onDismiss = { fabMenuExpanded = false },
-                                modifier = Modifier.matchParentSize(),
-                            )
-                        }
-                    },
-                    floatingActionButton = {
-                        ImportFabMenu(
-                            // Library only. Profile is where reading history
-                            // will live; importing a book from it never made
-                            // sense.
-                            visible = onLibrary,
-                            importing = isImportingBook,
-                            expanded = fabMenuExpanded,
-                            onExpandedChange = { fabMenuExpanded = it },
-                            onAddBook = {
-                                if (!isImportingBook) {
-                                    filePicker.launch(BookParsers.SUPPORTED_MIME_TYPES)
-                                }
-                            },
-                            onScanFolder = { folderPicker.launch(storageRootUri()) },
-                        )
-                    },
-                ) { innerPadding ->
-                    // NOT padded by innerPadding: a screen that resizes the
-                    // moment the route changes re-measures itself in the middle
-                    // of its own transition. The screens that need clearance
-                    // take it as content padding instead, so their scrolling
-                    // content clears the bar while their background does not.
-                    NavHost(
-                        navController = navController,
-                        startDestination = LibraryRoute,
-                        modifier = Modifier.fillMaxSize(),
-                        enterTransition = { if (switchingTabs) tabEnter() else pushEnter() },
-                        exitTransition = { if (switchingTabs) tabExit() else fadeOut(NavFade) },
-                        popEnterTransition = { if (switchingTabs) tabEnter() else fadeIn(NavFade) },
-                        popExitTransition = { if (switchingTabs) tabExit() else popExit() },
-                    ) {
-                        composable<LibraryRoute> {
-                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
-                                LibraryScreen(
-                                    viewModel = libraryViewModel,
-                                    contentPadding = innerPadding,
-                                    onOpenBook = { book ->
-                                        navController.navigate(ReaderRoute(book.id))
-                                    },
-                                    onOpenSettings = { navController.navigate(SettingsRoute) },
-                                )
-                            }
-                        }
-
-                        composable<ProfileRoute> {
-                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
-                                ProfileScreen(contentPadding = innerPadding)
-                            }
-                        }
-
-                        composable<TrackerRoute> {
-                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
-                                TrackerScreen(
-                                    onOpenSettings = { navController.navigate(SettingsRoute) },
-                                    onOpenStats = { navController.navigate(StatsRoute) },
-                                )
-                            }
-                        }
-
-                        composable<ReaderRoute> { entry ->
-                            val route = entry.toRoute<ReaderRoute>()
-                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
-                                ReaderScreen(
-                                    bookId = route.bookId,
-                                    onBack = { navController.popBackStack() },
-                                )
-                            }
-                        }
-
-                        composable<SettingsRoute> {
-                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
-                                SettingsScreen(onBack = { navController.popBackStack() })
-                            }
-                        }
-
-                        composable<StatsRoute> {
-                            CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
-                                StatsScreen(onBack = { navController.popBackStack() })
-                            }
-                        }
-                    }
-
-                    // Dims the library behind an open menu, and closes it on a
-                    // tap anywhere. Its other half is in the bottomBar slot.
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            // Zero on purpose. Every screen already applies its own
+            // status-bar inset, and the bottom comes from the bar,
+            // which carries the system navigation-bar inset itself —
+            // Scaffold adding either again would double it.
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            bottomBar = {
+                // The Box measures to the bar, so the slot's height —
+                // and with it every screen's bottom content padding —
+                // is exactly what it was.
+                Box {
+                    FrogNavigationBar(
+                        visible = onTopLevel,
+                        selectedTab = selectedTab,
+                        onTabSelected = onTabSelected,
+                    )
                     FabMenuScrim(
                         visible = fabMenuExpanded,
                         onDismiss = { fabMenuExpanded = false },
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.matchParentSize(),
                     )
                 }
-
-                // Hosted here rather than inside the library screen: a book
-                // opened from another app can arrive while the reader is on
-                // screen, and a question rendered by a screen that is not
-                // composed is a question nobody ever gets asked.
-                val conflict by libraryViewModel.conflicts.current.collectAsStateWithLifecycle()
-                conflict?.let { pending ->
-                    DuplicateBookDialog(
-                        conflict = pending,
-                        onChoice = { choice, applyToRest ->
-                            libraryViewModel.answerConflict(choice, applyToRest)
+            },
+            floatingActionButton = {
+                ImportFabMenu(
+                    // Library only. Profile is where reading history
+                    // will live; importing a book from it never made
+                    // sense. The library also asks for it to step aside
+                    // while a folder or a selection is on top of it.
+                    visible = onLibrary && libraryFabVisible,
+                    importing = isImportingBook,
+                    expanded = fabMenuExpanded,
+                    onExpandedChange = { fabMenuExpanded = it },
+                    onAddBook = {
+                        if (!isImportingBook) {
+                            filePicker.launch(BookParsers.SUPPORTED_MIME_TYPES)
+                        }
+                    },
+                    onScanFolder = { folderPicker.launch(storageRootUri()) },
+                    // The shelf is made empty and named afterwards: the
+                    // view model reports its id back and the library
+                    // opens it with the cursor in the name field.
+                    onNewShelf = { libraryViewModel.createShelf() },
+                )
+            },
+        ) { innerPadding ->
+            // NOT padded by innerPadding: a screen that resizes the
+            // moment the route changes re-measures itself in the middle
+            // of its own transition. The screens that need clearance
+            // take it as content padding instead, so their scrolling
+            // content clears the bar while their background does not.
+            NavHost(
+                navController = navController,
+                startDestination = LibraryRoute,
+                modifier = Modifier.fillMaxSize(),
+                enterTransition = { if (switchingTabs) tabEnter() else pushEnter() },
+                exitTransition = { if (switchingTabs) tabExit() else fadeOut(NavFade) },
+                popEnterTransition = { if (switchingTabs) tabEnter() else fadeIn(NavFade) },
+                popExitTransition = { if (switchingTabs) tabExit() else popExit() },
+            ) {
+                composable<LibraryRoute> {
+                    LibraryScreen(
+                        onFabVisible = { libraryFabVisible = it },
+                        viewModel = libraryViewModel,
+                        contentPadding = innerPadding,
+                        onOpenBook = { book ->
+                            navController.navigate(ReaderRoute(book.id))
                         },
+                        onOpenSettings = { navController.navigate(SettingsRoute) },
                     )
                 }
 
-                val offered by libraryViewModel.offers.current.collectAsStateWithLifecycle()
-                offered?.let { staged ->
-                    ImportPreviewScreen(
-                        staged = staged,
-                        onCancel = { libraryViewModel.answerOffer(false) },
-                        onAdd = { libraryViewModel.answerOffer(true) },
+                composable<ProfileRoute> {
+                    ProfileScreen(contentPadding = innerPadding)
+                }
+
+                composable<TrackerRoute> {
+                    TrackerScreen(
+                        onOpenSettings = { navController.navigate(SettingsRoute) },
+                        onOpenStats = { navController.navigate(StatsRoute) },
                     )
                 }
 
-                scanningFolder?.let { folder ->
-                    ScanFolderScreen(
-                        treeUri = folder,
-                        onDismiss = { scanningFolder = null },
-                        onPickAnotherFolder = { folderPicker.launch(storageRootUri()) },
-                        onFinished = { added, failed ->
-                            libraryViewModel.reportBatchImport(added, failed)
-                        },
+                composable<ReaderRoute> { entry ->
+                    val route = entry.toRoute<ReaderRoute>()
+                    ReaderScreen(
+                        bookId = route.bookId,
+                        onBack = { navController.popBackStack() },
                     )
+                }
+
+                composable<SettingsRoute> {
+                    SettingsScreen(onBack = { navController.popBackStack() })
+                }
+
+                composable<StatsRoute> {
+                    StatsScreen(onBack = { navController.popBackStack() })
                 }
             }
+
+            // Dims the library behind an open menu, and closes it on a
+            // tap anywhere. Its other half is in the bottomBar slot.
+            FabMenuScrim(
+                visible = fabMenuExpanded,
+                onDismiss = { fabMenuExpanded = false },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        // Hosted here rather than inside the library screen: a book
+        // opened from another app can arrive while the reader is on
+        // screen, and a question rendered by a screen that is not
+        // composed is a question nobody ever gets asked.
+        val conflict by libraryViewModel.conflicts.current.collectAsStateWithLifecycle()
+        conflict?.let { pending ->
+            DuplicateBookDialog(
+                conflict = pending,
+                onChoice = { choice, applyToRest ->
+                    libraryViewModel.answerConflict(choice, applyToRest)
+                },
+            )
+        }
+
+        val offered by libraryViewModel.offers.current.collectAsStateWithLifecycle()
+        offered?.let { staged ->
+            ImportPreviewScreen(
+                staged = staged,
+                onCancel = { libraryViewModel.answerOffer(false) },
+                onAdd = { libraryViewModel.answerOffer(true) },
+            )
+        }
+
+        scanningFolder?.let { folder ->
+            ScanFolderScreen(
+                treeUri = folder,
+                onDismiss = { scanningFolder = null },
+                onPickAnotherFolder = { folderPicker.launch(storageRootUri()) },
+                onFinished = { added, failed ->
+                    libraryViewModel.reportBatchImport(added, failed)
+                },
+            )
         }
     }
 
@@ -753,6 +746,7 @@ private fun ImportFabMenu(
     onExpandedChange: (Boolean) -> Unit,
     onAddBook: () -> Unit,
     onScanFolder: () -> Unit,
+    onNewShelf: () -> Unit,
 ) {
     // Resolved out here: the semantics block below is not a composable scope.
     val toggleLabel = stringResource(R.string.fab_menu_open)
@@ -783,7 +777,7 @@ private fun ImportFabMenu(
                 onAddBook()
             },
         )
-        Spacer(Modifier.size(10.dp))
+        FabMenuSpacer(expanded, 10.dp)
         FabMenuItem(
             icon = Icons.Rounded.FolderOpen,
             label = stringResource(R.string.fab_scan_folder),
@@ -793,7 +787,17 @@ private fun ImportFabMenu(
                 onScanFolder()
             },
         )
-        Spacer(Modifier.size(16.dp))
+        FabMenuSpacer(expanded, 10.dp)
+        FabMenuItem(
+            icon = Icons.Rounded.CreateNewFolder,
+            label = stringResource(R.string.fab_new_shelf),
+            visible = expanded,
+            onClick = {
+                onExpandedChange(false)
+                onNewShelf()
+            },
+        )
+        FabMenuSpacer(expanded, 16.dp)
 
         ToggleFloatingActionButton(
             checked = expanded,
@@ -844,6 +848,17 @@ private fun ImportFabMenu(
  * re-measure every frame, which is the other half of what read as jitter.
  * Disabled while hidden, so an invisible pill cannot be tapped.
  */
+/** Collapses with the items it separates, so a closed menu occupies nothing. */
+@Composable
+private fun FabMenuSpacer(expanded: Boolean, height: Dp) {
+    val gap by animateDpAsState(
+        targetValue = if (expanded) height else 0.dp,
+        animationSpec = MaterialTheme.motionScheme.fastSpatialSpec(),
+        label = "fabMenuGap",
+    )
+    Spacer(Modifier.height(gap))
+}
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun FabMenuItem(
@@ -874,15 +889,30 @@ private fun FabMenuItem(
         color = scheme.primaryContainer,
         contentColor = scheme.onPrimaryContainer,
         shadowElevation = 3.dp,
-        modifier = Modifier.graphicsLayer {
-            alpha = fade
-            val scale = 0.82f + 0.18f * rise
-            scaleX = scale
-            scaleY = scale
-            translationY = (1f - rise) * 20.dp.toPx()
-            // Grows out of the button rather than from its own middle.
-            transformOrigin = TransformOrigin(1f, 1f)
-        },
+        modifier = Modifier
+            .graphicsLayer {
+                alpha = fade
+                val scale = 0.82f + 0.18f * rise
+                scaleX = scale
+                scaleY = scale
+                translationY = (1f - rise) * 20.dp.toPx()
+                // Grows out of the button rather than from its own middle.
+                transformOrigin = TransformOrigin(1f, 1f)
+            }
+            // Folds to nothing once it has faded out. A layer only stops it
+            // being SEEN; the pill was still 56dp of layout sitting over the
+            // last row of the library, and the taps that landed there went to a
+            // disabled button instead of to the book underneath it. The size
+            // changes once at each end of the animation rather than per frame,
+            // so the Scaffold is not re-measuring throughout.
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints)
+                if (fade <= 0.001f) {
+                    layout(0, 0) {}
+                } else {
+                    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+                }
+            },
     ) {
         Row(
             modifier = Modifier

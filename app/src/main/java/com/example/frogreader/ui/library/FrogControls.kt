@@ -40,6 +40,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.frogreader.R
 import com.example.frogreader.ui.theme.LocalFrogColors
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.PlatformTextStyle
 
 /**
  * The controls the library is built out of, shared with every screen that has
@@ -185,6 +189,66 @@ internal fun GlassIconButton(
     }
 }
 
+/**
+ * The title under a cover, and the author under the title.
+ *
+ * They exist as a pair because of the gap that used to open up between them.
+ * A 12.5sp glyph inside a 16sp line box carries ~1.75sp of leading below it and
+ * the 11sp author carries ~1.5sp above its own — so a one-line title sat a
+ * visible step away from its author while a two-line one did not. Trimming the
+ * line box to the glyphs ([LineHeightStyle.Trim.Both], no font padding) makes
+ * both cases look the same, and makes the 2dp between them mean 2dp.
+ *
+ * No `minLines`: the author follows the title wherever it ends. Rows in a grid
+ * are then unequal in height, which is the intended look — reserving two lines
+ * everywhere is exactly the gap this removes.
+ */
+@Composable
+internal fun TileTitle(
+    text: String,
+    modifier: Modifier = Modifier,
+    maxLines: Int = 1,
+    fontSize: TextUnit = 12.5.sp,
+) {
+    Text(
+        text = text,
+        style = TrimmedLineHeight,
+        fontSize = fontSize,
+        lineHeight = fontSize * 1.28f,
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colorScheme.onSurface,
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier,
+    )
+}
+
+@Composable
+internal fun TileSubtitle(
+    text: String,
+    modifier: Modifier = Modifier,
+    fontSize: TextUnit = 11.sp,
+) {
+    Text(
+        text = text,
+        style = TrimmedLineHeight,
+        fontSize = fontSize,
+        lineHeight = fontSize * 1.27f,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier,
+    )
+}
+
+private val TrimmedLineHeight = TextStyle(
+    platformStyle = PlatformTextStyle(includeFontPadding = false),
+    lineHeightStyle = LineHeightStyle(
+        alignment = LineHeightStyle.Alignment.Center,
+        trim = LineHeightStyle.Trim.Both,
+    ),
+)
+
 /** "ALL BOOKS" — the small uppercase heading that opens a section. */
 @Composable
 internal fun SectionLabel(
@@ -201,6 +265,9 @@ internal fun SectionLabel(
         modifier = modifier,
     )
 }
+
+/** Rows that must not resize when a tick appears reserve exactly this. */
+internal val SelectionCheckDiameter = 26.dp
 
 /**
  * A round tick, in place of the stock Material checkbox.
@@ -221,7 +288,7 @@ internal fun SelectionCheck(
 
     Box(
         modifier = modifier
-            .size(26.dp)
+            .size(SelectionCheckDiameter)
             .clip(CircleShape)
             .background(
                 if (selected) scheme.primary.copy(alpha = alpha) else frog.chip.copy(alpha = alpha),

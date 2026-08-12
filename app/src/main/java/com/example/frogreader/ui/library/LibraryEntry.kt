@@ -33,9 +33,12 @@ sealed interface LibraryEntry {
 }
 
 /**
- * Merges books and shelves into the grid order. Defensive by design: a shelf
- * whose members no longer resolve is skipped and its books stay at the top
- * level, so a torn read (books updated, shelves not yet) can never hide a book.
+ * Merges books and shelves into the grid order. Defensive by design: a member
+ * id that no longer resolves is dropped rather than faked, so a torn read
+ * (books updated, shelves not yet) can never hide a book.
+ *
+ * A shelf with one book, or none, is still a shelf — the user can make an empty
+ * one and fill it later — so nothing here dissolves a shelf for being small.
  */
 internal fun buildEntries(books: List<Book>, shelves: List<Shelf>): List<LibraryEntry> {
     if (shelves.isEmpty()) {
@@ -49,8 +52,6 @@ internal fun buildEntries(books: List<Book>, shelves: List<Shelf>): List<Library
 
     for (shelf in shelves) {
         val members = shelf.bookIds.mapNotNull { byId[it] }.filter { it.id !in shelved }
-        // A one-book shelf doesn't exist — leave the members loose instead.
-        if (members.size < 2) continue
         members.forEach { shelved += it.id }
         shelfEntries += LibraryEntry.ShelfEntry(shelf, members)
     }

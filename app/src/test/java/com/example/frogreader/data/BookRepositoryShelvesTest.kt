@@ -131,8 +131,7 @@ class BookRepositoryShelvesTest {
         val repository = BookRepository(context = null)
         val shelf = repository.createShelf(listOf(target.id, dragged.id))
 
-        assertNotNull(shelf)
-        assertEquals(listOf("target", "dragged"), shelf!!.bookIds)
+        assertEquals(listOf("target", "dragged"), shelf.bookIds)
         assertEquals(1_000L, shelf.sortKey)
 
         // Reopening the repository must see the same shelf on disk.
@@ -142,15 +141,32 @@ class BookRepositoryShelvesTest {
         assertEquals(2, reopened.books.value.size)
     }
 
+    /**
+     * The FAB's shelf: no books at all, named later. It has to survive a write
+     * and a reopen, or the folder the user just made is gone by the next launch.
+     */
     @Test
-    fun testCreateShelfNeedsTwoRealBooks() = runTest {
+    fun testAnEmptyShelfIsCreatedAndPersists() = runTest {
         indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(book("a")))))
         val repository = BookRepository(context = null)
 
-        assertNull(repository.createShelf(listOf("a")))
-        assertNull(repository.createShelf(listOf("a", "ghost")))
-        assertNull(repository.createShelf(listOf("a", "a")))
-        assertTrue(repository.shelves.value.isEmpty())
+        val shelf = repository.createShelf(emptyList())
+
+        assertTrue(shelf.bookIds.isEmpty())
+        // Nothing to anchor to, so sortTs falls back to createdAtMillis.
+        assertEquals(0L, shelf.sortKey)
+
+        val reopened = BookRepository(context = null)
+        assertEquals(listOf(shelf.id), reopened.shelves.value.map { it.id })
+        assertTrue(reopened.shelves.value.single().bookIds.isEmpty())
+    }
+
+    @Test
+    fun testCreateShelfDropsIdsThatResolveToNothing() = runTest {
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(book("a")))))
+        val repository = BookRepository(context = null)
+
+        assertEquals(listOf("a"), repository.createShelf(listOf("a", "ghost", "a")).bookIds)
     }
 
     @Test
@@ -159,26 +175,27 @@ class BookRepositoryShelvesTest {
         indexFile.writeText(json.encodeToString(StoreFixture.indexOf(books)))
 
         val repository = BookRepository(context = null)
-        val first = repository.createShelf(listOf("a", "b"))!!
-        val second = repository.createShelf(listOf("c", "d"))!!
+        val first = repository.createShelf(listOf("a", "b"))
+        val second = repository.createShelf(listOf("c", "d"))
 
-        repository.addToShelf(second.id, "b")
+        repository.addToShelf(second.id, listOf("b"))
 
         val shelves = repository.shelves.value.associateBy { it.id }
-        // "a" alone can't hold a shelf together, so the first one dissolved.
-        assertNull(shelves[first.id])
+        // The first shelf keeps standing with the one book it has left.
+        assertEquals(listOf("a"), shelves.getValue(first.id).bookIds)
         assertEquals(listOf("c", "d", "b"), shelves.getValue(second.id).bookIds)
     }
 
     @Test
-    fun testRemoveFromShelfDissolvesATwoBookShelf() = runTest {
+    fun testRemoveFromShelfLeavesTheShelfStanding() = runTest {
         indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(book("a"), book("b")))))
         val repository = BookRepository(context = null)
-        val shelf = repository.createShelf(listOf("a", "b"))!!
+        val shelf = repository.createShelf(listOf("a", "b"))
 
-        repository.removeFromShelf(shelf.id, "b")
+        repository.removeFromShelf(shelf.id, listOf("a", "b"))
 
-        assertTrue(repository.shelves.value.isEmpty())
+        assertEquals(listOf(shelf.id), repository.shelves.value.map { it.id })
+        assertTrue(repository.shelves.value.single().bookIds.isEmpty())
         assertEquals(2, repository.books.value.size)
     }
 
@@ -186,16 +203,42 @@ class BookRepositoryShelvesTest {
     fun testDeleteBookPurgesItFromShelves() = runTest {
         indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(book("a"), book("b"), book("c")))))
         val repository = BookRepository(context = null)
-        val shelf = repository.createShelf(listOf("a", "b", "c"))!!
+        val shelf = repository.createShelf(listOf("a", "b", "c"))
 
         repository.deleteBook("c")
         assertEquals(listOf("a", "b"), repository.shelves.value.single().bookIds)
 
-        // Down to one member — the shelf dissolves rather than lingering.
+        // Emptying a shelf by deleting its books does NOT delete the shelf —
+        // only the delete-folder menu does that.
         repository.deleteBook("b")
+        repository.deleteBook("a")
+        assertEquals(listOf(shelf.id), repository.shelves.value.map { it.id })
+        assertTrue(repository.shelves.value.single().bookIds.isEmpty())
+        assertTrue(repository.books.value.isEmpty())
+    }
+
+    @Test
+    fun testDeleteShelfKeepsItsBooks() = runTest {
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(book("a"), book("b")))))
+        val repository = BookRepository(context = null)
+        val shelf = repository.createShelf(listOf("a", "b"))
+
+        repository.deleteShelf(shelf.id)
+
         assertTrue(repository.shelves.value.isEmpty())
-        assertEquals(1, repository.books.value.size)
-        assertEquals(shelf.id, shelf.id) // shelf id was never reused
+        assertEquals(listOf("a", "b"), repository.books.value.map { it.id }.sorted())
+    }
+
+    @Test
+    fun testDeleteShelfWithBooksTakesBothAway() = runTest {
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(listOf(book("a"), book("b"), book("c")))))
+        val repository = BookRepository(context = null)
+        val shelf = repository.createShelf(listOf("a", "b"))
+
+        repository.deleteShelfWithBooks(shelf.id)
+
+        assertTrue(repository.shelves.value.isEmpty())
+        assertEquals(listOf("c"), repository.books.value.map { it.id })
     }
 
     @Test
@@ -220,15 +263,17 @@ class BookRepositoryShelvesTest {
         val books = listOf(book("a"), book("b"), book("c"))
         val shelves = listOf(
             Shelf(id = "s1", name = "First", bookIds = listOf("a", "b", "ghost"), createdAtMillis = 10L),
-            // "a" is already claimed by s1, leaving only "c" — too few to survive.
+            // "a" is already claimed by s1, so s2 keeps only "c".
             Shelf(id = "s2", name = "Second", bookIds = listOf("a", "c"), createdAtMillis = 20L),
         )
         indexFile.writeText(json.encodeToString(StoreFixture.indexOf(books, shelves)))
 
         val repository = BookRepository(context = null)
 
-        assertEquals(1, repository.shelves.value.size)
-        assertEquals(listOf("a", "b"), repository.shelves.value[0].bookIds)
+        val byId = repository.shelves.value.associateBy { it.id }
+        assertEquals(2, byId.size)
+        assertEquals(listOf("a", "b"), byId.getValue("s1").bookIds)
+        assertEquals(listOf("c"), byId.getValue("s2").bookIds)
     }
 
 }
