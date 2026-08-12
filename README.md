@@ -57,9 +57,10 @@ customization. Runs on **Android 8.0+ (minSdk 26)**.
 - **Dynamic Pagination**: Custom page-breaking engine with `PaginationCache` for instantly smooth page turns.
 
 ### 📚 Library
-- **Shelves**: drag one book onto another to group them; open a shelf to rename it or pull a book back out.
+- **Shelves**: hold a book or a shelf for a context menu — select, add to a shelf, rename, delete. A shelf opens into a paged 3×2 grid with its own name (sized to fit), a progress summary, and search that reaches into a book's series and description as well as its title and author.
+- **Multi-Select**: pick several books at once for a bulk add-to-shelf or delete; deleting a shelf asks explicitly whether to keep its books or remove them too.
 - **Grid & List Views**: three-column cover grid or a compact list with inline reading progress.
-- **Live Search**: filters by title and author as you type, and looks inside shelves.
+- **Live Search**: ranked across title, author, series and description as you type, and reaches inside shelves.
 
 ### 💾 Backup & Data Safety
 - **Export & Restore**: write the whole library to a `.zip` you keep — two modes, *library only* (a few hundred KB: books, quotes, notes, ratings, positions, shelves, reading time and settings) or *everything* including the book files and covers.
