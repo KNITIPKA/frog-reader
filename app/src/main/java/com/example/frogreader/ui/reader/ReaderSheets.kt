@@ -108,6 +108,7 @@ import com.example.frogreader.data.ReaderFont
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.EmbeddedFont
 import com.example.frogreader.data.model.PublisherStyle
+import com.example.frogreader.data.model.Quote
 import com.example.frogreader.ui.theme.customFontFamily
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.ReadingMode
@@ -131,6 +132,7 @@ fun ReaderPanelsContent(
     onBookmarkClick: (Int) -> Unit,
     onRemoveBookmark: (String) -> Unit,
     onCopyQuote: (String) -> Unit,
+    onQuoteClick: (Quote) -> Unit,
     onRemoveQuote: (String) -> Unit,
     /** Whether the page being read is bookmarked, and its toggle. */
     bookmarked: Boolean = false,
@@ -168,7 +170,7 @@ fun ReaderPanelsContent(
                     ready, book, bookmarked, onToggleBookmark,
                     onBookmarkClick, onRemoveBookmark,
                 )
-                else -> QuotesTab(ready, book, onCopyQuote, onRemoveQuote)
+                else -> QuotesTab(ready, book, onCopyQuote, onQuoteClick, onRemoveQuote)
             }
         }
     }
@@ -420,6 +422,7 @@ private fun QuotesTab(
     ready: ReaderState.Ready,
     book: Book?,
     onCopyQuote: (String) -> Unit,
+    onQuoteClick: (Quote) -> Unit,
     onRemoveQuote: (String) -> Unit,
 ) {
     val quotes = book?.quotes.orEmpty()
@@ -429,10 +432,20 @@ private fun QuotesTab(
     }
     LazyColumn(contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp)) {
         items(quotes, key = { it.id }) { quote ->
+            // A quote saved before anchors existed, or one whose book file was
+            // replaced under it, has nowhere to jump to — it still copies.
+            val anchored = quote.startItem >= 0
             Row(
                 verticalAlignment = Alignment.Top,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .then(
+                        if (anchored) {
+                            Modifier.clickable { onQuoteClick(quote) }
+                        } else {
+                            Modifier
+                        },
+                    )
                     .padding(start = 8.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
             ) {
                 Column(Modifier.weight(1f)) {

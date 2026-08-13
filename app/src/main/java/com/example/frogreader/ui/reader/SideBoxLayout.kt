@@ -16,6 +16,9 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.ui.reader.selection.ReaderHighlights
+import com.example.frogreader.ui.reader.selection.readerHighlights
+import com.example.frogreader.ui.reader.selection.rememberTextFragment
 import java.io.File
 import kotlin.math.ceil
 import kotlin.math.roundToInt
@@ -223,6 +226,11 @@ private fun planBeside(
  * Draws the composite: the box (cap glyph or image) on its side, the
  * beside-text at the exact stored pixel width. Children are composed in
  * reading order (cap first) so text selection reads naturally.
+ *
+ * Both texts register as selection fragments. The cap is a `Text` of its own
+ * holding the paragraph's first characters, so without it a selection running
+ * through a drop-capped paragraph would have a hole exactly where the
+ * paragraph begins.
  */
 @Composable
 fun SideBoxComposite(
@@ -236,12 +244,26 @@ fun SideBoxComposite(
     colors: ReaderColors,
     totalWidthPx: Int,
     invertImages: Boolean = false,
+    highlights: ReaderHighlights? = null,
+    itemIndex: Int = -1,
     modifier: Modifier = Modifier,
 ) {
     val besideStyle = ReaderMetrics.textStyle(
         element, settings, fontSize,
         isParagraphStart = false, bookFonts = bookFonts, language = language,
     ).copy(color = colors.text)
+
+    // The cap eats the paragraph's first characters; the beside-text picks up
+    // exactly where it ends — in both reading modes (paged pagination stores
+    // the same offset in PagePart.charStart).
+    val capLength = sideBox.capText?.length ?: 0
+    val capFragment = if (sideBox.capText != null) {
+        rememberTextFragment(highlights, itemIndex, 0, capLength)
+    } else {
+        null // a floated image occupies no characters
+    }
+    val besideFragment =
+        rememberTextFragment(highlights, itemIndex, capLength, besideText.length)
 
     Layout(
         modifier = modifier,
@@ -256,6 +278,8 @@ fun SideBoxComposite(
                         .dropCapStyle(settings, capSize, cap, bookFonts, language)
                         .copy(color = colors.text),
                     softWrap = false,
+                    onTextLayout = { capFragment?.layout = it },
+                    modifier = Modifier.readerHighlights(capFragment, highlights),
                 )
             } else {
                 AsyncImage(
@@ -265,7 +289,12 @@ fun SideBoxComposite(
                     colorFilter = imageColorFilter(invertImages),
                 )
             }
-            Text(text = besideText, style = besideStyle)
+            Text(
+                text = besideText,
+                style = besideStyle,
+                onTextLayout = { besideFragment?.layout = it },
+                modifier = Modifier.readerHighlights(besideFragment, highlights),
+            )
         },
     ) { measurables, _ ->
         val boxPlaceable = measurables[0].measure(

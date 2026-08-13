@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.frogreader.ui.reader.selection.BookSelection
 import java.io.File
 import java.util.UUID
 
@@ -470,7 +471,7 @@ class ReaderViewModel(
         viewModelScope.launch { repository.removeBookmark(bookId, bookmarkId) }
     }
 
-    fun addQuote(text: String, chapterIndex: Int) {
+    fun addQuote(text: String, chapterIndex: Int, range: BookSelection) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         viewModelScope.launch {
@@ -481,6 +482,10 @@ class ReaderViewModel(
                     text = trimmed,
                     chapterIndex = chapterIndex,
                     createdAtMillis = System.currentTimeMillis(),
+                    startItem = range.start.itemIndex,
+                    startChar = range.start.charOffset,
+                    endItem = range.end.itemIndex,
+                    endChar = range.end.charOffset,
                 ),
             )
         }

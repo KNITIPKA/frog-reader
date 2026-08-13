@@ -20,6 +20,10 @@ import androidx.compose.ui.unit.Density
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.ui.reader.selection.ReaderHighlights
+import com.example.frogreader.ui.reader.selection.SelectionText
+import com.example.frogreader.ui.reader.selection.readerHighlights
+import com.example.frogreader.ui.reader.selection.rememberTextFragment
 
 /**
  * Table measurement and drawing. The layout (column widths, row heights,
@@ -178,9 +182,12 @@ fun TableBlock(
     fontSize: Float,
     language: String?,
     colors: ReaderColors,
+    highlights: ReaderHighlights? = null,
+    itemIndex: Int = -1,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
+    val cellSpans = remember(table) { SelectionText.tableCellSpans(table) }
 
     class CellPlacement(
         val row: Int,
@@ -253,6 +260,15 @@ fun TableBlock(
             for (p in placements) {
                 val cell = table.rows[p.row].cells[p.cellIndex]
                 val align = cell.align ?: if (cell.header) BlockAlign.CENTER else null
+                // A table's character space is its flattened text, the same
+                // one search and bookmark previews already use, so a cell is
+                // addressable like any other run of text in the book.
+                val fragment = rememberTextFragment(
+                    highlights = highlights,
+                    itemIndex = itemIndex,
+                    charStart = cellSpans.getOrNull(p.row)?.getOrNull(p.cellIndex)?.start ?: 0,
+                    length = cell.text.length,
+                )
                 Text(
                     text = cell.text,
                     style = ReaderMetrics
@@ -266,6 +282,8 @@ fun TableBlock(
                             },
                         ),
                     overflow = TextOverflow.Clip,
+                    onTextLayout = { fragment?.layout = it },
+                    modifier = Modifier.readerHighlights(fragment, highlights),
                 )
             }
         },

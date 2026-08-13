@@ -15,6 +15,8 @@ class ReaderColors(
     val accent: Color,
     /** Background of text saved as a quote. */
     val quoteHighlight: Color,
+    /** Background of the text being selected right now, and its handles. */
+    val selection: Color,
 )
 
 /**
@@ -46,5 +48,8 @@ fun readerColors(theme: AppTheme): ReaderColors {
         onChrome = scheme.onSurface,
         accent = scheme.primary,
         quoteHighlight = scheme.primary.copy(alpha = if (theme.isDark()) 0.28f else 0.22f),
+        // Stronger than a saved quote on purpose: while the reader is dragging,
+        // the selection has to be readable ON TOP of a quote it overlaps.
+        selection = scheme.primary.copy(alpha = if (theme.isDark()) 0.45f else 0.34f),
     )
 }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
@@ -26,6 +27,7 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.magnifier
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -55,8 +57,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.TextAutoSize
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.text.selection.rememberSelectionState
+import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
 import androidx.compose.material.icons.rounded.Close
@@ -75,7 +76,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
@@ -108,6 +108,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.layout.onSizeChanged
@@ -116,7 +117,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.LocalTextToolbar
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -156,6 +156,19 @@ import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.FOOTNOTE_TAG
 import com.example.frogreader.data.model.LINK_TAG
 import com.example.frogreader.data.model.ParagraphStyle
+import com.example.frogreader.data.model.Quote
+import com.example.frogreader.ui.reader.selection.BookSelection
+import com.example.frogreader.ui.reader.selection.ReaderHighlights
+import com.example.frogreader.ui.reader.selection.SelectionAutoAdvance
+import com.example.frogreader.ui.reader.selection.SelectionAutoAdvanceEffect
+import com.example.frogreader.ui.reader.selection.SelectionController
+import com.example.frogreader.ui.reader.selection.SelectionHandles
+import com.example.frogreader.ui.reader.selection.SelectionText
+import com.example.frogreader.ui.reader.selection.bookSelectionGestures
+import com.example.frogreader.ui.reader.selection.range
+import com.example.frogreader.ui.reader.selection.readerHighlights
+import com.example.frogreader.ui.reader.selection.rememberReaderHighlights
+import com.example.frogreader.ui.reader.selection.rememberTextFragment
 import com.example.frogreader.ui.theme.isDark
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -391,19 +404,32 @@ private fun ReaderContent(
         }
     }
 
-    // Custom selection toolbar with the "Add quote" action. SelectionState
-    // exposes the selected text directly, so quoting never touches the
-    // clipboard.
-    val quoteToolbar = remember { QuoteTextToolbar() }
-    val selectionState = rememberSelectionState()
     val context = LocalContext.current
+
+    // Selection in book coordinates — see ui/reader/selection. It lives here,
+    // above both reading modes, so a page turn or a scroll never disturbs it.
+    val selection = remember { SelectionController() }
+    selection.textAt = { index ->
+        ready.items.getOrNull(index)?.element?.let(SelectionText::elementText)
+    }
     fun selectedText(): String =
-        selectionState.selectedTexts.joinToString("\n") { it.text }.trim()
+        selection.selectedText(ready.items.size) { ready.items[it].element }
+
+    // A rebuilt item list (the hide-footnotes toggle rewrites element texts)
+    // moves every character offset in the book, so old anchors mean nothing.
+    LaunchedEffect(ready) { selection.clear() }
+    // Switching between scroll and pages keeps the reading position but not
+    // necessarily the view of the selection; carrying it over is confusing.
+    LaunchedEffect(settings.readingMode) { selection.clear() }
+    BackHandler(enabled = selection.active) { selection.clear() }
 
     // Tappable footnote references ([53] → bottom sheet with the note).
     var noteToShow by remember { mutableStateOf<AnnotatedString?>(null) }
-    // Texts of saved quotes — painted yellow inside the rendered book.
-    val quoteTexts = remember(liveBook) { liveBook?.quotes?.map { it.text }.orEmpty() }
+    // Saved quotes, resolved to book coordinates — painted by the same path
+    // machinery as the live selection, so each one marks exactly its own text.
+    val quoteRanges = remember(liveBook) {
+        liveBook?.quotes.orEmpty().mapNotNull { it.range() }
+    }
     val footnotes = remember(ready) {
         if (ready.notes.isEmpty() && ready.linkTargets.isEmpty()) {
             null
@@ -428,76 +454,104 @@ private fun ReaderContent(
             .fillMaxSize()
             .background(colors.background),
     ) {
-        CompositionLocalProvider(LocalTextToolbar provides quoteToolbar) {
-            SelectionContainer(state = selectionState) {
-                when (settings.readingMode) {
-                    ReadingMode.SCROLL -> ScrollReader(
-                        ready = ready,
-                        settings = settings,
-                        appSettings = appSettings,
-                        fontSize = liveFontSize,
-                        colors = colors,
-                        viewModel = viewModel,
-                        displayedIndex = displayedIndex,
-                        livePosition = liveScrollPosition,
-                        seekTarget = seekTarget,
-                        onSeekConsumed = { seekTarget = null },
-                        seekFraction = seekFraction,
-                        onSeekFractionConsumed = { seekFraction = null },
-                        seekPosition = seekPosition,
-                        onSeekPositionConsumed = { seekPosition = null },
-                        onToggleChrome = {
-                            onToggleChrome()
-                            searchHighlight = null
-                        },
-                        searchHighlight = searchHighlight,
-                        pinchHandlers = pinchHandlers,
-                        brightnessHandlers = brightnessHandlers,
-                        turnEvents = turnEvents,
-                        footnotes = footnotes,
-                        quotes = quoteTexts,
-                    )
+        // The selection's coordinate space: every anchor, handle and hit test
+        // is expressed relative to this box, and its gesture detector is the
+        // one that owns text selection now.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .onPlaced { selection.space = it }
+                .pointerInput(selection) { bookSelectionGestures(selection, haptics) }
+                // The loupe over the character being chosen — a fingertip
+                // covers about three words at reading size. The platform
+                // magnifier is API 28+; this modifier is a no-op below that,
+                // which is the right behaviour on our minSdk 26.
+                .magnifier(sourceCenter = { selection.magnifierSource() }),
+        ) {
+            when (settings.readingMode) {
+                ReadingMode.SCROLL -> ScrollReader(
+                    ready = ready,
+                    settings = settings,
+                    appSettings = appSettings,
+                    fontSize = liveFontSize,
+                    colors = colors,
+                    viewModel = viewModel,
+                    displayedIndex = displayedIndex,
+                    livePosition = liveScrollPosition,
+                    seekTarget = seekTarget,
+                    onSeekConsumed = { seekTarget = null },
+                    seekFraction = seekFraction,
+                    onSeekFractionConsumed = { seekFraction = null },
+                    seekPosition = seekPosition,
+                    onSeekPositionConsumed = { seekPosition = null },
+                    onToggleChrome = {
+                        onToggleChrome()
+                        searchHighlight = null
+                    },
+                    searchHighlight = searchHighlight,
+                    pinchHandlers = pinchHandlers,
+                    brightnessHandlers = brightnessHandlers,
+                    turnEvents = turnEvents,
+                    footnotes = footnotes,
+                    quoteRanges = quoteRanges,
+                    selection = selection,
+                )
 
-                    ReadingMode.PAGES -> PagedReader(
-                        ready = ready,
-                        settings = settings,
-                        appSettings = appSettings,
-                        colors = colors,
-                        viewModel = viewModel,
-                        displayedIndex = displayedIndex,
-                        pagePosition = pagePosition,
-                        livePagePosition = livePagePosition,
-                        seekTarget = seekTarget,
-                        onSeekConsumed = { seekTarget = null },
-                        seekFraction = seekFraction,
-                        onSeekFractionConsumed = { seekFraction = null },
-                        seekPosition = seekPosition,
-                        onSeekPositionConsumed = { seekPosition = null },
-                        onToggleChrome = {
-                            onToggleChrome()
-                            searchHighlight = null
-                        },
-                        searchHighlight = searchHighlight,
-                        pinchHandlers = pinchHandlers,
-                        brightnessHandlers = brightnessHandlers,
-                        turnEvents = turnEvents,
-                        footnotes = footnotes,
-                        quotes = quoteTexts,
-                    )
-                }
+                ReadingMode.PAGES -> PagedReader(
+                    ready = ready,
+                    settings = settings,
+                    appSettings = appSettings,
+                    colors = colors,
+                    viewModel = viewModel,
+                    displayedIndex = displayedIndex,
+                    pagePosition = pagePosition,
+                    livePagePosition = livePagePosition,
+                    seekTarget = seekTarget,
+                    onSeekConsumed = { seekTarget = null },
+                    seekFraction = seekFraction,
+                    onSeekFractionConsumed = { seekFraction = null },
+                    seekPosition = seekPosition,
+                    onSeekPositionConsumed = { seekPosition = null },
+                    onToggleChrome = {
+                        onToggleChrome()
+                        searchHighlight = null
+                    },
+                    searchHighlight = searchHighlight,
+                    pinchHandlers = pinchHandlers,
+                    brightnessHandlers = brightnessHandlers,
+                    turnEvents = turnEvents,
+                    footnotes = footnotes,
+                    quoteRanges = quoteRanges,
+                    selection = selection,
+                )
             }
+
+            SelectionAutoAdvanceEffect(selection)
+            SelectionHandles(selection, colors.accent)
         }
 
-        QuoteToolbarPopup(
-            toolbar = quoteToolbar,
+        // Outside the reading box on purpose: it carries the selection
+        // gesture, which swallows taps to dismiss the selection, and would
+        // swallow taps on these buttons too. Declared after it, so it is
+        // hit-tested first and drawn above the page.
+        SelectionToolbar(
+            controller = selection,
             colors = colors,
             onQuote = {
                 val selected = selectedText()
-                if (selected.isNotEmpty()) {
-                    viewModel.addQuote(selected, ready.chapterAt(displayedIndex.intValue))
+                val range = selection.selection
+                if (selected.isNotEmpty() && range != null) {
+                    // The chapter of the SELECTION, not of the page being
+                    // shown: an auto-turning drag can end several chapters
+                    // away from where the quote began.
+                    viewModel.addQuote(
+                        text = selected,
+                        chapterIndex = ready.chapterAt(range.start.itemIndex),
+                        range = range,
+                    )
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                 }
-                selectionState.clear()
+                selection.clear()
             },
             onTranslate = {
                 val selected = selectedText()
@@ -511,7 +565,15 @@ private fun ReaderContent(
                         context.startActivity(Intent.createChooser(intent, null))
                     }
                 }
-                selectionState.clear()
+                selection.clear()
+            },
+            onCopy = {
+                val selected = selectedText()
+                if (selected.isNotEmpty()) {
+                    clipboard.setText(AnnotatedString(selected))
+                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                }
+                selection.clear()
             },
         )
 
@@ -676,6 +738,12 @@ private fun ReaderContent(
                 clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
             },
+            onQuoteClick = { quote ->
+                haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                // Anchored quotes know exactly where they are; the char-precise
+                // seek lands on the right page even mid-paragraph.
+                seekPosition = quote.startItem to quote.startChar
+            },
             onRemoveQuote = { viewModel.removeQuote(it) },
             bookmarked = bookmarked,
             onToggleBookmark = {
@@ -797,28 +865,6 @@ private fun AnnotatedString.withFootnoteLinks(
 }
 
 /**
- * Paints saved quotes with a soft yellow background. A background span does
- * not change text metrics, so paginated text still fits its measured page.
- */
-private fun AnnotatedString.withQuoteHighlights(
-    quotes: List<String>,
-    highlight: Color,
-): AnnotatedString {
-    if (quotes.isEmpty()) return this
-    var builder: AnnotatedString.Builder? = null
-    for (quote in quotes) {
-        if (quote.isBlank()) continue
-        var index = text.indexOf(quote)
-        while (index >= 0) {
-            val target = builder ?: AnnotatedString.Builder(this).also { builder = it }
-            target.addStyle(SpanStyle(background = highlight), index, index + quote.length)
-            index = text.indexOf(quote, index + quote.length)
-        }
-    }
-    return builder?.toAnnotatedString() ?: this
-}
-
-/**
  * Paints every occurrence of the search term (case-insensitively) after a
  * jump from search results. Background-only, so page metrics don't change.
  * Cleared when the reader taps the page.
@@ -862,8 +908,9 @@ private fun ScrollReader(
     brightnessHandlers: BrightnessHandlers,
     turnEvents: SharedFlow<Boolean>,
     footnotes: FootnoteHandler?,
-    quotes: List<String>,
+    quoteRanges: List<BookSelection>,
     searchHighlight: String?,
+    selection: SelectionController,
 ) {
     val scope = rememberCoroutineScope()
     val liveBook by viewModel.book.collectAsStateWithLifecycle()
@@ -942,6 +989,30 @@ private fun ScrollReader(
         }
     }
 
+    val highlights = rememberReaderHighlights(
+        controller = selection,
+        quotes = quoteRanges,
+        quoteColor = colors.quoteHighlight,
+        selectionColor = colors.selection,
+    )
+    // A selection drag held at the top or bottom edge scrolls the list along.
+    DisposableEffect(selection, listState) {
+        val mine = SelectionAutoAdvance(
+            paged = false,
+            step = { _, pixels -> listState.scrollBy(pixels) },
+        )
+        selection.advance = mine
+        selection.surfaceMoving = { listState.isScrollInProgress }
+        // Only clear what is still ours: switching reading modes composes the
+        // other one's effect around this one's disposal.
+        onDispose {
+            if (selection.advance === mine) {
+                selection.advance = null
+                selection.surfaceMoving = { false }
+            }
+        }
+    }
+
     val stableInsets = WindowInsets.systemBarsIgnoringVisibility.asPaddingValues()
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val contentWidth = maxWidth - ReaderMetrics.horizontalPadding(settings.pageMargins) * 2
@@ -983,8 +1054,9 @@ private fun ScrollReader(
                     bookFonts = ready.bookFonts,
                     language = ready.language,
                     footnotes = footnotes,
-                    quotes = quotes,
                     searchHighlight = searchHighlight,
+                    highlights = highlights,
+                    itemIndex = index,
                 )
             }
             item(key = "completion") {
@@ -1024,8 +1096,9 @@ private fun PagedReader(
     brightnessHandlers: BrightnessHandlers,
     turnEvents: SharedFlow<Boolean>,
     footnotes: FootnoteHandler?,
-    quotes: List<String>,
+    quoteRanges: List<BookSelection>,
     searchHighlight: String?,
+    selection: SelectionController,
 ) {
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val liveBook by viewModel.book.collectAsStateWithLifecycle()
@@ -1101,6 +1174,15 @@ private fun PagedReader(
         val renderSettings = if (current.key != spec.key) current.settings else settings
 
         key(current.key, current.partial) {
+            // A fresh layout generation per pager rebuild: a settings change
+            // disposes this whole subtree and composes a new one, and for a
+            // frame both are registered.
+            val highlights = rememberReaderHighlights(
+                controller = selection,
+                quotes = quoteRanges,
+                quoteColor = colors.quoteHighlight,
+                selectionColor = colors.selection,
+            )
             val pages = current.pages
             val realPageCount = pages.size
             // Land on the page holding the exact CHARACTER the reader was at:
@@ -1244,6 +1326,30 @@ private fun PagedReader(
                 }
             }
 
+            // A selection drag held at the left or right edge turns pages.
+            // Clamped to the real pages: auto-turning onto the completion
+            // screen would mark the book finished and buzz for it.
+            DisposableEffect(selection, pagerState, realPageCount) {
+                val mine = SelectionAutoAdvance(
+                    paged = true,
+                    step = { direction, _ ->
+                        pagerState.animateScrollToPage(
+                            (pagerState.currentPage + direction)
+                                .coerceIn(0, (realPageCount - 1).coerceAtLeast(0)),
+                        )
+                    },
+                    settle = { pagerState.animateScrollToPage(pagerState.currentPage) },
+                )
+                selection.advance = mine
+                selection.surfaceMoving = { pagerState.isScrollInProgress }
+                onDispose {
+                    if (selection.advance === mine) {
+                        selection.advance = null
+                        selection.surfaceMoving = { false }
+                    }
+                }
+            }
+
             HorizontalPager(
                 state = pagerState,
                 beyondViewportPageCount = 1,
@@ -1279,8 +1385,8 @@ private fun PagedReader(
                         language = ready.language,
                         bookId = ready.book.id,
                         footnotes = footnotes,
-                        quotes = quotes,
                         searchHighlight = searchHighlight,
+                        highlights = highlights,
                     )
                 } else {
                     CompletionPage(
@@ -1341,8 +1447,8 @@ private fun PageView(
     language: String?,
     bookId: String,
     footnotes: FootnoteHandler?,
-    quotes: List<String>,
     searchHighlight: String?,
+    highlights: ReaderHighlights,
 ) {
     Column(
         modifier = Modifier
@@ -1368,7 +1474,6 @@ private fun PageView(
                 bookFonts = bookFonts,
                 language = language,
                 footnotes = footnotes,
-                quotes = quotes,
                 searchHighlight = searchHighlight,
                 tableLayout = part.tableLayout,
                 tableRowStart = part.rowStart,
@@ -1376,6 +1481,11 @@ private fun PageView(
                 tableHeaderRepeated = part.headerRepeated,
                 sideBox = part.sideBox,
                 floatImagePath = part.floatImagePath,
+                highlights = highlights,
+                itemIndex = part.itemIndex,
+                // charStart is only a character offset for text parts — a
+                // table part stores its row range in the very same fields.
+                charStart = if (part.text != null) part.charStart.coerceAtLeast(0) else 0,
             )
         }
     }
@@ -1449,6 +1559,10 @@ private fun Modifier.readerGestures(
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
                 if (event.changes.count { it.pressed } > 1) break // pinch takes over
+                // Text selection runs on Initial too, one level up, and the
+                // page margin it starts in is inside this edge zone. Once it
+                // claims the gesture, the brightness is not ours to change.
+                if (change.isConsumed) break
 
                 val totalDx = change.position.x - down.position.x
                 val totalDy = change.position.y - down.position.y
@@ -1530,8 +1644,13 @@ private fun RenderPart(
     bookFonts: Map<String, androidx.compose.ui.text.font.FontFamily> = emptyMap(),
     language: String? = null,
     footnotes: FootnoteHandler? = null,
-    quotes: List<String> = emptyList(),
     searchHighlight: String? = null,
+    /** Selection/quote painting — null outside the reader (previews). */
+    highlights: ReaderHighlights? = null,
+    /** Flat element index this part belongs to, for selection anchors. */
+    itemIndex: Int = -1,
+    /** Where this part's text starts inside the element (paged splits). */
+    charStart: Int = 0,
     tableLayout: TableLayout? = null,
     tableRowStart: Int = -1,
     tableRowEnd: Int = -1,
@@ -1592,13 +1711,12 @@ private fun RenderPart(
                         raw
                     }
                     )
-                    .withQuoteHighlights(quotes, colors.quoteHighlight)
                     .withSearchHighlight(searchHighlight, colors.accent.copy(alpha = 0.3f))
 
             // Paged mode: a stored side-box composite part (drop cap/float).
             if (sideBox != null && textOverride != null) {
                 val besideDisplay = remember(
-                    textOverride, colors, footnotes, quotes, searchHighlight,
+                    textOverride, colors, footnotes, searchHighlight,
                 ) { decorated(textOverride) }
                 SideBoxComposite(
                     element = element,
@@ -1611,6 +1729,8 @@ private fun RenderPart(
                     colors = colors,
                     totalWidthPx = with(LocalDensity.current) { exactTextWidth.roundToPx() },
                     invertImages = actuallyInvert,
+                    highlights = highlights,
+                    itemIndex = itemIndex,
                     modifier = Modifier.padding(
                         start = startPadding, top = vTop, bottom = vBottom,
                     ),
@@ -1649,7 +1769,7 @@ private fun RenderPart(
                         }
                         if (plan != null) {
                             val capLen = plan.capText?.length ?: 0
-                            val beside = remember(element, plan, colors, footnotes, quotes, searchHighlight) {
+                            val beside = remember(element, plan, colors, footnotes, searchHighlight) {
                                 decorated(element.text.subSequence(capLen, plan.besideEndChar))
                             }
                             SideBoxComposite(
@@ -1663,15 +1783,22 @@ private fun RenderPart(
                                 colors = colors,
                                 totalWidthPx = widthPx,
                                 invertImages = actuallyInvert,
+                                highlights = highlights,
+                                itemIndex = itemIndex,
                             )
                             if (plan.besideEndChar < element.text.length) {
-                                val remainder = remember(element, plan, colors, footnotes, quotes, searchHighlight) {
+                                val remainder = remember(element, plan, colors, footnotes, searchHighlight) {
                                     decorated(
                                         element.text.subSequence(
                                             plan.besideEndChar, element.text.length,
                                         ),
                                     )
                                 }
+                                val tail = rememberTextFragment(
+                                    highlights, itemIndex,
+                                    charStart = plan.besideEndChar,
+                                    length = element.text.length - plan.besideEndChar,
+                                )
                                 Text(
                                     text = remainder,
                                     style = ReaderMetrics
@@ -1682,16 +1809,22 @@ private fun RenderPart(
                                             language = language,
                                         )
                                         .copy(color = textColor),
-                                    modifier = Modifier.width(exactTextWidth),
+                                    onTextLayout = { tail?.layout = it },
+                                    modifier = Modifier
+                                        .width(exactTextWidth)
+                                        .readerHighlights(tail, highlights),
                                     inlineContent = inlineImageContent(remainder, actuallyInvert),
                                 )
                             }
                         } else {
                             val whole = remember(
-                                element, colors, footnotes, quotes, searchHighlight,
+                                element, colors, footnotes, searchHighlight,
                             ) {
                                 decorated(element.text)
                             }
+                            val fragment = rememberTextFragment(
+                                highlights, itemIndex, charStart = 0, length = element.text.length,
+                            )
                             Text(
                                 text = whole,
                                 style = ReaderMetrics
@@ -1700,7 +1833,10 @@ private fun RenderPart(
                                         isParagraphStart, bookFonts, language,
                                     )
                                     .copy(color = textColor),
-                                modifier = Modifier.width(exactTextWidth),
+                                onTextLayout = { fragment?.layout = it },
+                                modifier = Modifier
+                                    .width(exactTextWidth)
+                                    .readerHighlights(fragment, highlights),
                                 inlineContent = inlineImageContent(whole, actuallyInvert),
                             )
                         }
@@ -1710,31 +1846,39 @@ private fun RenderPart(
             }
 
             val raw = textOverride ?: element.text
-            val display = remember(raw, colors, footnotes, quotes, searchHighlight) {
+            val display = remember(raw, colors, footnotes, searchHighlight) {
                 decorated(raw)
             }
+            val fragment = rememberTextFragment(highlights, itemIndex, charStart, raw.length)
             Text(
                 text = display,
                 style = ReaderMetrics
                     .textStyle(element, settings, fontSize, isParagraphStart, bookFonts, language)
                     .copy(color = textColor),
+                onTextLayout = { fragment?.layout = it },
                 modifier = Modifier
                     .padding(start = startPadding, top = vTop, bottom = vBottom)
-                    .width(exactTextWidth),
+                    .width(exactTextWidth)
+                    .readerHighlights(fragment, highlights),
                 inlineContent = inlineImageContent(display, actuallyInvert),
             )
         }
 
-        is ContentElement.Heading -> Text(
-            text = (textOverride ?: androidx.compose.ui.text.AnnotatedString(element.text))
-                .withSearchHighlight(searchHighlight, colors.accent.copy(alpha = 0.3f)),
-            style = ReaderMetrics
-                .textStyle(element, settings, fontSize, isParagraphStart, bookFonts, language)
-                .copy(color = colors.text),
-            modifier = Modifier
-                .padding(start = startPadding, top = vTop, bottom = vBottom)
-                .width(exactTextWidth),
-        )
+        is ContentElement.Heading -> {
+            val raw = textOverride ?: androidx.compose.ui.text.AnnotatedString(element.text)
+            val fragment = rememberTextFragment(highlights, itemIndex, charStart, raw.length)
+            Text(
+                text = raw.withSearchHighlight(searchHighlight, colors.accent.copy(alpha = 0.3f)),
+                style = ReaderMetrics
+                    .textStyle(element, settings, fontSize, isParagraphStart, bookFonts, language)
+                    .copy(color = colors.text),
+                onTextLayout = { fragment?.layout = it },
+                modifier = Modifier
+                    .padding(start = startPadding, top = vTop, bottom = vBottom)
+                    .width(exactTextWidth)
+                    .readerHighlights(fragment, highlights),
+            )
+        }
 
         is ContentElement.Image -> {
             val heightModifier = when {
@@ -1802,6 +1946,8 @@ private fun RenderPart(
                 fontSize = fontSize,
                 language = language,
                 colors = colors,
+                highlights = highlights,
+                itemIndex = itemIndex,
                 modifier = Modifier.padding(
                     start = basePadding,
                     top = vTop,
@@ -2095,6 +2241,7 @@ private fun ReaderBottomBar(
     onBookmarkClick: (Int) -> Unit,
     onRemoveBookmark: (String) -> Unit,
     onCopyQuote: (String) -> Unit,
+    onQuoteClick: (Quote) -> Unit,
     onRemoveQuote: (String) -> Unit,
     bookmarked: Boolean,
     onToggleBookmark: () -> Unit,
@@ -2314,6 +2461,10 @@ private fun ReaderBottomBar(
                                 },
                                 onRemoveBookmark = onRemoveBookmark,
                                 onCopyQuote = onCopyQuote,
+                                onQuoteClick = { quote ->
+                                    settlePanel(0f)
+                                    onQuoteClick(quote)
+                                },
                                 onRemoveQuote = onRemoveQuote,
                                 bookmarked = bookmarked,
                                 onToggleBookmark = onToggleBookmark,

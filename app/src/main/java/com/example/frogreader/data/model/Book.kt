@@ -68,6 +68,22 @@ data class Quote(
     val text: String,
     val chapterIndex: Int,
     val createdAtMillis: Long,
+    /**
+     * Exactly where the quote is in the book: flat element index and character
+     * offset of its first and last character.
+     *
+     * [text] alone cannot say. Finding the quote by searching for its own text
+     * highlights every other occurrence of it too — which for anything short
+     * is most of the book — and finds nothing at all when the quote spans two
+     * paragraphs, because no single paragraph contains that string.
+     *
+     * -1 means "not anchored": a quote that predates this, or one whose book
+     * file was replaced under it.
+     */
+    val startItem: Int = -1,
+    val startChar: Int = -1,
+    val endItem: Int = -1,
+    val endChar: Int = -1,
     /** The user's own note about this quote. */
     val note: String? = null,
     /** Set by the repository when the quote is stored; empty in transit. */
