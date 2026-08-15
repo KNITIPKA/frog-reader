@@ -8,8 +8,11 @@ import com.example.frogreader.data.model.BackupDocument
 import com.example.frogreader.data.model.BackupManifest
 import com.example.frogreader.data.model.BackupMode
 import com.example.frogreader.data.model.BackupSettings
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
@@ -38,18 +41,81 @@ class BackupRepository(
         val booksWithoutFile: Int,
     )
 
+    /** A restorable FrogReader archive retained in a folder target. */
+    data class StoredBackup(
+        val ref: BackupRef,
+        val manifest: BackupManifest,
+    )
+
     private val booksDir get() = File(context.filesDir, "books")
     private val coversDir get() = File(context.filesDir, "covers")
+    private val operationMutex = Mutex()
 
     fun suggestedFileName(now: Long = System.currentTimeMillis()): String {
         val stamp = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(now))
         return "frogreader-$stamp.zip"
     }
 
+    /**
+     * A collision-resistant name for a backup the user explicitly writes into
+     * the retained snapshots folder. Scheduled work deliberately keeps the
+     * date-only stem above; a provider may suffix a same-day retry, and the
+     * validated retention pass safely removes excess completed snapshots.
+     */
+    fun suggestedManualSnapshotFileName(now: Long = System.currentTimeMillis()): String {
+        val stamp = SimpleDateFormat("yyyy-MM-dd-HHmmss-SSS", Locale.US).format(Date(now))
+        return "frogreader-$stamp.zip"
+    }
+
     suspend fun export(
         target: BackupTarget,
         mode: BackupMode,
+        fileName: String = suggestedFileName(),
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): BackupRef = operationMutex.withLock {
+        exportUnlocked(target, mode, fileName, onProgress)
+    }
+
+    /**
+     * Writes and rotates one folder snapshot as a single repository operation.
+     *
+     * The repository belongs to the application, so this lock also serializes
+     * a foreground backup with [ScheduledBackupWorker]. Rotation is best-effort:
+     * once [BackupTarget.write] succeeds, a housekeeping failure cannot turn a
+     * safely written archive into a reported backup failure.
+     */
+    suspend fun exportToFolder(
+        target: BackupTarget,
+        mode: BackupMode,
+        fileName: String = suggestedFileName(),
+        keep: Int = DEFAULT_KEEP,
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): BackupRef = operationMutex.withLock {
+        val written = exportUnlocked(target, mode, fileName, onProgress)
+        try {
+            rotateStoredBackupsUnlocked(target, keep)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            // The requested archive is already complete. Retention can recover
+            // on the next run without lying about this run's result.
+        }
+        written
+    }
+
+    /** Newest valid FrogReader snapshots, excluding unrelated or corrupt ZIPs. */
+    suspend fun listStoredBackups(
+        target: BackupTarget,
+        limit: Int = DEFAULT_KEEP,
+    ): List<StoredBackup> = operationMutex.withLock {
+        validStoredBackupsUnlocked(target, stopAfter = limit.coerceAtLeast(0))
+    }
+
+    private suspend fun exportUnlocked(
+        target: BackupTarget,
+        mode: BackupMode,
+        fileName: String,
+        onProgress: (done: Int, total: Int) -> Unit,
     ): BackupRef = withContext(Dispatchers.IO) {
         val document = BackupDocument(
             books = books.books.value,
@@ -61,7 +127,7 @@ class BackupRepository(
         )
         val currentStats = stats.stats.value
 
-        target.write(suggestedFileName()) { out ->
+        target.write(fileName) { out ->
             BackupArchive.write(
                 out = out,
                 document = document,
@@ -79,8 +145,13 @@ class BackupRepository(
 
     /** Reads the header only, to show the user what they are about to restore. */
     suspend fun inspect(target: BackupTarget, ref: BackupRef): BackupManifest =
+        operationMutex.withLock {
+            inspectUnlocked(target, ref)
+        }
+
+    private suspend fun inspectUnlocked(target: BackupTarget, ref: BackupRef): BackupManifest =
         withContext(Dispatchers.IO) {
-            target.open(ref).use { BackupArchive.readManifest(it) }
+            target.open(ref).use(BackupArchive::readManifest)
         }
 
     /**
@@ -100,6 +171,14 @@ class BackupRepository(
         target: BackupTarget,
         ref: BackupRef,
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+    ): RestoreSummary = operationMutex.withLock {
+        restoreUnlocked(target, ref, onProgress)
+    }
+
+    private suspend fun restoreUnlocked(
+        target: BackupTarget,
+        ref: BackupRef,
+        onProgress: (done: Int, total: Int) -> Unit,
     ): RestoreSummary = withContext(Dispatchers.IO) {
         val contents = target.open(ref).use { input ->
             BackupArchive.read(
@@ -133,6 +212,47 @@ class BackupRepository(
             quotes = restored.sumOf { it.quotes.size },
             booksWithoutFile = restored.count { it.fileName == null },
         )
+    }
+
+    private suspend fun validStoredBackupsUnlocked(
+        target: BackupTarget,
+        stopAfter: Int? = null,
+    ): List<StoredBackup> {
+        if (stopAfter == 0) return emptyList()
+        val result = mutableListOf<StoredBackup>()
+        val candidates = target.list()
+            .asSequence()
+            .filter { it.name.isFrogReaderSnapshotFileName() }
+            .sortedByDescending { it.modifiedAtMillis }
+        for (ref in candidates) {
+            val manifest = try {
+                inspectUnlocked(target, ref)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // A similarly named or damaged ZIP is not safe to restore and
+                // is not ours to delete automatically.
+                continue
+            }
+            result += StoredBackup(ref, manifest)
+            if (stopAfter != null && result.size >= stopAfter) break
+        }
+        return result
+    }
+
+    private suspend fun rotateStoredBackupsUnlocked(target: BackupTarget, keep: Int) {
+        validStoredBackupsUnlocked(target)
+            .drop(keep.coerceAtLeast(1))
+            .forEach { stored ->
+                try {
+                    target.delete(stored.ref)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // One provider failure must not prevent trying the remaining
+                    // old, validated FrogReader snapshots.
+                }
+            }
     }
 
     private fun appVersion(): String = runCatching {

@@ -1,26 +1,31 @@
 package com.example.frogreader.ui.theme
 
+import android.os.Build
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import com.example.frogreader.data.AppTheme
 
 /**
  * App-wide theme: Material 3 Expressive with the springy motion scheme.
  *
- * The three palettes are FIXED (Light / Beige / Midnight) and come straight from
- * the library design mock. Material You (dynamicLightColorScheme /
- * dynamicDarkColorScheme) is deliberately not used: the screens are drawn on
- * this specific green palette, and wallpaper-derived accents would not match.
- * As a bonus this drops an unguarded API 31 call from a minSdk 26 app.
+ * The three fixed palettes (Light / Beige / Midnight) come straight from the
+ * library design mock. On Android 12+, Material You can instead own the full
+ * Material palette, including neutral surfaces and backgrounds, for Light and
+ * Midnight. Beige is deliberately excluded and always keeps its warm palette.
  *
  * Hex literals live ONLY in this file — composables read
  * `MaterialTheme.colorScheme.*` or [LocalFrogColors].
@@ -29,14 +34,11 @@ import com.example.frogreader.data.AppTheme
 @Composable
 fun FrogReaderTheme(
     theme: AppTheme,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = colorSchemeFor(theme)
-    val extras = when (theme) {
-        AppTheme.WHITE -> LightExtraColors
-        AppTheme.SEPIA -> BeigeExtraColors
-        AppTheme.OLED -> MidnightExtraColors
-    }
+    val colorScheme = appColorSchemeFor(theme, dynamicColor)
+    val extras = frogColorsFor(theme, colorScheme, dynamicColor)
 
     CompositionLocalProvider(LocalFrogColors provides extras) {
         MaterialExpressiveTheme(
@@ -45,6 +47,43 @@ fun FrogReaderTheme(
             content = content,
         )
     }
+}
+
+/**
+ * Resolves the palette for app chrome. Dynamic colour deliberately returns the
+ * complete system scheme: Material You's subtly tinted neutral roles are what
+ * make backgrounds and cards feel related to the wallpaper without painting
+ * the whole app in the accent colour.
+ */
+@Composable
+fun appColorSchemeFor(theme: AppTheme, dynamicColor: Boolean): ColorScheme {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    return remember(theme, dynamicColor, context, configuration) {
+        val dynamicScheme = if (
+            dynamicColor &&
+            theme != AppTheme.SEPIA &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        ) {
+            if (theme.isDark()) {
+                dynamicDarkColorScheme(context)
+            } else {
+                dynamicLightColorScheme(context)
+            }
+        } else {
+            null
+        }
+        resolveAppColorScheme(theme, dynamicScheme)
+    }
+}
+
+internal fun resolveAppColorScheme(
+    theme: AppTheme,
+    dynamicScheme: ColorScheme?,
+): ColorScheme = if (theme == AppTheme.SEPIA) {
+    colorSchemeFor(theme)
+} else {
+    dynamicScheme ?: colorSchemeFor(theme)
 }
 
 /** True when the theme needs light status-bar icons. */
@@ -161,6 +200,53 @@ private val MidnightExtraColors = FrogExtraColors(
 )
 
 val LocalFrogColors = staticCompositionLocalOf { LightExtraColors }
+
+private fun fixedFrogColors(theme: AppTheme): FrogExtraColors = when (theme) {
+    AppTheme.WHITE -> LightExtraColors
+    AppTheme.SEPIA -> BeigeExtraColors
+    AppTheme.OLED -> MidnightExtraColors
+}
+
+/** The same extra-token policy used by the live app and by theme previews. */
+internal fun frogColorsFor(
+    theme: AppTheme,
+    scheme: ColorScheme,
+    dynamicColor: Boolean,
+): FrogExtraColors = if (
+    dynamicColor &&
+    theme != AppTheme.SEPIA &&
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+) {
+    dynamicFrogColors(scheme, dark = theme.isDark())
+} else {
+    fixedFrogColors(theme)
+}
+
+/**
+ * FrogReader-specific roles derived from the active Material You scheme. These
+ * keep the library header, folders and floating controls in the same tonal
+ * family as standard Material surfaces instead of leaving fixed green behind.
+ */
+internal fun dynamicFrogColors(scheme: ColorScheme, dark: Boolean): FrogExtraColors {
+    val raisedSurface = if (dark) scheme.surfaceContainerHighest else scheme.surfaceContainerLowest
+    return FrogExtraColors(
+        headerTop = scheme.primaryContainer,
+        headerBottom = scheme.surfaceContainerLow,
+        glass = if (dark) {
+            scheme.onPrimaryContainer.copy(alpha = 0.10f)
+        } else {
+            scheme.surfaceContainerLowest.copy(alpha = 0.62f)
+        },
+        chip = scheme.surfaceContainerHigh,
+        pill = raisedSurface.copy(alpha = 0.94f),
+        pill60 = raisedSurface.copy(alpha = 0.62f),
+        lift = scheme.surfaceContainerHigh.copy(alpha = 0.84f),
+        nav = scheme.surfaceContainerHigh,
+        folder = scheme.primary.copy(alpha = if (dark) 0.20f else 0.14f),
+        ink = scheme.onPrimaryContainer,
+        ink2 = scheme.onPrimaryContainer.copy(alpha = 0.76f),
+    )
+}
 
 // --------------------------------------------------------------- palettes
 

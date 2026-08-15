@@ -90,9 +90,6 @@ import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.imeAnimationSource
 import androidx.compose.foundation.layout.requiredHeight
 
-/** Scrim behind the shelf panel — rgba(16,44,26,.42) in the mock. */
-private val ShelfScrim = Color(0xFF102C1A)
-
 /** Scale the open-folder panel grows out of its tile from. */
 private const val PanelCollapsedScale = 0.78f
 
@@ -231,7 +228,7 @@ internal fun ShelfPanel(
         modifier = Modifier
             .fillMaxSize()
             .drawWithContent {
-                drawRect(ShelfScrim.copy(alpha = 0.42f * expansion.value))
+                drawRect(scheme.scrim.copy(alpha = 0.42f * expansion.value))
                 drawContent()
             }
             .clickable(

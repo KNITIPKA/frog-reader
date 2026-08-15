@@ -1,5 +1,8 @@
 package com.example.frogreader.ui.lock
 
+import android.app.KeyguardManager
+import android.content.Context
+import android.hardware.biometrics.BiometricManager
 import android.hardware.biometrics.BiometricManager.Authenticators
 import android.hardware.biometrics.BiometricPrompt
 import android.os.CancellationSignal
@@ -34,18 +37,31 @@ import com.example.frogreader.R
 @Composable
 fun LockScreen(onUnlocked: () -> Unit) {
     val context = LocalContext.current
+    val promptTitle = stringResource(R.string.lock_prompt_title)
 
     fun authenticate() {
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+        // A restored setting must never strand the user on a device that no
+        // longer has a fingerprint, PIN or other secure credential configured.
+        if (
+            android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q ||
+            !canUseAppLock(context)
+        ) {
             onUnlocked()
             return
         }
-        val prompt = BiometricPrompt.Builder(context)
-            .setTitle(context.getString(R.string.lock_prompt_title))
-            .setAllowedAuthenticators(
+        val builder = BiometricPrompt.Builder(context)
+            .setTitle(promptTitle)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            builder.setAllowedAuthenticators(
                 Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL,
             )
-            .build()
+        } else {
+            // setAllowedAuthenticators(int) is API 30. Android 10 exposes the
+            // same screen-lock fallback through this older builder method.
+            @Suppress("DEPRECATION")
+            builder.setDeviceCredentialAllowed(true)
+        }
+        val prompt = builder.build()
         prompt.authenticate(
             CancellationSignal(),
             context.mainExecutor,
@@ -97,5 +113,20 @@ fun LockScreen(onUnlocked: () -> Unit) {
                 Text(stringResource(R.string.lock_unlock))
             }
         }
+    }
+}
+
+@Suppress("DEPRECATION")
+internal fun canUseAppLock(context: Context): Boolean {
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return false
+    val manager = context.getSystemService(BiometricManager::class.java)
+    val keyguard = context.getSystemService(KeyguardManager::class.java)
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        manager?.canAuthenticate(
+            Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL,
+        ) == BiometricManager.BIOMETRIC_SUCCESS
+    } else {
+        manager?.canAuthenticate() == BiometricManager.BIOMETRIC_SUCCESS ||
+            keyguard?.isDeviceSecure == true
     }
 }

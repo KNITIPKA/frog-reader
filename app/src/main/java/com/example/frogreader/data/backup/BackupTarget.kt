@@ -58,6 +58,10 @@ const val DEFAULT_BACKUPS_KEPT = 5
 suspend fun BackupTarget.rotate(keep: Int = DEFAULT_BACKUPS_KEPT) {
     runCatching { list() }
         .getOrDefault(emptyList())
+        // A target may represent a user-owned folder containing other ZIPs.
+        // The repository adds manifest validation in production; this name
+        // boundary keeps even the generic helper from deleting unrelated data.
+        .filter { it.name.isFrogReaderSnapshotFileName() }
         .drop(keep.coerceAtLeast(1))
         .forEach { runCatching { delete(it) } }
 }

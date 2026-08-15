@@ -1,16 +1,17 @@
 package com.example.frogreader.data.backup
 
 import android.content.Context
-import android.net.Uri
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.core.net.toUri
 import com.example.frogreader.FrogReaderApp
 import com.example.frogreader.data.BackupFrequency
 import com.example.frogreader.data.model.BackupMode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
@@ -36,12 +37,22 @@ class ScheduledBackupWorker(
         if (settings.backupFrequency.first() == BackupFrequency.OFF) return Result.success()
         val folder = settings.backupFolder.first() ?: return Result.success()
 
-        val target = SafFolderTarget(app, Uri.parse(folder))
+        val target = SafFolderTarget(app, folder.toUri())
         return try {
-            app.backupRepository.export(target, BackupMode.DATA)
-            target.rotate()
-            settings.recordBackupAt(System.currentTimeMillis())
+            // The repository-level lock makes write + validated rotation atomic
+            // with a manual backup or restore in the foreground process.
+            app.backupRepository.exportToFolder(target, BackupMode.DATA)
+            try {
+                settings.recordBackupAt(System.currentTimeMillis())
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The ZIP is already safely written. A summary timestamp must
+                // not cause WorkManager to retry and overwrite it needlessly.
+            }
             Result.success()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             // The folder may be temporarily unmounted, or a cloud provider may
             // be offline. Retrying is right; giving up silently is not.

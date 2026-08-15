@@ -1,9 +1,12 @@
 package com.example.frogreader.data.backup
 
 import com.example.frogreader.data.AppSettings
+import com.example.frogreader.data.AppLockDelay
 import com.example.frogreader.data.AppTheme
+import com.example.frogreader.data.LightThemeDefault
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.ReadingStats
+import com.example.frogreader.data.StartupDestination
 import com.example.frogreader.data.model.BackupDocument
 import com.example.frogreader.data.model.BackupManifest
 import com.example.frogreader.data.model.BackupMode
@@ -252,6 +255,41 @@ class BackupArchiveTest {
 
         assertNull("the damaged section is simply absent", contents.stats)
         assertEquals("kept", contents.document.books.single().quotes.single().text)
+    }
+
+    @Test
+    fun `settings from before the redesign decode with new defaults`() {
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip ->
+            zip.putNextEntry(ZipEntry("manifest.json"))
+            zip.write("""{"formatVersion":1,"bookCount":0}""".toByteArray())
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry("library.json"))
+            zip.write("""{"books":[],"shelves":[]}""".toByteArray())
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry("settings.json"))
+            zip.write(
+                """{"reader":{"fontSizeSp":20.0},"app":{"theme":"OLED","haptics":false}}"""
+                    .toByteArray(),
+            )
+            zip.closeEntry()
+        }
+
+        val restored = BackupArchive.read(
+            ByteArrayInputStream(out.toByteArray()),
+            booksDir,
+            coversDir,
+        ).settings
+        val app = requireNotNull(restored) { "Expected old settings to decode" }.app
+
+        assertEquals(AppTheme.OLED, app.theme)
+        assertFalse(app.haptics)
+        assertTrue(app.followSystemTheme)
+        assertEquals(LightThemeDefault.LIGHT, app.lightThemeDefault)
+        assertTrue(app.dynamicColor)
+        assertEquals(StartupDestination.LIBRARY, app.startupDestination)
+        assertEquals(AppLockDelay.ONE_MINUTE, app.appLockDelay)
+        assertEquals(BackupMode.DATA, app.backupMode)
     }
 
     @Test

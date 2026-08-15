@@ -147,6 +147,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import com.example.frogreader.MainActivity
 import com.example.frogreader.R
+import com.example.frogreader.ui.theme.appColorSchemeFor
 import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.AppTheme
 import com.example.frogreader.data.ReaderSettings
@@ -263,7 +264,13 @@ private fun ReaderContent(
     val haptics = LocalHapticFeedback.current
     val clipboard = LocalClipboardManager.current
 
-    val colors = readerColors(appSettings.theme)
+    val colors = readerColors(
+        theme = appSettings.theme,
+        // Resolve against the page's light/dark character, not the current
+        // system mode: a Beige page still needs a light Material You accent
+        // even when the surrounding app is following dark mode.
+        chromeScheme = appColorSchemeFor(appSettings.theme, appSettings.dynamicColor),
+    )
     val liveBook by viewModel.book.collectAsStateWithLifecycle()
 
     // How far the settings drawer is pulled up (0 closed → 1 half-open and

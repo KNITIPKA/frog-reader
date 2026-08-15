@@ -234,10 +234,12 @@
     <string name="theme_sheet_title">Theme</string>
     <string name="theme_light">Light</string>
     <string name="theme_light_note">Warm white, forest green accents</string>
+    <string name="theme_light_material_note">System colours, light surfaces</string>
     <string name="theme_beige">Beige</string>
     <string name="theme_beige_note">Warm paper, umber accents</string>
     <string name="theme_midnight">Midnight</string>
     <string name="theme_midnight_note">True black, mint green accents</string>
+    <string name="theme_midnight_material_note">System colours, dark surfaces</string>
     <string name="settings_section_reading">Reading</string>
     <string name="settings_keep_screen_on">Keep screen on</string>
     <string name="settings_keep_screen_on_subtitle">The screen won\'t dim while you read</string>
@@ -317,6 +319,92 @@
     <string name="lock_prompt_title">Unlock Frog Reader</string>
     <string name="lock_locked_title">Frog Reader is locked</string>
     <string name="lock_unlock">Unlock</string>
+
+    <!-- Redesigned settings hub and sub-pages -->
+    <string name="settings_theme_title">Theme</string>
+    <string name="settings_reading_title">Reading</string>
+    <string name="settings_privacy_title">Privacy</string>
+    <string name="settings_app_lock_title">App lock</string>
+    <string name="settings_backup_title">Backup</string>
+    <string name="settings_theme_summary_system">%1$s · follows the system</string>
+    <string name="settings_theme_summary_fixed">%1$s · always on</string>
+    <string name="settings_summary_screen">Screen on</string>
+    <string name="settings_summary_volume">Volume keys</string>
+    <string name="settings_summary_vibration">Vibration</string>
+    <string name="settings_summary_helpers_off">Reading helpers are off</string>
+    <string name="settings_lock_off">Off</string>
+    <string name="settings_lock_on_summary">On · %1$s</string>
+    <string name="settings_lock_delay_immediate">asks right away</string>
+    <string name="settings_lock_delay_one_minute">asks after a minute</string>
+    <string name="settings_lock_delay_fifteen_minutes">asks after 15 minutes</string>
+    <string name="settings_backup_summary">Last backup %1$s · %2$s</string>
+    <string name="settings_backup_summary_never">No backup yet · %1$s</string>
+    <string name="settings_about_summary">Version %1$s · alpha</string>
+    <string name="settings_about_version">Version %1$s · alpha · MIT licence</string>
+    <string name="settings_about_github">GitHub</string>
+    <string name="settings_about_github_subtitle">Source code and project overview</string>
+    <string name="settings_about_releases">Releases</string>
+    <string name="settings_about_releases_subtitle">Updates and APK downloads</string>
+    <string name="settings_about_issues">Report a problem</string>
+    <string name="settings_about_issues_subtitle">Bug reports and feature requests</string>
+    <string name="settings_about_footnote">Literata by TypeTogether. Parsing and rendering are FrogReader’s own — no account and no network.</string>
+    <string name="settings_link_failed">No app can open this link.</string>
+    <string name="settings_close">Close</string>
+
+    <string name="settings_theme_automatic">Automatic</string>
+    <string name="settings_follow_system">Follow the system</string>
+    <string name="settings_follow_system_on_subtitle">A dark palette at night, a light palette by day</string>
+    <string name="settings_follow_system_off_subtitle">%1$s stays on around the clock</string>
+    <string name="settings_light_theme_default">Light theme by default</string>
+    <string name="settings_light_theme_default_subtitle">Used whenever the system is not dark</string>
+    <string name="settings_dynamic_color">Material You colours</string>
+    <string name="settings_dynamic_color_subtitle">For Light and Midnight themes; Beige always stays beige</string>
+    <string name="settings_theme_helper_dynamic">Material You recolours Light and Midnight throughout the app. Beige always keeps its warm palette; the reading page keeps its chosen colour.</string>
+    <string name="settings_theme_helper_system">The reader keeps its own page colour — Midnight only takes over the library and app chrome.</string>
+    <string name="settings_theme_helper_manual">With system switching off, the chosen theme stays put day and night.</string>
+
+    <string name="settings_while_reading">While you read</string>
+    <string name="settings_startup_title">On opening the app</string>
+    <string name="settings_startup_subtitle">Where FrogReader starts</string>
+    <string name="settings_startup_last_book">Last book</string>
+    <string name="settings_reading_helper">Page colour, font and margins stay where they are — in the reader’s own sheet.</string>
+
+    <string name="settings_app_lock_section">App lock</string>
+    <string name="settings_lock_delay_title">Ask for unlock</string>
+    <string name="settings_lock_delay_subtitle">After you switch away from FrogReader</string>
+    <string name="settings_lock_delay_immediate_short">At once</string>
+    <string name="settings_lock_delay_one_minute_short">1 min</string>
+    <string name="settings_lock_delay_fifteen_minutes_short">15 min</string>
+    <string name="settings_privacy_helper">Unlock uses the fingerprint or screen lock already set up on this device. FrogReader has no account and sends nothing anywhere.</string>
+
+    <string name="backup_include_now_section">Back up now includes</string>
+    <string name="backup_automatic_data_only_helper">Automatic backups always use Data only, avoiding large background transfers.</string>
+    <string name="backup_mode_data_short">Data only</string>
+    <string name="backup_mode_data_compact_desc">Shelves, quotes, notes, progress and settings</string>
+    <string name="backup_mode_full_short">Data and books</string>
+    <string name="backup_mode_full_compact_desc">The same, plus every book file and cover</string>
+    <string name="backup_size_small">Small</string>
+    <string name="backup_size_approximate">~%1$s</string>
+    <string name="backup_automatic_section">Automatic backups</string>
+    <string name="backup_folder_short">Folder</string>
+    <string name="backup_folder_change">Change</string>
+    <string name="backup_frequency_title">How often</string>
+    <string name="backup_frequency_subtitle">The %1$d most recent backups are kept</string>
+    <string name="backup_frequency_daily_short">Daily</string>
+    <string name="backup_frequency_weekly_short">Weekly</string>
+    <string name="backup_snapshots_title">Snapshots in this folder</string>
+    <string name="backup_snapshots_count">%1$d of %2$d</string>
+    <string name="backup_snapshots_empty">No backups in this folder yet.</string>
+    <string name="backup_snapshots_error">Couldn’t read this folder: %1$s</string>
+    <string name="backup_retry">Try again</string>
+    <string name="backup_last_compact">Last backup %1$s</string>
+    <string name="backup_last_never_compact">No backup yet</string>
+    <string name="backup_library_summary">Current library · %1$d books · %2$d quotes</string>
+    <string name="backup_scope_data_label">Data only</string>
+    <string name="backup_scope_full_label">Data and books</string>
+    <string name="backup_scope_unknown_label">Backup</string>
+    <string name="backup_restore_short">Restore</string>
+    <string name="backup_restore_snapshot_description">Restore backup from %1$s</string>
 
     <!-- Widget -->
     <string name="widget_label">Continue reading</string>

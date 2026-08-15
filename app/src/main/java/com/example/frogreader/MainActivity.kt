@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.view.KeyEvent
@@ -34,6 +35,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -68,6 +70,8 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -117,8 +121,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import com.example.frogreader.data.AppLockDelay
+import com.example.frogreader.data.AppTheme
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.SettingsRepository
+import com.example.frogreader.data.StartupDestination
+import com.example.frogreader.data.effectiveTheme
 import com.example.frogreader.data.parser.BookParsers
 import com.example.frogreader.ui.library.DuplicateBookDialog
 import com.example.frogreader.ui.library.ImportPreviewScreen
@@ -226,7 +234,16 @@ class MainActivity : ComponentActivity() {
         // running in. Without it the hand-off exposes Theme.Material.Light's
         // own background for a frame — grey on a Midnight install.
         val bootTheme = SettingsRepository.bootTheme(this)
-        window.setBackgroundDrawable(colorSchemeFor(bootTheme).surface.toArgb().toDrawable())
+        val bootScheme = if (
+            SettingsRepository.bootDynamicColor(this) &&
+            bootTheme != AppTheme.SEPIA &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        ) {
+            if (bootTheme.isDark()) dynamicDarkColorScheme(this) else dynamicLightColorScheme(this)
+        } else {
+            colorSchemeFor(bootTheme)
+        }
+        window.setBackgroundDrawable(bootScheme.surface.toArgb().toDrawable())
 
         enableEdgeToEdge()
         pendingIntents.value = intent
@@ -252,13 +269,40 @@ class MainActivity : ComponentActivity() {
 
             // `bootTheme`, not a hard-coded default: on a Midnight install the
             // old fallback meant the first composition was beige.
-            val theme = settings?.theme ?: bootTheme
+            val systemDark = isSystemInDarkTheme()
+            val theme = settings?.effectiveTheme(systemDark) ?: bootTheme
+            val dynamicColor = settings?.dynamicColor == true
+            // Resolve this once when DataStore becomes available. Changing the
+            // preference later affects the next app start, never yanks the user
+            // out of the screen they are currently using.
+            val startupReaderBookId: String? = remember(settings != null) {
+                if (settings?.startupDestination == StartupDestination.LAST_BOOK) {
+                    runCatching {
+                        app.bookRepository.books.value
+                            .asSequence()
+                            .filter { it.fileName != null && it.lastOpenedAtMillis != null }
+                            .maxByOrNull { it.lastOpenedAtMillis ?: Long.MIN_VALUE }
+                            ?.id
+                    }.getOrNull()
+                } else {
+                    null
+                }
+            }
+            // Kept above the lock gate so a background re-lock does not throw
+            // away the navigation stack and replay the startup destination.
+            val navController = rememberNavController()
             // Status-bar icon contrast follows the app theme, not the system
             // dark mode (OLED on a light-mode phone still needs light icons).
-            LaunchedEffect(theme) {
-                WindowCompat.getInsetsController(window, window.decorView)
-                    .isAppearanceLightStatusBars = !theme.isDark()
-                SettingsRepository.rememberBootTheme(this@MainActivity, theme)
+            LaunchedEffect(theme, dynamicColor) {
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !theme.isDark()
+                    isAppearanceLightNavigationBars = !theme.isDark()
+                }
+                SettingsRepository.rememberBootAppearance(
+                    context = this@MainActivity,
+                    theme = theme,
+                    dynamicColor = dynamicColor,
+                )
             }
 
             LaunchedEffect(settings != null) {
@@ -270,9 +314,15 @@ class MainActivity : ComponentActivity() {
                 reportFullyDrawn()
             }
 
-            FrogReaderTheme(theme = theme) {
+            FrogReaderTheme(
+                theme = theme,
+                dynamicColor = dynamicColor,
+            ) {
                 val lockViewModel: LockViewModel = viewModel()
-                RelockOnBackground(lockViewModel)
+                RelockOnBackground(
+                    lockViewModel = lockViewModel,
+                    delay = settings?.appLockDelay ?: AppLockDelay.ONE_MINUTE,
+                )
 
                 val entering by animateFloatAsState(
                     targetValue = if (settings != null) 1f else 0f,
@@ -303,7 +353,10 @@ class MainActivity : ComponentActivity() {
                             settings.appLock && !lockViewModel.unlocked ->
                                 LockScreen(onUnlocked = { lockViewModel.unlocked = true })
 
-                            else -> AppNavigation()
+                            else -> AppNavigation(
+                                navController = navController,
+                                startupReaderBookId = startupReaderBookId,
+                            )
                         }
                     }
                 }
@@ -338,13 +391,16 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun RelockOnBackground(lockViewModel: LockViewModel) {
+    private fun RelockOnBackground(
+        lockViewModel: LockViewModel,
+        delay: AppLockDelay,
+    ) {
         val lifecycleOwner = LocalLifecycleOwner.current
-        DisposableEffect(lifecycleOwner) {
+        DisposableEffect(lifecycleOwner, delay) {
             val observer = LifecycleEventObserver { _, event ->
                 when (event) {
                     Lifecycle.Event.ON_STOP -> lockViewModel.onAppStopped()
-                    Lifecycle.Event.ON_START -> lockViewModel.onAppStarted()
+                    Lifecycle.Event.ON_START -> lockViewModel.onAppStarted(delay)
                     else -> Unit
                 }
             }
@@ -354,16 +410,18 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun AppNavigation() {
-        val navController = rememberNavController()
-
+    private fun AppNavigation(
+        navController: NavHostController,
+        startupReaderBookId: String?,
+    ) {
         val backStackEntry by navController.currentBackStackEntryAsState()
         val destination = backStackEntry?.destination
-        // Null for the first frame, before the start destination is on
-        // the back stack. That start destination IS the library, so
-        // reading null as top-level keeps the bar from flying in.
-        val onTopLevel = destination == null || destination.isTopLevel()
-        val onLibrary = destination == null || destination.hasRoute<LibraryRoute>()
+        // Null for the first frame, before the start destination reaches the
+        // back stack. Mirror that destination so the bottom bar never flashes
+        // over a reader-first launch.
+        val startsInLibrary = startupReaderBookId == null
+        val onTopLevel = destination?.isTopLevel() ?: startsInLibrary
+        val onLibrary = destination?.hasRoute<LibraryRoute>() ?: startsInLibrary
         val selectedTab = if (destination?.hasRoute<ProfileRoute>() == true) {
             NavTab.PROFILE
         } else {
@@ -401,7 +459,11 @@ class MainActivity : ComponentActivity() {
         val libraryViewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory)
         val isImportingBook by libraryViewModel.importing.collectAsStateWithLifecycle()
 
-        HandleIncomingIntents(navController, libraryViewModel)
+        HandleIncomingIntents(
+            navController = navController,
+            libraryViewModel = libraryViewModel,
+            hasSyntheticReaderStart = startupReaderBookId != null,
+        )
 
         // The folder being scanned, or null. Not rememberSaveable: the
         // tree grant is one-shot and does not survive process death, so
@@ -502,7 +564,7 @@ class MainActivity : ComponentActivity() {
             // content clears the bar while their background does not.
             NavHost(
                 navController = navController,
-                startDestination = LibraryRoute,
+                startDestination = startupReaderBookId?.let(::ReaderRoute) ?: LibraryRoute,
                 modifier = Modifier.fillMaxSize(),
                 enterTransition = { if (switchingTabs) tabEnter() else pushEnter() },
                 exitTransition = { if (switchingTabs) tabExit() else fadeOut(NavFade) },
@@ -534,9 +596,23 @@ class MainActivity : ComponentActivity() {
 
                 composable<ReaderRoute> { entry ->
                     val route = entry.toRoute<ReaderRoute>()
+                    val openLibrary: () -> Unit = {
+                        navController.navigate(LibraryRoute) {
+                            popUpTo(route) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                    // A reader used as the graph's start destination has no
+                    // library entry underneath it. Back still means Library,
+                    // not closing the activity.
+                    BackHandler(enabled = navController.previousBackStackEntry == null) {
+                        openLibrary()
+                    }
                     ReaderScreen(
                         bookId = route.bookId,
-                        onBack = { navController.popBackStack() },
+                        onBack = {
+                            if (!navController.popBackStack()) openLibrary()
+                        },
                     )
                 }
 
@@ -598,6 +674,7 @@ class MainActivity : ComponentActivity() {
     private fun HandleIncomingIntents(
         navController: NavHostController,
         libraryViewModel: LibraryViewModel,
+        hasSyntheticReaderStart: Boolean,
     ) {
         // A single long-lived coroutine handles intents sequentially, so an
         // in-flight import is never cancelled by consuming the intent.
@@ -610,7 +687,25 @@ class MainActivity : ComponentActivity() {
                 val targetBookId = processIntentForNavigation(incoming, app.bookRepository)
                 when {
                     targetBookId != null -> {
-                        navController.navigate(ReaderRoute(targetBookId))
+                        // LAST_BOOK creates a synthetic reader start entry. A
+                        // cold-start widget intent is more specific, so replace
+                        // that entry instead of stacking a second reader behind
+                        // the requested book.
+                        val replaceStartupReader =
+                            hasSyntheticReaderStart &&
+                                navController.previousBackStackEntry == null &&
+                                (navController.currentBackStackEntry == null ||
+                                    navController.currentBackStackEntry
+                                        ?.destination
+                                        ?.hasRoute<ReaderRoute>() == true)
+                        navController.navigate(ReaderRoute(targetBookId)) {
+                            if (replaceStartupReader) {
+                                popUpTo(navController.graph.startDestinationId) {
+                                    inclusive = true
+                                }
+                            }
+                            launchSingleTop = true
+                        }
                     }
 
                     incoming.action == Intent.ACTION_VIEW && incoming.data != null -> {

@@ -2,6 +2,8 @@ package com.example.frogreader.data.backup
 
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -49,6 +51,16 @@ class BackupRotationTest {
     }
 
     @Test
+    fun `folder ownership accepts only names FrogReader can create`() {
+        assertTrue("frogreader-2026-08-15.zip".isFrogReaderSnapshotFileName())
+        assertTrue("frogreader-2026-08-15 (1).zip".isFrogReaderSnapshotFileName())
+        assertTrue("frogreader-2026-08-15-173012-042.zip".isFrogReaderSnapshotFileName())
+        assertFalse("photos.zip".isFrogReaderSnapshotFileName())
+        assertFalse("frogreader-not-a-date.zip".isFrogReaderSnapshotFileName())
+        assertFalse("frogreader-2026-08-15.zip.tmp".isFrogReaderSnapshotFileName())
+    }
+
+    @Test
     fun `rotation keeps the newest and drops the rest`() = runTest {
         val target = InMemoryTarget()
         target.put("frogreader-2026-08-01.zip", 1L)
@@ -68,19 +80,19 @@ class BackupRotationTest {
     fun `rotation by date, not by name`() = runTest {
         val target = InMemoryTarget()
         // Written out of order, as a manual backup among scheduled ones would be.
-        target.put("zzz-old.zip", 1L)
-        target.put("aaa-new.zip", 9L)
+        target.put("frogreader-2026-08-04.zip", 1L)
+        target.put("frogreader-2026-08-01.zip", 9L)
 
         target.rotate(keep = 1)
 
-        assertEquals(listOf("aaa-new.zip"), target.list().map { it.name })
+        assertEquals(listOf("frogreader-2026-08-01.zip"), target.list().map { it.name })
     }
 
     @Test
     fun `a folder with fewer backups than the limit is left alone`() = runTest {
         val target = InMemoryTarget()
-        target.put("one.zip", 1L)
-        target.put("two.zip", 2L)
+        target.put("frogreader-2026-08-01.zip", 1L)
+        target.put("frogreader-2026-08-02.zip", 2L)
 
         target.rotate(keep = DEFAULT_BACKUPS_KEPT)
 
@@ -91,11 +103,26 @@ class BackupRotationTest {
     fun `keeping zero still keeps the newest`() = runTest {
         // Guarding against a nonsense setting wiping the last backup there is.
         val target = InMemoryTarget()
-        target.put("one.zip", 1L)
-        target.put("two.zip", 2L)
+        target.put("frogreader-2026-08-01.zip", 1L)
+        target.put("frogreader-2026-08-02.zip", 2L)
 
         target.rotate(keep = 0)
 
-        assertEquals(listOf("two.zip"), target.list().map { it.name })
+        assertEquals(listOf("frogreader-2026-08-02.zip"), target.list().map { it.name })
+    }
+
+    @Test
+    fun `rotation never deletes unrelated zip files`() = runTest {
+        val target = InMemoryTarget()
+        target.put("family-photos.zip", 0L)
+        target.put("frogreader-2026-08-01.zip", 1L)
+        target.put("frogreader-2026-08-02 (1).zip", 2L)
+
+        target.rotate(keep = 1)
+
+        assertEquals(
+            listOf("frogreader-2026-08-02 (1).zip", "family-photos.zip"),
+            target.list().map { it.name },
+        )
     }
 }

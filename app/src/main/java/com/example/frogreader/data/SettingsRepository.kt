@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.frogreader.data.model.BackupMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -27,6 +28,22 @@ enum class PageTurnAnimation { SLIDE, CASCADE, PAGE_CURL }
 /** One theme for the whole app (every screen and the reading surface). */
 @kotlinx.serialization.Serializable
 enum class AppTheme { WHITE, SEPIA, OLED }
+
+/** Which light palette is used while the app follows the system appearance. */
+@kotlinx.serialization.Serializable
+enum class LightThemeDefault { LIGHT, BEIGE }
+
+/** The screen shown after a cold app start. */
+@kotlinx.serialization.Serializable
+enum class StartupDestination { LIBRARY, LAST_BOOK }
+
+/** How long an unlocked app may remain in the background before locking again. */
+@kotlinx.serialization.Serializable
+enum class AppLockDelay(val durationMillis: Long) {
+    IMMEDIATE(0L),
+    ONE_MINUTE(60_000L),
+    FIFTEEN_MINUTES(15L * 60_000L),
+}
 
 /** How often the app writes a backup by itself. */
 @kotlinx.serialization.Serializable
@@ -79,16 +96,32 @@ data class ReaderSettings(
 @kotlinx.serialization.Serializable
 data class AppSettings(
     val theme: AppTheme = AppTheme.SEPIA,
+    val followSystemTheme: Boolean = true,
+    val lightThemeDefault: LightThemeDefault = LightThemeDefault.LIGHT,
+    val dynamicColor: Boolean = true,
+    val startupDestination: StartupDestination = StartupDestination.LIBRARY,
     val haptics: Boolean = true,
     val keepScreenOn: Boolean = true,
     val volumeKeyPaging: Boolean = true,
     val appLock: Boolean = false,
+    val appLockDelay: AppLockDelay = AppLockDelay.ONE_MINUTE,
+    val backupMode: BackupMode = BackupMode.DATA,
     /** Automatically invert images when OLED theme is active. */
     val autoInvertImages: Boolean = true,
     /** Daily reading goal in minutes (for the stats screen). */
     val dailyGoalMinutes: Int = 30,
     val viewMode: LibraryViewMode = LibraryViewMode.GRID,
 )
+
+/** Resolves the palette that should be visible right now. */
+fun AppSettings.effectiveTheme(systemDark: Boolean): AppTheme {
+    if (!followSystemTheme) return theme
+    if (systemDark) return AppTheme.OLED
+    return when (lightThemeDefault) {
+        LightThemeDefault.LIGHT -> AppTheme.WHITE
+        LightThemeDefault.BEIGE -> AppTheme.SEPIA
+    }
+}
 
 private val Context.settingsDataStore by preferencesDataStore(name = "reader_settings")
 
@@ -114,10 +147,16 @@ class SettingsRepository(private val context: Context) {
         // v2: beige became the default; the key bump applies it to installs
         // that still carry the old default in the v1 key.
         val appTheme = stringPreferencesKey("app_theme_v2")
+        val followSystemTheme = booleanPreferencesKey("follow_system_theme")
+        val lightThemeDefault = stringPreferencesKey("light_theme_default")
+        val dynamicColor = booleanPreferencesKey("dynamic_color")
+        val startupDestination = stringPreferencesKey("startup_destination")
         val haptics = booleanPreferencesKey("haptics")
         val keepScreenOn = booleanPreferencesKey("keep_screen_on")
         val volumeKeyPaging = booleanPreferencesKey("volume_key_paging")
         val appLock = booleanPreferencesKey("app_lock")
+        val appLockDelay = stringPreferencesKey("app_lock_delay")
+        val backupMode = stringPreferencesKey("backup_scope")
         val autoInvertImages = booleanPreferencesKey("auto_invert_images")
         val dailyGoal = androidx.datastore.preferences.core.intPreferencesKey("daily_goal_minutes")
         val libraryViewMode = stringPreferencesKey("library_view_mode")
@@ -215,10 +254,16 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { prefs ->
             val updated = transform(prefs.readAppSettings())
             prefs[Keys.appTheme] = updated.theme.name
+            prefs[Keys.followSystemTheme] = updated.followSystemTheme
+            prefs[Keys.lightThemeDefault] = updated.lightThemeDefault.name
+            prefs[Keys.dynamicColor] = updated.dynamicColor
+            prefs[Keys.startupDestination] = updated.startupDestination.name
             prefs[Keys.haptics] = updated.haptics
             prefs[Keys.keepScreenOn] = updated.keepScreenOn
             prefs[Keys.volumeKeyPaging] = updated.volumeKeyPaging
             prefs[Keys.appLock] = updated.appLock
+            prefs[Keys.appLockDelay] = updated.appLockDelay.name
+            prefs[Keys.backupMode] = updated.backupMode.name
             prefs[Keys.autoInvertImages] = updated.autoInvertImages
             prefs[Keys.dailyGoal] = updated.dailyGoalMinutes
             prefs[Keys.libraryViewMode] = updated.viewMode.name
@@ -253,10 +298,22 @@ class SettingsRepository(private val context: Context) {
         val defaults = AppSettings()
         return AppSettings(
             theme = enumOrDefault(this[Keys.appTheme], defaults.theme),
+            followSystemTheme = this[Keys.followSystemTheme] ?: defaults.followSystemTheme,
+            lightThemeDefault = enumOrDefault(
+                this[Keys.lightThemeDefault],
+                defaults.lightThemeDefault,
+            ),
+            dynamicColor = this[Keys.dynamicColor] ?: defaults.dynamicColor,
+            startupDestination = enumOrDefault(
+                this[Keys.startupDestination],
+                defaults.startupDestination,
+            ),
             haptics = this[Keys.haptics] ?: defaults.haptics,
             keepScreenOn = this[Keys.keepScreenOn] ?: defaults.keepScreenOn,
             volumeKeyPaging = this[Keys.volumeKeyPaging] ?: defaults.volumeKeyPaging,
             appLock = this[Keys.appLock] ?: defaults.appLock,
+            appLockDelay = enumOrDefault(this[Keys.appLockDelay], defaults.appLockDelay),
+            backupMode = enumOrDefault(this[Keys.backupMode], defaults.backupMode),
             autoInvertImages = this[Keys.autoInvertImages] ?: defaults.autoInvertImages,
             dailyGoalMinutes = this[Keys.dailyGoal] ?: defaults.dailyGoalMinutes,
             viewMode = enumOrDefault(this[Keys.libraryViewMode], defaults.viewMode),
@@ -269,16 +326,17 @@ class SettingsRepository(private val context: Context) {
     companion object {
         private const val BOOT_PREFS = "boot_hints"
         private const val KEY_THEME = "app_theme"
+        private const val KEY_DYNAMIC_COLOR = "dynamic_color"
 
         /**
-         * The theme the app was last running in, readable synchronously.
+         * The appearance the app was last running in, readable synchronously.
          *
          * DataStore's first read is disk I/O on a background dispatcher, so the
          * first frame after a cold start would otherwise have to be painted in
          * the default theme and corrected a moment later. On a Midnight install
-         * that means a beige screen flashing black. This mirror is written from
-         * the UI whenever the effective theme is known, which also heals an
-         * install that has never seen this code.
+         * that means a beige screen flashing black; with Material You it would
+         * similarly flash the fixed palette. This mirror is written from the UI
+         * whenever the effective appearance is known.
          */
         fun bootTheme(context: Context): AppTheme {
             val name = context.getSharedPreferences(BOOT_PREFS, Context.MODE_PRIVATE)
@@ -286,11 +344,20 @@ class SettingsRepository(private val context: Context) {
             return name?.let { runCatching { AppTheme.valueOf(it) }.getOrNull() } ?: AppTheme.SEPIA
         }
 
-        fun rememberBootTheme(context: Context, theme: AppTheme) {
-            if (bootTheme(context) == theme) return
+        fun bootDynamicColor(context: Context): Boolean =
+            context.getSharedPreferences(BOOT_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_DYNAMIC_COLOR, AppSettings().dynamicColor)
+
+        fun rememberBootAppearance(
+            context: Context,
+            theme: AppTheme,
+            dynamicColor: Boolean,
+        ) {
+            if (bootTheme(context) == theme && bootDynamicColor(context) == dynamicColor) return
             context.getSharedPreferences(BOOT_PREFS, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_THEME, theme.name)
+                .putBoolean(KEY_DYNAMIC_COLOR, dynamicColor)
                 .apply()
         }
     }
