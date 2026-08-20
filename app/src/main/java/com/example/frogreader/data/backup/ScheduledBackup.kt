@@ -1,0 +1,99 @@
+package com.example.frogreader.data.backup
+
+import android.content.Context
+import androidx.work.Constraints
+import androidx.work.CoroutineWorker
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
+import androidx.core.net.toUri
+import com.example.frogreader.FrogReaderApp
+import com.example.frogreader.data.BackupFrequency
+import com.example.frogreader.data.model.BackupMode
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
+import java.util.concurrent.TimeUnit
+
+/**
+ * Writes a backup on a schedule, so having one does not depend on the user
+ * remembering to ask for one.
+ *
+ * Always DATA mode. A scheduled job runs unattended over whatever connection
+ * the folder's provider uses, and pushing a multi-gigabyte archive to a cloud
+ * folder in the background is a good way to burn a data plan; the data-only
+ * archive is a few hundred KB and holds everything that cannot be recovered
+ * any other way.
+ */
+class ScheduledBackupWorker(
+    context: Context,
+    params: WorkerParameters,
+) : CoroutineWorker(context, params) {
+
+    override suspend fun doWork(): Result {
+        val app = applicationContext as? FrogReaderApp ?: return Result.success()
+        val settings = app.settingsRepository
+
+        if (settings.backupFrequency.first() == BackupFrequency.OFF) return Result.success()
+        val folder = settings.backupFolder.first() ?: return Result.success()
+
+        val target = SafFolderTarget(app, folder.toUri())
+        return try {
+            // The repository-level lock makes write + validated rotation atomic
+            // with a manual backup or restore in the foreground process.
+            app.backupRepository.exportToFolder(target, BackupMode.DATA)
+            try {
+                settings.recordBackupAt(System.currentTimeMillis())
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The ZIP is already safely written. A summary timestamp must
+                // not cause WorkManager to retry and overwrite it needlessly.
+            }
+            Result.success()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: Exception) {
+            // The folder may be temporarily unmounted, or a cloud provider may
+            // be offline. Retrying is right; giving up silently is not.
+            if (runAttemptCount < MAX_ATTEMPTS) Result.retry() else Result.failure()
+        }
+    }
+
+    companion object {
+        private const val MAX_ATTEMPTS = 3
+        private const val WORK_NAME = "scheduled-backup"
+
+        /**
+         * Brings the schedule in line with the setting. Safe to call whenever
+         * either the folder or the frequency changes.
+         */
+        fun apply(context: Context, frequency: BackupFrequency) {
+            val work = WorkManager.getInstance(context)
+            if (frequency == BackupFrequency.OFF) {
+                work.cancelUniqueWork(WORK_NAME)
+                return
+            }
+
+            val days = if (frequency == BackupFrequency.DAILY) 1L else 7L
+            val request = PeriodicWorkRequestBuilder<ScheduledBackupWorker>(days, TimeUnit.DAYS)
+                .setConstraints(
+                    Constraints.Builder()
+                        // Not on battery and not while the phone is in use: a
+                        // backup is never urgent enough to be noticed.
+                        .setRequiresBatteryNotLow(true)
+                        .setRequiresDeviceIdle(true)
+                        .build(),
+                )
+                .build()
+
+            work.enqueueUniquePeriodicWork(
+                WORK_NAME,
+                // KEEP would ignore a change of frequency until the existing
+                // schedule happened to expire.
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request,
+            )
+        }
+    }
+}
