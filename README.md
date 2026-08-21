@@ -7,153 +7,189 @@
 [![Status: Alpha](https://img.shields.io/badge/Status-Alpha-orange.svg?style=for-the-badge)](https://github.com/KNITIPKA/frog-reader/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-> ### ⚠️ This project is in **alpha**
->
-> It is under active development and not finished. Expect bugs, unpolished screens and
-> changes that break between versions. Builds are debug-signed and not on Google Play.
-> Try it if that sounds fine to you — and please report what breaks.
+**FrogReader** is a free and open-source e-book reader for Android, built entirely with Kotlin and Jetpack Compose.
 
-**FrogReader** is an open-source e-book reader for Android, built with 100% Kotlin and Jetpack
-Compose. It has a fully custom format parsing engine (EPUB, FB2, MOBI/KF8/PalmDoc), a CSS
-resolver, embedded font decompression, paged and scrolling reading modes, and extensive reader
-customization. Runs on **Android 8.0+ (minSdk 26)**.
+It supports **EPUB, FB2 and MOBI/KF8/PalmDoc**, with paged and continuous reading, shelves, full-text search, custom typography, publisher styling, local backups and more.
 
-> 📥 **Download**: grab the latest alpha APK from
-> **[GitHub Releases](https://github.com/KNITIPKA/frog-reader/releases/latest)**
-> — the file is named `frog-reader-<version>-alpha.apk`.
->
-> Builds since v1.52 are minified release builds of about 4 MB. They carry a debug
-> signature, so each one installs straight over the last without uninstalling.
+> [!WARNING]
+> FrogReader is currently in **alpha**. Expect bugs, unfinished UI and breaking changes between versions. Builds are not published on Google Play yet.
+
+### [Download the latest APK →](https://github.com/KNITIPKA/frog-reader/releases/latest)
+
+Runs on **Android 8.0+ (minSdk 26)**.
 
 ---
 
-## ✨ Features & Capabilities
+## Screenshots
 
-### 📚 Multi-Format Book Engine
-- **EPUB Parser**: OPF manifest parsing, NCX & HTML5 NAV table of contents, spine ordering, and container resource extraction.
-- **FB2 Parser**: Deep XML structure mapping (epigraphs, poem stanzas, sidebars, inline images, sub-titles, sections).
-- **MOBI / KF8 / PDB Engine**: Low-level PalmDoc LZ77 decompression, PDB record parsing, MOBI header decoding, and KF8 section mapping.
+<p align="center">
+  <img src="assets/screenshots/library-dark.png" width="31%" alt="Library in Midnight theme" />
+  <img src="assets/screenshots/library-light.png" width="31%" alt="Library in Light theme" />
+  <img src="assets/screenshots/book-details.png" width="31%" alt="Book details screen" />
+</p>
 
-### 🎨 Advanced Typography & Layout Engine
-- **WOFF & WOFF2 Decompressor**: Embedded WOFF and WOFF2 web fonts are decompressed natively into TTF using Brotli for high-fidelity rendering.
-- **Font De-obfuscation**: Supports Adobe and IDPF font de-obfuscation algorithms found in commercial EPUBs.
-- **Custom CSS Engine**: Full CSS resolver with relative units (`em`, `rem`, `%`), inheritance, cascading rules, list markers, and `calc()` expression parsing.
-- **Publisher Mode**: Toggle between original publisher formatting (embedded fonts, publisher margins/indents/line spacing) or user-customized styling.
-- **Drop Caps**: Renders decorated initial capitals defined by publisher CSS.
-- **Rich Elements**: Jetpack Compose layouts for inline images, sideboxes, table grids (`TableGrid`), quotes, and Ruby annotations.
+<p align="center">
+  <img src="assets/screenshots/reader-page.png" width="31%" alt="Paged reading view" />
+  <img src="assets/screenshots/reader-controls.png" width="31%" alt="Reader controls" />
+  <img src="assets/screenshots/reader-settings.png" width="31%" alt="Reader settings" />
+</p>
 
-### 📖 Reading Experience & Customization
-- **Dual Reading Modes**: Choose between **Paged Mode** (page-by-page turning) or **Continuous Scroll**.
-- **Hardware Controls**: Turn pages using device volume keys (`VolumeKeyPaging`).
-- **Custom Fonts**: Choose Literata, Serif, Sans-Serif, or import your own custom `.ttf` / `.otf` font files.
-- **Night / OLED Image Inversion**: Invert diagram & scan colors automatically in dark/OLED themes so bright white scan images don't glare at night.
-- **Footnote Handling**: Inline footnote popups or clean footnote stripping (`hideFootnotes`).
-- **Themes & Margins**: Light, Beige and Midnight themes, shared by the library and the reading surface; customizable page margins, font sizes, and line heights.
-- **Page-Turn Animations**: Configurable transitions (Slide, Cascade, Page Curl).
-
-### ⚡ Metrics, Search & Navigation
-- **Reading Speed & Metrics**: Live words-per-minute (WPM) calculation, estimated time remaining per chapter, and precise progress metrics.
-- **Interactive Tools**: Full-text book search with live match previews, chapter TOC sheet, text selection, and quote saving toolbar.
-- **Dynamic Pagination**: Custom page-breaking engine with `PaginationCache` for instantly smooth page turns.
-
-### 📚 Library
-- **Shelves**: hold a book or a shelf for a context menu — select, add to a shelf, rename, delete. A shelf opens into a paged 3×2 grid with its own name (sized to fit), a progress summary, and search that reaches into a book's series and description as well as its title and author.
-- **Multi-Select**: pick several books at once for a bulk add-to-shelf or delete; deleting a shelf asks explicitly whether to keep its books or remove them too.
-- **Grid & List Views**: three-column cover grid or a compact list with inline reading progress.
-- **Live Search**: ranked across title, author, series and description as you type, and reaches inside shelves.
-
-### 💾 Backup & Data Safety
-- **Export & Restore**: write the whole library to a `.zip` you keep — two modes, *library only* (a few hundred KB: books, quotes, notes, ratings, positions, shelves, reading time and settings) or *everything* including the book files and covers.
-- **Scheduled Backups**: pick a folder once and the app backs itself up daily or weekly, keeping the five most recent snapshots. Point it at a folder inside Google Drive, Dropbox, OneDrive or Nextcloud and that is a cloud backup — with no account, no OAuth and no network code, through the system file picker.
-- **Split Storage**: book metadata, user-authored data (quotes, bookmarks, notes) and reading positions live in three separate documents, so a page turn never rewrites the things you wrote.
-- **Crash-Safe Writes**: every store is written `.tmp` → fsync → `.bak` → atomic rename, and reads fall back to the backup copy and repair the live file.
-- **Cloud Backup**: Android Auto Backup carries the irreplaceable files (and nothing large) to your Google account, and the phone-to-phone transfer brings the book files too.
-
-### 🔐 App Security & Widgets
-- **App Lock**: Optional biometric / device-credential lock on the library (Android 10+).
-- **Reading Analytics Dashboard**: Track daily reading time, set daily reading goals (in minutes), and view reading history.
-- **Home Screen Widget**: Jetpack Glance AppWidget to jump directly back into "Continue Reading".
+<p align="center">
+  <img src="assets/screenshots/themes.png" width="31%" alt="Theme settings" />
+  <img src="assets/screenshots/backup.png" width="31%" alt="Backup settings" />
+</p>
 
 ---
 
-## 🛠️ Architecture & Tech Stack
+## Features
 
-```text
-FrogReader/
-├── app/src/main/java/com/example/frogreader/
-│   ├── data/
-│   │   ├── model/          # Core book models, bookmarks & library schemas
-│   │   ├── parser/         # EPUB, FB2, MOBI parsers, CSS resolver, WOFF/2 decoders
-│   │   ├── backup/         # Backup format, targets (SAF / folder), scheduled worker
-│   │   └── repository/     # DataStore & book storage repositories
-│   ├── ui/
-│   │   ├── library/        # Main bookshelf & book details UI
-│   │   ├── reader/         # Paginated reader, typography, gesture handlers, popups
-│   │   ├── stats/          # Reading stats & analytics UI
-│   │   ├── settings/       # Customization & app settings
-│   │   ├── lock/           # Lock screen & PIN protection UI
-│   │   └── theme/          # Typography, color schemes, Material 3 theme
-│   └── widget/             # Glance AppWidget ("Continue Reading")
-```
+### Reading
 
-- **Language**: 100% Kotlin 2.x
-- **UI Framework**: Jetpack Compose (Material 3)
-- **Asynchrony**: Kotlin Coroutines & Flow
-- **Data Persistence**: Jetpack DataStore Preferences & kotlinx.serialization JSON, split across three atomically-written documents
-- **Background Work**: WorkManager (scheduled backups), Storage Access Framework (no storage permissions)
-- **Parsing**: JSoup, XML Pull Parser, Brotli (WOFF2)
-- **Image Processing**: Coil Compose & Coil SVG
-- **Widgets**: Jetpack Glance AppWidget
+- **Paged and continuous modes** — read page-by-page or use continuous scrolling.
+- **Reader themes** — Light, Beige and Midnight.
+- **Typography controls** — font size, line spacing, margins, justification and hyphenation.
+- **Custom fonts** — use the bundled fonts or import your own `.ttf` / `.otf` files.
+- **Publisher Mode** — keep the book's original fonts, spacing and formatting when supported.
+- **Hardware controls** — turn pages with the device volume buttons.
+- **Footnotes** — open footnotes inline or hide footnote markers from the reading text.
+- **Decorated initials** — render publisher-defined drop caps.
+- **Dark-mode image inversion** — automatically invert bright scans and diagrams in dark themes.
+- **Chapter and book progress** — see reading progress and pages remaining.
+
+### Library
+
+- **Grid and list views** — switch between a cover grid and compact list layout.
+- **Shelves** — organize books into custom collections.
+- **Multi-select** — add or remove multiple books at once.
+- **Reading progress** — progress is shown directly in the library.
+- **Live search** — search titles, authors, series and descriptions, including books inside shelves.
+- **Book details** — view cover art, metadata, description, format and file size before adding a book.
+
+### Search, Navigation & Notes
+
+- **Full-text search** with live match previews.
+- **Table of contents** navigation.
+- **Text selection** inside the reader.
+- **Quotes, bookmarks and notes** stored with your library.
+- **Custom pagination engine** with cached page layouts for fast navigation.
+
+### Themes & Android Integration
+
+- **Light, Beige and Midnight app themes**.
+- **Follow system theme** automatically.
+- **Material You colors** for supported themes.
+- **Optional app lock** using biometrics or device credentials on Android 10+.
+- **Home-screen Continue Reading widget** powered by Jetpack Glance.
 
 ---
 
-## 🚀 Getting Started
+## Backup & Data Safety
+
+FrogReader keeps its library local and gives you direct control over backups.
+
+- **Export & Restore** — save the library as a `.zip` archive and restore it later.
+- **Data-only backups** — save shelves, quotes, notes, progress and settings without copying large book files.
+- **Full backups** — optionally include original book files and covers.
+- **Scheduled backups** — run automatically every day or every week.
+- **Snapshot rotation** — keep the five most recent automatic backups.
+- **Storage Access Framework** — choose any folder exposed by Android's system file picker, including folders provided by Google Drive, Dropbox, OneDrive or Nextcloud.
+- **Split storage** — book metadata, user-created data and reading positions are stored separately.
+- **Crash-resistant writes** — data is staged through temporary files and backup copies before replacement, reducing the risk of library corruption.
+
+---
+
+## Format & Rendering Engine
+
+FrogReader uses its own parsing and rendering pipeline instead of relying on a generic embedded reader.
+
+### EPUB
+
+- OPF manifest and spine parsing.
+- NCX and HTML5 NAV table of contents.
+- Container resource extraction.
+- Publisher CSS support.
+- Embedded fonts and images.
+- Adobe and IDPF font de-obfuscation.
+- WOFF and WOFF2 font decompression.
+
+### FB2
+
+- XML-based document parsing.
+- Sections, subtitles and inline formatting.
+- Epigraphs, poems and sidebars.
+- Embedded images and covers.
+
+### MOBI / KF8 / PalmDoc
+
+- PalmDoc LZ77 decompression.
+- PDB record parsing.
+- MOBI header decoding.
+- KF8 section mapping and embedded resource extraction.
+
+### Typography & Rich Content
+
+- CSS cascading and inheritance.
+- Relative units such as `em`, `rem` and `%`.
+- `calc()` expression parsing.
+- Publisher margins, indents and line spacing.
+- Tables, inline images, quotes, sideboxes, drop caps and ruby annotations.
+
+---
+
+## Tech Stack
+
+- **Language:** Kotlin 2.x
+- **UI:** Jetpack Compose + Material 3
+- **Async:** Kotlin Coroutines & Flow
+- **Persistence:** Jetpack DataStore + `kotlinx.serialization`
+- **Background work:** WorkManager
+- **Storage:** Android Storage Access Framework
+- **Parsing:** JSoup, XML Pull Parser, Brotli
+- **Images:** Coil Compose + Coil SVG
+- **Widgets:** Jetpack Glance
+
+---
+
+## Building from Source
 
 ### Prerequisites
-- **Android Studio**: Ladybug (2024.2.1+) or newer
-- **Android SDK**: `minSdk 26` (Android 8.0 Oreo+), `targetSdk 36`, `compileSdk 37`
-- **JDK**: Java 11 / 17
 
-### Building from Source
+- Android Studio Ladybug (2024.2.1+) or newer
+- Android SDK with `minSdk 26`, `targetSdk 36`, `compileSdk 37`
+- JDK 11 or 17
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/KNITIPKA/frog-reader.git
-   cd frog-reader
-   ```
+### Build
 
-2. **Open in Android Studio:**
-   Open the `frog-reader` folder in Android Studio and let Gradle sync.
+```bash
+git clone https://github.com/KNITIPKA/frog-reader.git
+cd frog-reader
+./gradlew assembleDebug
+```
 
-3. **Build & Run:**
-   Run `./gradlew assembleDebug` or click **Run** in Android Studio to deploy to an emulator or physical device.
+Or open the project in Android Studio, let Gradle sync and run it on an emulator or physical device.
 
 ---
 
-## 🧪 Testing
+## Testing
 
-The codebase includes comprehensive JVM unit tests covering parsers, CSS calculation rules, font decoders, and reader metrics.
+Run the JVM test suite with:
 
-To run tests:
 ```bash
 ./gradlew test
 ```
 
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Check out [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on bug reporting and pull requests.
-
-Because the project is in alpha, **bug reports are the most useful contribution right now** —
-especially with the book that triggered the problem, if you can share it.
+Tests cover core areas including format parsing, CSS rules, font decoding and reader components.
 
 ---
 
-## 📄 License
+## Contributing
 
-This project is licensed under the [MIT License](LICENSE).
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for bug-reporting and pull-request guidelines.
+
+Because FrogReader is still in alpha, **bug reports are especially useful** — ideally with the book that triggered the issue, when it can be shared legally.
 
 ---
 
-<p align="center">Crafted with 💚 for book lovers and Android developers.</p>
+## License
+
+FrogReader is licensed under the [MIT License](LICENSE).
