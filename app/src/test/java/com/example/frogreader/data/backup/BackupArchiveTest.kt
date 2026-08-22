@@ -286,7 +286,7 @@ class BackupArchiveTest {
         assertFalse(app.haptics)
         assertTrue(app.followSystemTheme)
         assertEquals(LightThemeDefault.LIGHT, app.lightThemeDefault)
-        assertTrue(app.dynamicColor)
+        assertFalse(app.dynamicColor)
         assertEquals(StartupDestination.LIBRARY, app.startupDestination)
         assertEquals(AppLockDelay.ONE_MINUTE, app.appLockDelay)
         assertEquals(BackupMode.DATA, app.backupMode)

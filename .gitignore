@@ -17,6 +17,7 @@ local.properties
 .artifacts/
 .kotlin/
 .testbooks/
+*.apk
 
 # Developer and tooling scratch directories
 .agents/

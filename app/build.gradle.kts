@@ -22,11 +22,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.frogreader"
+        applicationId = "knitipka.frogreader"
         minSdk = 26
         targetSdk = 36
         versionCode = (versionProps.getProperty("code") ?: "1").toInt()
-        versionName = versionProps.getProperty("name") ?: "1.0"
+        versionName = versionProps.getProperty("name") ?: "ALPHA 1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

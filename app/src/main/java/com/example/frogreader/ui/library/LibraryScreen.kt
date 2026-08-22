@@ -1244,8 +1244,13 @@ private fun HeroCard(
                             .weight(1f)
                             .fillMaxHeight(),
                     ) {
+                        val label = if (book.lastOpenedAtMillis == null) {
+                            stringResource(R.string.library_start_reading)
+                        } else {
+                            stringResource(R.string.library_continue_reading)
+                        }
                         Text(
-                            text = stringResource(R.string.library_continue_reading).uppercase(),
+                            text = label.uppercase(),
                             fontSize = 11.5.sp,
                             lineHeight = 14.sp,
                             fontWeight = FontWeight.ExtraBold,

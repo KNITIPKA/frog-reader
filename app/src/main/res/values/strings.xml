@@ -45,6 +45,7 @@
     <string name="library_delete_cancel">Cancel</string>
     <string name="library_book_cover">Cover of “%1$s”</string>
     <string name="library_continue_reading">Continue Reading</string>
+    <string name="library_start_reading">Start Reading</string>
     <string name="view_mode_grid">Grid view</string>
     <string name="view_mode_list">List view</string>
     <!-- Redesigned library screen -->
@@ -200,7 +201,7 @@
 
     <!-- Settings screen -->
     <string name="settings_title">Settings</string>
-    <string name="settings_version">Version %1$s</string>
+    <string name="settings_version">%1$s</string>
     <string name="settings_section_appearance">Appearance</string>
     <string name="settings_app_theme">App theme</string>
     <string name="selection_translate">Translate</string>
@@ -339,10 +340,12 @@
     <string name="settings_lock_delay_fifteen_minutes">asks after 15 minutes</string>
     <string name="settings_backup_summary">Last backup %1$s · %2$s</string>
     <string name="settings_backup_summary_never">No backup yet · %1$s</string>
-    <string name="settings_about_summary">Version %1$s · alpha</string>
-    <string name="settings_about_version">Version %1$s · alpha · MIT licence</string>
+    <string name="settings_about_summary">%1$s</string>
+    <string name="settings_about_version">%1$s · MIT licence</string>
     <string name="settings_about_github">GitHub</string>
     <string name="settings_about_github_subtitle">Source code and project overview</string>
+    <string name="settings_about_telegram">Telegram</string>
+    <string name="settings_about_telegram_subtitle">News, updates and community</string>
     <string name="settings_about_releases">Releases</string>
     <string name="settings_about_releases_subtitle">Updates and APK downloads</string>
     <string name="settings_about_issues">Report a problem</string>

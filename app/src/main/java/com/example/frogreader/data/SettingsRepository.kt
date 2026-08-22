@@ -95,10 +95,10 @@ data class ReaderSettings(
 /** App-wide settings (theme, feedback, behavior, privacy). */
 @kotlinx.serialization.Serializable
 data class AppSettings(
-    val theme: AppTheme = AppTheme.SEPIA,
+    val theme: AppTheme = AppTheme.WHITE,
     val followSystemTheme: Boolean = true,
     val lightThemeDefault: LightThemeDefault = LightThemeDefault.LIGHT,
-    val dynamicColor: Boolean = true,
+    val dynamicColor: Boolean = false,
     val startupDestination: StartupDestination = StartupDestination.LIBRARY,
     val haptics: Boolean = true,
     val keepScreenOn: Boolean = true,
@@ -341,7 +341,7 @@ class SettingsRepository(private val context: Context) {
         fun bootTheme(context: Context): AppTheme {
             val name = context.getSharedPreferences(BOOT_PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_THEME, null)
-            return name?.let { runCatching { AppTheme.valueOf(it) }.getOrNull() } ?: AppTheme.SEPIA
+            return name?.let { runCatching { AppTheme.valueOf(it) }.getOrNull() } ?: AppTheme.WHITE
         }
 
         fun bootDynamicColor(context: Context): Boolean =

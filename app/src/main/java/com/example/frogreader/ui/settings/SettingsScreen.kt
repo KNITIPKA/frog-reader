@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Fingerprint
@@ -341,6 +342,12 @@ private fun AboutDialog(
     val versionName = installedVersionName()
     val failedMessage = stringResource(R.string.settings_link_failed)
     val links = listOf(
+        AboutLink(
+            icon = Icons.AutoMirrored.Rounded.Send,
+            title = R.string.settings_about_telegram,
+            subtitle = R.string.settings_about_telegram_subtitle,
+            uri = "https://t.me/frogreader",
+        ),
         AboutLink(
             icon = Icons.Rounded.Code,
             title = R.string.settings_about_github,
