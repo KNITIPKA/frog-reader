@@ -23,20 +23,20 @@ Runs on **Android 8.0+ (minSdk 26)**.
 ## Screenshots
 
 <p align="center">
-  <img src="assets/screenshots/library-dark.png" width="31%" alt="Library in Midnight theme" />
-  <img src="assets/screenshots/library-light.png" width="31%" alt="Library in Light theme" />
-  <img src="assets/screenshots/book-details.png" width="31%" alt="Book details screen" />
+  <img src="assets/screenshots/library-dark.webp" width="31%" alt="Library in Midnight theme" />
+  <img src="assets/screenshots/library-light.webp" width="31%" alt="Library in Light theme" />
+  <img src="assets/screenshots/book-details.webp" width="31%" alt="Book details screen" />
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/reader-page.png" width="31%" alt="Paged reading view" />
-  <img src="assets/screenshots/reader-controls.png" width="31%" alt="Reader controls" />
-  <img src="assets/screenshots/reader-settings.png" width="31%" alt="Reader settings" />
+  <img src="assets/screenshots/reader-page.webp" width="31%" alt="Paged reading view" />
+  <img src="assets/screenshots/reader-controls.webp" width="31%" alt="Reader controls" />
+  <img src="assets/screenshots/reader-settings.webp" width="31%" alt="Reader settings" />
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/themes.png" width="31%" alt="Theme settings" />
-  <img src="assets/screenshots/backup.png" width="31%" alt="Backup settings" />
+  <img src="assets/screenshots/themes.webp" width="31%" alt="Theme settings" />
+  <img src="assets/screenshots/backup.webp" width="31%" alt="Backup settings" />
 </p>
 
 ---
@@ -133,6 +133,30 @@ FrogReader uses its own parsing and rendering pipeline instead of relying on a g
 - `calc()` expression parsing.
 - Publisher margins, indents and line spacing.
 - Tables, inline images, quotes, sideboxes, drop caps and ruby annotations.
+
+---
+
+## Roadmap & Planned Features
+
+The following features and improvements are planned for upcoming releases:
+
+- [ ] **Enhanced Rendering Engine** — Further speed optimizations, smoother layout computation, and expanded typography/CSS capabilities.
+- [ ] **Navigation Jump History** — Quick "Return to previous page" button in the reader when jumping or scrubbing across chapters.
+- [ ] **Redesigned Book Edit & Metadata Screen** — Complete UI overhaul with support for editing all metadata fields (title, author, series, tags, description, and custom cover images).
+- [ ] **Reader Screen Improvements & New Modes** — Polish and refinements for the existing reading screen, along with two new dedicated reading modes: Compact and Minimalist.
+- [ ] **Profile & Reading Hub**:
+  - **Read Books Log** — Dedicated hub for finished books (both digital and physical) with 5-star ratings, personal reviews, reading start/end dates, and custom covers.
+  - **Want-to-Read List** — Dedicated reading queue and wishlist for books planned for the future.
+  - Centralized manager for all bookmarks, and saved quotes.
+  - In-depth reading statistics, velocity metrics, and streak tracking.
+  - Daily and annual reading goals
+  - Achievements.
+- [ ] **Physical Book Tracking** — Add physical/paper books to your library with an active reading timer that logs reading sessions directly into your statistics.
+- [ ] **Enhanced Home-Screen Widgets** — New Jetpack Glance widgets (streak counters, reading stats, quote of the day, shelf quick-access).
+- [ ] **Right-to-Left (RTL) Text & Reading Support** — Full RTL layout mirroring, page navigation, and support for right-to-left scripts (such as Arabic and Hebrew).
+- [ ] **Multilingual App Localization** — Community translations and multilingual UI support for additional languages.
+- [ ] **Extended Format Support** — Native **PDF** and **Markdown (`.md`)** parsing and rendering.
+- [ ] **Google Play Store Release** — Public release on Google Play for seamless automatic updates.
 
 ---
 
