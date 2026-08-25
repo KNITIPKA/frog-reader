@@ -45,6 +45,26 @@ class LanguageTagTest {
     }
 
     @Test
+    fun `detects arabic when metadata is absent`() {
+        val text = "كان القارئ يفتح الكتاب كل مساء ويتابع الحكاية بهدوء، " +
+            "ثم يدوّن ملاحظاته عن الشخصيات والأماكن والأحداث المهمة في الفصل."
+        assertEquals("ar", LanguageTag.detect(text))
+        assertEquals(true, LanguageTag.isRtl("ar-EG"))
+        assertEquals(true, LanguageTag.isRtl("fa_IR"))
+        listOf("az-Arab", "syr-Syrc", "dv-Thaa", "nqo-Nkoo", "ff-Adlm", "rhg-Rohg")
+            .forEach { assertEquals(it, true, LanguageTag.isRtl(it)) }
+    }
+
+    @Test
+    fun `detects hebrew with niqqud when metadata is absent`() {
+        val text = "הַקּוֹרֵא פָּתַח אֶת הַסֵּפֶר בְּכָל עֶרֶב וְהִמְשִׁיךְ " +
+            "בַּסִּפּוּר בְּשֶׁקֶט, וְאַחַר כָּךְ כָּתַב הֶעָרוֹת עַל הַדְּמוּיוֹת וְהַמְּקוֹמוֹת."
+        assertEquals("he", LanguageTag.detect(text))
+        assertEquals(true, LanguageTag.isRtl("he"))
+        assertEquals(false, LanguageTag.isRtl("en"))
+    }
+
+    @Test
     fun `does not guess latin-script languages`() {
         val text = "Every day he walked out of the house and stared at the grey " +
             "sky above the rooftops for a long while."

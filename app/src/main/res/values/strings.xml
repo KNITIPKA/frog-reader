@@ -122,6 +122,7 @@
     <string name="reader_error_title">Couldn\'t open this book</string>
     <string name="reader_error_message">The file may be damaged or missing.</string>
     <string name="reader_back">Back</string>
+    <string name="reader_return">Back to page</string>
     <string name="reader_contents">Contents</string>
     <string name="reader_settings">Reading settings</string>
     <string name="reader_chapter_n">Chapter %1$d</string>

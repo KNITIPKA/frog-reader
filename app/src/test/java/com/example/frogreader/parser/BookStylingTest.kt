@@ -115,7 +115,7 @@ class BookStylingTest {
         assertNotNull("heading must carry the CSS style", block)
         assertEquals(BlockAlign.CENTER, block!!.align)
         assertEquals(true, block.bold)
-        assertEquals(1.8f, block.fontScale, 0.01f)
+        assertEquals(1.8f, requireNotNull(block.fontScale), 0.01f)
     }
 
     @Test
@@ -131,15 +131,15 @@ class BookStylingTest {
         val block = epigraph.block
         assertNotNull(block)
         assertEquals(true, block!!.italic)
-        assertEquals(0.30f, block.indentStartFrac, 0.01f)
+        assertEquals(0.30f, block.indentLeftFrac, 0.01f)
 
         // The author's signature keeps the epigraph indent plus its own 3em.
         val author = paragraphs.single { it.text.text == "Чарльз Дарвин" }
         val authorBlock = author.block
         assertNotNull(authorBlock)
         assertEquals(true, authorBlock!!.italic)
-        assertEquals(0.30f, authorBlock.indentStartFrac, 0.01f)
-        assertTrue(authorBlock.indentStartEm >= 2.9f)
+        assertEquals(0.30f, authorBlock.indentLeftFrac, 0.01f)
+        assertTrue(authorBlock.indentLeftEm >= 2.9f)
         assertEquals(false, authorBlock.firstLineIndent)
 
         // Body text: the full book style is recorded (align, font, spacing);
@@ -150,7 +150,7 @@ class BookStylingTest {
         assertEquals(BlockAlign.JUSTIFY, bodyBlock!!.align)
         assertEquals(true, bodyBlock.firstLineIndent)
         assertEquals(1.5f, bodyBlock.firstLineIndentEm ?: 0f, 0.01f)
-        assertEquals(1f, bodyBlock.fontScale, 0.01f)
+        assertNull(bodyBlock.fontScale)
         assertEquals("test serif", bodyBlock.fontFamily)
         assertEquals(1.4f, bodyBlock.lineHeightMult ?: 0f, 0.01f)
         assertEquals(false, bodyBlock.hyphens)

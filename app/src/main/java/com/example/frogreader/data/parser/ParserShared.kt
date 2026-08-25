@@ -1,8 +1,8 @@
 package com.example.frogreader.data.parser
 
-import androidx.compose.ui.text.AnnotatedString
 import com.example.frogreader.data.model.Chapter
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.data.model.NoteDocument
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.parser.Parser
@@ -36,8 +36,13 @@ internal fun parseChapterDocument(bytes: ByteArray): Document? {
     val xmlDoc = runCatching {
         Jsoup.parse(bytes.inputStream(), null, "", Parser.xmlParser())
     }.getOrNull()
-    val xmlBody = xmlDoc?.selectFirst("body")
-    if (xmlBody != null && (xmlBody.text().isNotBlank() || xmlBody.children().isNotEmpty())) {
+    // EPUB 2 also permits DAISY DTBook documents, whose reading root is
+    // `<book>` rather than XHTML `<body>`. Keep those in XML mode: reparsing
+    // them as tag-soup HTML loses DTBook hierarchy and namespace semantics.
+    val xmlReadingRoot = xmlDoc?.selectFirst("body, book")
+    if (xmlReadingRoot != null &&
+        (xmlReadingRoot.text().isNotBlank() || xmlReadingRoot.children().isNotEmpty())
+    ) {
         return xmlDoc
     }
 
@@ -47,39 +52,45 @@ internal fun parseChapterDocument(bytes: ByteArray): Document? {
 }
 
 /**
- * Extracts the text of every referenced anchor into a footnote map:
- * up to 3 paragraphs / 700 characters, stopping at the start of the next
- * referenced note.
+ * Extracts every referenced anchor into a complete rich note document.
+ *
+ * The old implementation flattened at most three paragraphs / 700 chars,
+ * silently discarding tables, images, headings and the rest of a long note.
+ * This fallback works on the mapped block stream and therefore keeps every
+ * element until the next referenced note in the same chapter. Parsers with a
+ * more precise source-container boundary may provide it via [exactDocuments].
  */
 internal fun buildNotes(
     chapters: List<Chapter>,
     anchorLocations: Map<String, Pair<Int, Int>>,
     linkTargets: Set<String>,
-): Map<String, AnnotatedString> {
-    val notes = mutableMapOf<String, AnnotatedString>()
-    // Any anchored element likely starts another note — stop there.
-    val startLocations = anchorLocations.values.toSet()
+    exactDocuments: Map<String, NoteDocument> = emptyMap(),
+): Map<String, NoteDocument> {
+    val notes = exactDocuments
+        .filterKeys { it in linkTargets }
+        .filterValues { it.elements.isNotEmpty() }
+        .toMutableMap()
+
+    // On legacy EPUB2/MOBI markup the source-level note container may be
+    // absent, so the next anchored block is the only reliable boundary (and
+    // it can be an unreferenced endnote). Modern semantic containers use the
+    // exactDocuments path above, where backlinks remain safely inside.
+    val anchoredStartsByChapter = anchorLocations.values
+        .groupBy { it.first }
+        .mapValues { (_, rows) -> rows.map { it.second }.distinct().sorted() }
 
     for (key in linkTargets) {
+        if (key in notes) continue
         val (chapterIndex, elementIndex) = anchorLocations[key] ?: continue
         val elements = chapters.getOrNull(chapterIndex)?.elements ?: continue
-
-        // Find the first paragraph at/after the anchor.
-        var i = elementIndex
-        while (i < elements.size && elements[i] !is ContentElement.Paragraph) i++
-
-        val builder = AnnotatedString.Builder()
-        var paragraphs = 0
-        while (i < elements.size && paragraphs < 3 && builder.length < 700) {
-            val paragraph = elements[i] as? ContentElement.Paragraph ?: break
-            // Stop at the start of the next footnote.
-            if (paragraphs > 0 && (chapterIndex to i) in startLocations) break
-            if (paragraphs > 0) builder.append("\n\n")
-            builder.append(paragraph.text)
-            paragraphs++
-            i++
+        if (elementIndex !in elements.indices) continue
+        val end = anchoredStartsByChapter[chapterIndex]
+            .orEmpty()
+            .firstOrNull { it > elementIndex }
+            ?: elements.size
+        if (end > elementIndex) {
+            notes[key] = NoteDocument(elements.subList(elementIndex, end).toList())
         }
-        if (paragraphs > 0) notes[key] = builder.toAnnotatedString()
     }
     return notes
 }

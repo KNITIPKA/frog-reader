@@ -491,12 +491,16 @@ object MobiBuilder {
         val fragments: List<List<String>>,
         val css: String,
         val insertMarker: String = "</body>",
+        /** Extra compiled CSS flows, addressable as kindle:flow:0002, 0003, ... */
+        val additionalCssFlows: List<String> = emptyList(),
     )
 
     /**
      * A KF8 book: flow 0 = skeletons+fragments, flow 1 = CSS, FDST +
-     * SKEL/FRAG indexes, one image record. [combo] prepends a MOBI6 half
-     * with EXTH 121 pointing at the KF8 boundary.
+     * SKEL/FRAG indexes, then [images] and [extraResources]. [combo] prepends
+     * a MOBI6 half with EXTH 121 pointing at the KF8 boundary. The metadata
+     * parameters are optional so compact parser fixtures retain their old
+     * byte layout, while full comparison books can exercise EXTH and covers.
      */
     fun buildKf8(
         target: File,
@@ -506,6 +510,9 @@ object MobiBuilder {
         extraResources: List<ByteArray> = emptyList(),
         ncxRows: List<Kf8NcxRow> = emptyList(),
         indxAimedAtSkeleton: Boolean = false,
+        images: List<ByteArray> = listOf(fakePng(42)),
+        exth: List<Pair<Int, ByteArray>> = emptyList(),
+        fullName: String = "KF8 Book",
     ): File {
         val flow0 = ByteArrayOutputStream()
         val skelEntries = mutableListOf<Pair<String, Map<Int, List<Int>>>>()
@@ -533,18 +540,24 @@ object MobiBuilder {
             }
         }
         val flow0Bytes = flow0.toByteArray()
-        val text = flow0Bytes + spec.css.toByteArray(Charsets.UTF_8)
+        val flows = listOf(flow0Bytes, spec.css.toByteArray(Charsets.UTF_8)) +
+            spec.additionalCssFlows.map { it.toByteArray(Charsets.UTF_8) }
+        val text = ByteArrayOutputStream().also { out ->
+            flows.forEach(out::write)
+        }.toByteArray()
         val textRecords = text.toList().chunked(4096).map { it.toByteArray() }
         val recordCountT = textRecords.size
 
         val fdst = ByteArrayOutputStream()
         fdst.write("FDST".toByteArray())
         fdst.u32(12)
-        fdst.u32(2)
-        fdst.u32(0)
-        fdst.u32(flow0Bytes.size)
-        fdst.u32(flow0Bytes.size)
-        fdst.u32(text.size)
+        fdst.u32(flows.size)
+        var flowStart = 0
+        for (flow in flows) {
+            fdst.u32(flowStart)
+            flowStart += flow.size
+            fdst.u32(flowStart)
+        }
 
         var skelRecords = indx(
             tagx = listOf(TagxSpec(1, 1, 0x01), TagxSpec(6, 2, 0x02)),
@@ -563,8 +576,9 @@ object MobiBuilder {
             compression = 1,
             textLength = text.size,
             textRecords = recordCountT,
-            fullName = "KF8 Book",
-            firstImage = ncxStart + ncxRecords.size,
+            exth = exth,
+            fullName = fullName,
+            firstImage = if (images.isEmpty()) -1 else ncxStart + ncxRecords.size,
             indxRecord = when {
                 indxAimedAtSkeleton -> recordCountT + 2
                 ncxRecords.isEmpty() -> -1
@@ -572,7 +586,7 @@ object MobiBuilder {
             },
             kf8 = Kf8Fields(
                 fdstRecord = recordCountT + 1,
-                fdstCount = 2,
+                fdstCount = flows.size,
                 skelIndex = recordCountT + 2,
                 fragIndex = recordCountT + 2 + skelRecords.size,
             ),
@@ -580,7 +594,7 @@ object MobiBuilder {
         )
         val kf8Records = listOf(kf8Record0) + textRecords +
             listOf(fdst.toByteArray()) + skelRecords + fragRecords + ncxRecords +
-            listOf(fakePng(42)) + extraResources
+            images + extraResources
 
         if (!combo) return writePdb(target, PdbFile.TYPE_MOBI, "Kf8", kf8Records)
 

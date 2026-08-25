@@ -14,16 +14,27 @@ internal object MobiFontRecord {
     private const val XOR_SPAN = 1040
     private const val FLAG_ZLIB = 0x1
     private const val FLAG_OBFUSCATED = 0x2
-    private const val MAX_FONT_BYTES = 32 * 1024 * 1024
+    private const val DEFAULT_MAX_FONT_BYTES = 32 * 1024 * 1024
 
     fun isFontRecord(data: ByteArray, off: Int, len: Int): Boolean =
         len >= HEADER && data.magic(off, "FONT")
 
     /** Decoded sfnt bytes, or null on structural damage. */
-    fun decode(data: ByteArray, off: Int, len: Int): ByteArray? =
-        runCatching { decodeOrNull(data, off, len) }.getOrNull()
+    fun decode(
+        data: ByteArray,
+        off: Int,
+        len: Int,
+        maxDecodedBytes: Int = DEFAULT_MAX_FONT_BYTES,
+    ): ByteArray? = runCatching {
+        if (maxDecodedBytes <= 0) null else decodeOrNull(data, off, len, maxDecodedBytes)
+    }.getOrNull()
 
-    private fun decodeOrNull(data: ByteArray, off: Int, len: Int): ByteArray? {
+    private fun decodeOrNull(
+        data: ByteArray,
+        off: Int,
+        len: Int,
+        maxDecodedBytes: Int,
+    ): ByteArray? {
         if (!isFontRecord(data, off, len)) return null
         val usize = data.u32(off + 4)
         val flags = data.u32(off + 8).toInt()
@@ -31,7 +42,7 @@ internal object MobiFontRecord {
         val xorLen = data.index32(off + 16)
         val xorStart = data.index32(off + 20)
         if (dataStart < HEADER || dataStart > len) return null
-        if (usize > MAX_FONT_BYTES.toLong()) return null
+        if (usize > maxDecodedBytes.toLong()) return null
 
         var font = data.copyOfRange(off + dataStart, off + len)
         if (flags and FLAG_OBFUSCATED != 0) {
@@ -44,22 +55,26 @@ internal object MobiFontRecord {
             val inflater = Inflater()
             try {
                 inflater.setInput(font)
-                var out = ByteArray(usize.toInt().coerceIn(1024, MAX_FONT_BYTES))
+                var out = ByteArray(minOf(maxDecodedBytes, maxOf(1_024, usize.toInt())))
                 var pos = 0
                 while (!inflater.finished()) {
                     if (pos == out.size) {
-                        if (out.size >= MAX_FONT_BYTES) return null
-                        out = out.copyOf((out.size * 2).coerceAtMost(MAX_FONT_BYTES))
+                        if (out.size >= maxDecodedBytes) return null
+                        out = out.copyOf((out.size * 2).coerceAtMost(maxDecodedBytes))
                     }
                     val n = inflater.inflate(out, pos, out.size - pos)
-                    if (n == 0 && (inflater.needsInput() || inflater.needsDictionary())) break
+                    if (n == 0) {
+                        if (inflater.needsInput() || inflater.needsDictionary()) break
+                        return null
+                    }
                     pos += n
                 }
+                if (!inflater.finished()) return null
                 font = out.copyOf(pos)
             } finally {
                 inflater.end()
             }
         }
-        return font
+        return font.takeIf { it.size <= maxDecodedBytes }
     }
 }

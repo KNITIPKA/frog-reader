@@ -42,7 +42,10 @@ class ContentsPageTest {
         val entry = chapter.elements.filterIsInstance<ContentElement.Paragraph>()
             .first { it.text.text.startsWith("Also by Adam Alter") }
         assertEquals(0.5f, entry.block!!.spaceAfterEm, 0.001f)
-        assertEquals(1.0f, entry.block!!.indentStartEm, 0.001f)
+        // The stylesheet uses physical `margin-left`, not logical
+        // `margin-inline-start`; it must stay on the left in an RTL layout.
+        assertEquals(0.0f, entry.block!!.indentStartEm, 0.001f)
+        assertEquals(1.0f, entry.block!!.indentLeftEm, 0.001f)
 
         // The ornament is `height: 1em` — it must not fill the column.
         val ornament = chapter.elements.filterIsInstance<ContentElement.Image>().first()

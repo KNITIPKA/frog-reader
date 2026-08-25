@@ -60,8 +60,13 @@ const val INLINE_IMAGE_CHAR = "\uFFFC"
 /** Fully parsed book, produced when the reader opens a book. */
 class BookContent(
     val chapters: List<Chapter>,
-    /** Footnote key → note text (e.g. "#n53" for FB2, "OPS/notes.xhtml#n53" for EPUB). */
-    val notes: Map<String, AnnotatedString> = emptyMap(),
+    /**
+     * Footnote key → complete rich note document (for example `#n53` in
+     * FB2 or `OPS/notes.xhtml#n53` in EPUB). Notes deliberately live outside
+     * [chapters]: opening one must never change reading order, search,
+     * pagination or progress.
+     */
+    val notes: Map<String, NoteDocument> = emptyMap(),
     /** Link key → (chapter index, element index) for in-book navigation. */
     val linkTargets: Map<String, Pair<Int, Int>> = emptyMap(),
     /** Fonts embedded in the book (EPUB @font-face), extracted to disk. */
@@ -71,8 +76,99 @@ class BookContent(
      * metadata or the Cyrillic content heuristic; drives hyphenation.
      */
     val language: String? = null,
+    /**
+     * Documents deliberately excluded from the publication's sequential
+     * reading order (EPUB spine `linear="no"`). They are kept out of
+     * [chapters], pagination, progress and search, but remain renderable when
+     * an in-book hyperlink names them.
+     *
+     * The map key is the parser's canonical package path. Keeping the
+     * document as a separate surface is important: appending it to [chapters]
+     * would silently turn non-linear content into the end of the book.
+     */
+    val linkedDocuments: Map<String, LinkedDocument> = emptyMap(),
+    /** Link key -> exact element inside one of [linkedDocuments]. */
+    val linkedDocumentTargets: Map<String, LinkedDocumentTarget> = emptyMap(),
+    /**
+     * Author-defined TOC in display order. Its destination is typed so a
+     * non-linear entry can never be mistaken for a sequential chapter index.
+     * Parsers that do not provide a navigation document leave this empty and
+     * the reader derives a flat TOC from [chapters].
+     */
+    val navigation: List<BookNavigationEntry> = emptyList(),
+    /**
+     * Lossless publisher-layout description for EPUB/KF8 publications that
+     * contain fixed-layout spine items. The native [chapters] representation
+     * remains populated as a readable fallback; a dedicated renderer may use
+     * this immutable package model without changing pagination semantics.
+     */
+    val publisherPublication: PublisherPublication? = null,
+    /**
+     * Logical order of pages in paged reading mode. EPUB may declare it on
+     * the spine; DEFAULT is resolved from the book language, never the app UI
+     * locale, so one Arabic quotation cannot reverse a Russian publication.
+     */
+    val pageProgression: PageProgression = PageProgression.DEFAULT,
 ) {
     val totalElements: Int = chapters.sumOf { it.elements.size }
+}
+
+/**
+ * A footnote rendered by the same block engine as a chapter.
+ *
+ * Keeping the original [ContentElement] stream preserves headings, quotes,
+ * poems, tables, block/inline images, links and publisher styles. A note is a
+ * transient surface only; it has no chapter/progress coordinates of its own.
+ */
+data class NoteDocument(
+    val elements: List<ContentElement>,
+) {
+    /** Plain representation for diagnostics, format-parity tests and a11y. */
+    val text: String
+        get() = elements.mapNotNull { element ->
+            when (element) {
+                is ContentElement.Paragraph -> element.text.text
+                is ContentElement.Heading -> element.text
+                is ContentElement.Table -> element.flatText()
+                is ContentElement.Image -> element.altText
+                ContentElement.Divider -> null
+                is ContentElement.Spacer -> null
+            }
+        }.joinToString("\n\n")
+}
+
+/** A renderable document outside the normal reading order. */
+class LinkedDocument(
+    /** Stable parser-defined identity, normally the canonical package path. */
+    val id: String,
+    val title: String?,
+    val elements: List<ContentElement>,
+)
+
+/** Destination of a hyperlink into a non-linear [LinkedDocument]. */
+data class LinkedDocumentTarget(
+    val documentId: String,
+    val elementIndex: Int,
+)
+
+/** One author-defined navigation row (EPUB nav/NCX, or an equivalent TOC). */
+class BookNavigationEntry(
+    val title: String,
+    val depth: Int,
+    val target: BookNavigationTarget,
+)
+
+/** A TOC destination without sentinel indices or mixed coordinate spaces. */
+sealed interface BookNavigationTarget {
+    data class ReadingOrder(
+        val chapterIndex: Int,
+        val elementIndex: Int,
+    ) : BookNavigationTarget
+
+    data class Linked(
+        val documentId: String,
+        val elementIndex: Int,
+    ) : BookNavigationTarget
 }
 
 /** One embedded font file: a face of [family] extracted to [path]. */
@@ -186,13 +282,50 @@ class TableCell(
     /** null → start-aligned (header cells default to center at render). */
     val align: BlockAlign? = null,
     val header: Boolean = false,
+    /**
+     * Typography computed for this cell when it differs from the surrounding
+     * table.  Keeping it separate from [text] is important: an author can put
+     * font/language/direction rules directly on `tr`/`td`/`th`, and embedded
+     * font families can only be resolved by the renderer, after parsing.
+     */
+    val block: BlockStyle? = null,
 )
 
 enum class ParagraphStyle { NORMAL, QUOTE, POEM }
 
-enum class BlockAlign { START, CENTER, END, JUSTIFY }
+/**
+ * Block alignment as authored.
+ *
+ * START/END are logical and follow the paragraph's bidi direction; LEFT/RIGHT
+ * are physical CSS/legacy alignments and must not flip in an RTL paragraph.
+ */
+enum class BlockAlign { START, CENTER, END, JUSTIFY, LEFT, RIGHT }
 
-enum class BookTextDirection { LTR, RTL }
+/** Base direction requested by the publication. AUTO uses the first strong character. */
+enum class BookTextDirection { LTR, RTL, AUTO }
+
+/**
+ * Inline Unicode Bidirectional Algorithm scope retained outside visible text.
+ *
+ * Parsers store these as [BIDI_TAG] string annotations. The renderer turns
+ * them into a temporary layout-only string with UBA controls and an explicit
+ * source/layout offset map; search, quotes and clipboard therefore continue
+ * to use the exact author text without invisible control characters.
+ */
+enum class InlineBidiMode {
+    ISOLATE_AUTO,
+    ISOLATE_LTR,
+    ISOLATE_RTL,
+    EMBED_LTR,
+    EMBED_RTL,
+    OVERRIDE_LTR,
+    OVERRIDE_RTL,
+    ISOLATE_OVERRIDE_LTR,
+    ISOLATE_OVERRIDE_RTL,
+    PLAINTEXT,
+}
+
+const val BIDI_TAG = "frogreader:bidi"
 
 /**
  * Block presentation computed by a parser — from EPUB CSS or FB2 semantics.
@@ -209,13 +342,22 @@ data class BlockStyle(
     val align: BlockAlign? = null,
     val italic: Boolean? = null,
     val bold: Boolean? = null,
-    /** Font size relative to the reader's base size (CSS em). */
-    val fontScale: Float = 1f,
-    /** Extra start indent as a fraction of the content width (CSS %). */
+    /**
+     * Font size relative to the reader's base size (CSS em).
+     * null means "unspecified", so a heading can distinguish its semantic
+     * H1-H6 default from an author's explicit `font-size: 1em`.
+     */
+    val fontScale: Float? = null,
+    /** Extra logical start/end indents (`margin-inline-*`, list/quote semantics). */
     val indentStartFrac: Float = 0f,
-    /** Extra start/end indent in em of the base font size. */
     val indentStartEm: Float = 0f,
+    val indentEndFrac: Float = 0f,
     val indentEndEm: Float = 0f,
+    /** Physical CSS left/right box indents; these never mirror in RTL. */
+    val indentLeftFrac: Float = 0f,
+    val indentLeftEm: Float = 0f,
+    val indentRightFrac: Float = 0f,
+    val indentRightEm: Float = 0f,
     /** First-line indent: null = reader default, false = none, true = force. */
     val firstLineIndent: Boolean? = null,
     /** Exact first-line indent width in em, when the book specifies one. */
@@ -231,7 +373,7 @@ data class BlockStyle(
     val hyphens: Boolean? = null,
     /** CSS page-break-before: always — this block starts a fresh page. */
     val pageBreakBefore: Boolean = false,
-    /** `::first-letter` styling of this paragraph (drop caps). */
+    /** Publisher styling of this paragraph's decorated initial (drop caps). */
     val firstLetter: FirstLetterStyle? = null,
     /** A small floated image the paragraph's text wraps around. */
     val floatImage: FloatImage? = null,
@@ -239,6 +381,10 @@ data class BlockStyle(
     val language: String? = null,
     /** Explicit HTML/CSS/FB2 base direction; null keeps content auto-detection. */
     val direction: BookTextDirection? = null,
+    /** Author foreground in packed ARGB (`0xAARRGGBB`), publisher mode only. */
+    val foregroundColorArgb: Int? = null,
+    /** Author box background in packed ARGB, publisher mode only. */
+    val backgroundColorArgb: Int? = null,
 ) {
     val isDefault: Boolean
         get() = this == DEFAULT
@@ -263,7 +409,9 @@ data class FloatImage(
 )
 
 /**
- * Style of a paragraph's first letter from CSS `::first-letter`.
+ * Style of a paragraph's decorated initial. This can come from CSS
+ * `::first-letter` or from a leading floated text span (the portable Kindle
+ * pattern used when `::first-letter` is unavailable).
  * [isDropCap] marks caps meant to be set large beside the text
  * (float:left or a noticeably enlarged font); rendering it is gated
  * behind the "publisher's formatting" toggle.
@@ -276,6 +424,20 @@ data class FirstLetterStyle(
     val isDropCap: Boolean,
     /** Normalized font family the book asks for, if any. */
     val fontFamily: String? = null,
+    /** Initial foreground/background, gated with publisher styles. */
+    val foregroundColorArgb: Int? = null,
+    val backgroundColorArgb: Int? = null,
+    /** False for an explicit `float:right` initial. */
+    val leftSide: Boolean = true,
+    /** Effective direction/language of an explicit initial text span. */
+    val direction: BookTextDirection? = null,
+    val language: String? = null,
+    /**
+     * UTF-16 length of a leading floated text span already present at offset
+     * zero in the paragraph. Null means the renderer derives a conventional
+     * first grapheme for `::first-letter`.
+     */
+    val sourceTextLength: Int? = null,
 )
 
 /**

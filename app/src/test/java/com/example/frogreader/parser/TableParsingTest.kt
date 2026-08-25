@@ -5,6 +5,9 @@ import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.parser.CssResolver
 import com.example.frogreader.data.parser.Fb2Parser
 import com.example.frogreader.data.parser.HtmlMapper
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -50,7 +53,7 @@ class TableParsingTest {
         assertEquals(2, table.rows[0].cells[1].colSpan)
         assertTrue(table.rows[0].cells[1].header)
         assertEquals(2, table.rows[1].cells[2].rowSpan)
-        assertEquals(BlockAlign.END, table.rows[1].cells[2].align)
+        assertEquals(BlockAlign.RIGHT, table.rows[1].cells[2].align)
         assertEquals(2, table.rows[2].cells.size)
         assertEquals("Ленинград", table.rows[2].cells[1].text.text)
     }
@@ -63,6 +66,49 @@ class TableParsingTest {
         val paragraphs = elements.filterIsInstance<ContentElement.Paragraph>()
         assertEquals(listOf("Первый блок.", "Второй блок."), paragraphs.map { it.text.text })
         assertTrue(elements.none { it is ContentElement.Table })
+    }
+
+    @Test
+    fun `html table keeps inherited row and direct cell typography`() {
+        val elements = mapped(
+            """
+            <table class="grid">
+              <tr class="localized" lang="uk" dir="rtl">
+                <td class="special">Direct <p class="inner">nested</p></td>
+                <td>Plain</td>
+              </tr>
+            </table>
+            """.trimIndent(),
+            css = """
+                .grid { font-size: 150%; font-family: serif; line-height: 120%; }
+                .localized { font-weight: bold; font-style: italic; }
+                .special { font-size: 80%; font-family: monospace; text-decoration: underline; }
+                .inner { font-style: normal; }
+            """.trimIndent(),
+        )
+
+        val table = elements.filterIsInstance<ContentElement.Table>().single()
+        val cell = table.rows.single().cells.first()
+        val block = requireNotNull(cell.block)
+        assertEquals(1.2f, requireNotNull(block.fontScale), 0.001f)
+        assertEquals("monospace", block.fontFamily)
+        assertEquals(true, block.bold)
+        assertEquals(true, block.italic)
+        assertEquals("uk", block.language)
+        assertEquals(com.example.frogreader.data.model.BookTextDirection.RTL, block.direction)
+        // 120% is computed at the 1.5em table (absolute 1.8em) and inherited
+        // unchanged; at the 1.2em cell that is an effective multiplier 1.5.
+        assertEquals(1.5f, requireNotNull(block.lineHeightMult), 0.001f)
+        assertTrue(cell.text.spanStyles.any { it.item.textDecoration == TextDecoration.Underline })
+        assertTrue(
+            cell.text.spanStyles.any {
+                it.item.fontStyle == FontStyle.Normal &&
+                    cell.text.text.substring(it.start, it.end) == "nested"
+            },
+        )
+        // Bold remains a block-level cell style; it must not be faked by a
+        // full-range span that bypasses the publisher-formatting renderer.
+        assertTrue(cell.text.spanStyles.none { it.item.fontWeight == FontWeight.Bold })
     }
 
     @Test

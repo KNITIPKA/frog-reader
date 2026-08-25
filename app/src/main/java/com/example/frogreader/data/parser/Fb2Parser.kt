@@ -5,12 +5,15 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
 import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.BlockStyle
+import com.example.frogreader.data.model.BookTextDirection
+import com.example.frogreader.data.model.BIDI_TAG
 import com.example.frogreader.data.model.BookContent
 import com.example.frogreader.data.model.BookMetadata
 import com.example.frogreader.data.model.Chapter
@@ -19,7 +22,9 @@ import com.example.frogreader.data.model.EXTERNAL_LINK_TAG
 import com.example.frogreader.data.model.FOOTNOTE_TAG
 import com.example.frogreader.data.model.INLINE_IMAGE_CHAR
 import com.example.frogreader.data.model.INLINE_IMAGE_TAG
+import com.example.frogreader.data.model.InlineBidiMode
 import com.example.frogreader.data.model.LINK_TAG
+import com.example.frogreader.data.model.NoteDocument
 import com.example.frogreader.data.model.ParagraphStyle
 import com.example.frogreader.data.model.TableCell
 import com.example.frogreader.data.model.TableRow
@@ -63,30 +68,46 @@ object Fb2Parser {
 
     // ---------------------------------------------------------------- metadata
 
-    fun parseMetadata(open: () -> InputStream): BookMetadata {
+    fun parseMetadata(open: () -> InputStream): BookMetadata =
+        parseMetadata(open, ReaderResourceLimits.DEFAULT)
+
+    internal fun parseMetadata(
+        open: () -> InputStream,
+        limits: ReaderResourceLimits,
+    ): BookMetadata {
         // Same repair ladder as parseContent: strict → sanitized → relaxed.
         // A failed import means the user cannot add the book at all, so a
         // broken file degrades to "title from the file name" instead.
         val strict = runCatching {
-            open().use { input -> parseMetadataWith(newParser(input)) }
-        }.getOrNull()
-        if (strict?.complete == true) return strict.metadata
+            open().use { input ->
+                parseMetadataWith(
+                    newParser(ThrowingBoundedInputStream(input, limits.maxFb2Bytes, "FB2 document")),
+                    limits,
+                )
+            }
+        }
+        strict.exceptionOrNull()?.rethrowIfResourceLimit()
+        val strictResult = strict.getOrNull()
+        if (strictResult?.complete == true) return strictResult.metadata
 
-        val sanitized = runCatching { sanitizedText(open) }.getOrNull()
+        val sanitized = runCatching { sanitizedText(open, limits) }.getOrNull()
         if (sanitized != null) {
             for (relaxed in booleanArrayOf(false, true)) {
                 val attempt = runCatching {
-                    parseMetadataWith(newParser(sanitized, relaxed))
+                    parseMetadataWith(newParser(sanitized, relaxed), limits)
                 }.getOrNull()
                 if (attempt?.complete == true) return attempt.metadata
             }
         }
-        return strict?.metadata ?: BookMetadata(null, null, null)
+        return strictResult?.metadata ?: BookMetadata(null, null, null)
     }
 
     private class MetadataResult(val metadata: BookMetadata, val complete: Boolean)
 
-    private fun parseMetadataWith(parser: XmlPullParser): MetadataResult {
+    private fun parseMetadataWith(
+        parser: XmlPullParser,
+        limits: ReaderResourceLimits,
+    ): MetadataResult {
         var title: String? = null
         var coverId: String? = null
         var coverBytes: ByteArray? = null
@@ -178,7 +199,13 @@ object Fb2Parser {
                         "binary" -> {
                             val id = parser.getAttributeValue(null, "id")
                             if (id != null && id == coverId) {
-                                coverBytes = decodeBase64(parser.nextText())
+                                val encoded = readElementTextLimited(
+                                    parser,
+                                    maxEncodedBase64Chars(limits.maxCoverBytes),
+                                )
+                                coverBytes = encoded?.let {
+                                    decodeBase64(it, limits.maxCoverBytes)
+                                }
                                 break@loop
                             } else {
                                 parser.skipElement()
@@ -209,6 +236,7 @@ object Fb2Parser {
                 event = parser.next()
             }
         } catch (error: Exception) {
+            error.rethrowIfResourceLimit()
             // Keep whatever was read before the file broke.
             complete = false
             if (title == null && authors.isEmpty()) throw error
@@ -258,20 +286,34 @@ object Fb2Parser {
 
     // ---------------------------------------------------------------- content
 
-    fun parseContent(open: () -> InputStream, imagesDir: File): BookContent {
+    fun parseContent(open: () -> InputStream, imagesDir: File): BookContent =
+        parseContent(open, imagesDir, ReaderResourceLimits.DEFAULT)
+
+    internal fun parseContent(
+        open: () -> InputStream,
+        imagesDir: File,
+        limits: ReaderResourceLimits,
+    ): BookContent {
         // Pass 1: strict streaming parse of the file as-is.
         val strict = runCatching {
-            open().use { input -> parseContentWith(newParser(input), imagesDir) }
+            open().use { input ->
+                parseContentWith(
+                    newParser(ThrowingBoundedInputStream(input, limits.maxFb2Bytes, "FB2 document")),
+                    imagesDir,
+                    limits,
+                )
+            }
         }
+        strict.exceptionOrNull()?.rethrowIfResourceLimit()
         strict.getOrNull()?.takeIf { !it.truncated }?.let { return it.content }
 
         // Pass 2/3: repair the text, then parse strictly / leniently.
         var best = strict.getOrNull()
-        val sanitized = runCatching { sanitizedText(open) }.getOrNull()
+        val sanitized = runCatching { sanitizedText(open, limits) }.getOrNull()
         if (sanitized != null) {
             for (relaxed in booleanArrayOf(false, true)) {
                 val attempt = runCatching {
-                    parseContentWith(newParser(sanitized, relaxed), imagesDir)
+                    parseContentWith(newParser(sanitized, relaxed), imagesDir, limits)
                 }.getOrNull() ?: continue
                 if (!attempt.truncated) return attempt.content
                 if (attempt.elementCount > (best?.elementCount ?: 0)) best = attempt
@@ -291,18 +333,28 @@ object Fb2Parser {
         val elementCount: Int = content.chapters.sumOf { it.elements.size }
     }
 
-    private fun parseContentWith(parser: XmlPullParser, imagesDir: File): ParseResult {
+    private fun parseContentWith(
+        parser: XmlPullParser,
+        imagesDir: File,
+        limits: ReaderResourceLimits,
+    ): ParseResult {
         val chapters = mutableListOf<Chapter>()
         val referencedImages = mutableSetOf<String>()
         val binaries = mutableMapOf<String, BinaryAsset>()
-        val notes = mutableMapOf<String, AnnotatedString>()
+        val notes = mutableMapOf<String, NoteDocument>()
         val anchorLocations = mutableMapOf<String, Pair<Int, Int>>()
         var truncated = false
         var bodyIndex = 0
+        val cssSheets = mutableListOf<String>()
+        var stylesheet = Fb2Stylesheet.EMPTY
+        var stylesheetCount = 0
+        var stylesheetBytes = 0L
         // The book's language from <title-info><lang> (NOT src-title-info's,
         // which describes the translation source).
         var inTitleInfo = false
         var language: String? = null
+        var binaryCount = 0
+        var binaryBytes = 0L
 
         try {
             var event = parser.eventType
@@ -312,6 +364,30 @@ object Fb2Parser {
                 }
                 if (event == XmlPullParser.START_TAG) {
                     when (parser.name) {
+                        "stylesheet" -> {
+                            val type = parser.getAttributeValue(null, "type")
+                                ?.substringBefore(';')?.trim()
+                            if (bodyIndex == 0 &&
+                                type.equals("text/css", ignoreCase = true) &&
+                                stylesheetCount++ < limits.maxFb2StylesheetCount
+                            ) {
+                                readElementTextLimited(
+                                    parser,
+                                    limits.maxStylesheetBytes.toInt(),
+                                )?.let { sheet ->
+                                    val bytes = sheet.length.toLong() * 2L
+                                    if (stylesheetBytes <=
+                                        limits.maxFb2StylesheetAggregateBytes - bytes
+                                    ) {
+                                        cssSheets += sheet
+                                        stylesheetBytes += bytes
+                                    }
+                                }
+                            } else {
+                                parser.skipElement()
+                            }
+                        }
+
                         "title-info" -> inTitleInfo = true
 
                         "lang" -> if (inTitleInfo && language == null) {
@@ -319,6 +395,8 @@ object Fb2Parser {
                         }
 
                         "body" -> {
+                            val bodyLanguage = languageOf(parser)
+                            if (bodyIndex == 0) stylesheet = Fb2Stylesheet.parse(cssSheets)
                             // FB2 2.0/2.1 defines the FIRST body as the normal
                             // reading flow. Its optional `name` only describes
                             // it; the presence of a name does not turn it into
@@ -330,9 +408,19 @@ object Fb2Parser {
                                     chapters,
                                     referencedImages,
                                     anchorLocations,
+                                    stylesheet,
+                                    bodyLanguage,
+                                    limits,
                                 )
                             } else {
-                                parseNotesBody(parser, notes)
+                                parseNotesBody(
+                                    parser,
+                                    notes,
+                                    referencedImages,
+                                    stylesheet,
+                                    bodyLanguage,
+                                    limits,
+                                )
                             }
                         }
 
@@ -340,8 +428,24 @@ object Fb2Parser {
                             val id = parser.getAttributeValue(null, "id")
                             if (id != null && id in referencedImages) {
                                 val contentType = parser.getAttributeValue(null, "content-type")
-                                decodeBase64(parser.nextText())?.let { bytes ->
-                                    binaries[id] = BinaryAsset(bytes, contentType)
+                                if (binaryCount >= limits.maxFb2BinaryCount) {
+                                    parser.skipElement()
+                                } else {
+                                    val encoded = readElementTextLimited(
+                                        parser,
+                                        maxEncodedBase64Chars(limits.maxFb2BinaryBytes),
+                                    )
+                                    encoded?.let {
+                                        decodeBase64(it, limits.maxFb2BinaryBytes)
+                                    }?.let { bytes ->
+                                        if (bytes.size <=
+                                            limits.maxFb2BinaryAggregateBytes - binaryBytes
+                                        ) {
+                                            binaries[id] = BinaryAsset(bytes, contentType)
+                                            binaryCount++
+                                            binaryBytes += bytes.size
+                                        }
+                                    }
                                 }
                             } else {
                                 parser.skipElement()
@@ -352,16 +456,21 @@ object Fb2Parser {
                 event = parser.next()
             }
         } catch (error: Exception) {
+            error.rethrowIfResourceLimit()
             // Mid-file breakage: keep every chapter parsed so far.
             truncated = true
             if (chapters.isEmpty() && notes.isEmpty()) throw error
         }
 
-        val resolved = resolveImages(chapters, binaries, imagesDir)
+        val imagePaths = extractImages(binaries, imagesDir)
+        val resolved = resolveImages(chapters, imagePaths)
+        val resolvedNotes = notes.mapValues { (_, note) ->
+            NoteDocument(resolveElements(note.elements, imagePaths))
+        }.filterValues { it.elements.isNotEmpty() }
         return ParseResult(
             content = BookContent(
                 chapters = resolved,
-                notes = notes,
+                notes = resolvedNotes,
                 linkTargets = anchorLocations,
                 language = LanguageTag.normalize(language)
                     ?: LanguageTag.detectFromChapters(resolved),
@@ -379,8 +488,13 @@ object Fb2Parser {
      * The whole file decoded with its declared charset and repaired: control
      * characters stripped, bare `&` escaped, HTML-only entities replaced.
      */
-    private fun sanitizedText(open: () -> InputStream): String {
-        val bytes = open().use { it.readBytes() }
+    private fun sanitizedText(
+        open: () -> InputStream,
+        limits: ReaderResourceLimits,
+    ): String {
+        val bytes = open().use {
+            it.readBytesBounded(limits.maxFb2SanitizedBytes, "FB2 recovery text")
+        }
         val head = String(bytes, 0, minOf(bytes.size, 400), Charsets.ISO_8859_1)
         val charset = Regex("""encoding\s*=\s*["']([^"']+)["']""")
             .find(head)
@@ -399,12 +513,24 @@ object Fb2Parser {
     /** `<body name="notes">`: each `<section id>` becomes one footnote. */
     private fun parseNotesBody(
         parser: XmlPullParser,
-        notes: MutableMap<String, AnnotatedString>,
+        notes: MutableMap<String, NoteDocument>,
+        referencedImages: MutableSet<String>,
+        stylesheet: Fb2Stylesheet,
+        inheritedLanguage: String?,
+        limits: ReaderResourceLimits,
     ) {
         while (true) {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> when (parser.name) {
-                    "section" -> parseNoteSection(parser, notes)
+                    "section" -> parseNoteSection(
+                        parser,
+                        notes,
+                        referencedImages,
+                        stylesheet,
+                        inheritedLanguage,
+                        depth = 0,
+                        limits = limits,
+                    )
                     "title" -> parser.skipElement()
                     else -> Unit
                 }
@@ -417,111 +543,97 @@ object Fb2Parser {
 
     private fun parseNoteSection(
         parser: XmlPullParser,
-        notes: MutableMap<String, AnnotatedString>,
-    ) {
+        notes: MutableMap<String, NoteDocument>,
+        referencedImages: MutableSet<String>,
+        stylesheet: Fb2Stylesheet,
+        inheritedLanguage: String?,
+        depth: Int,
+        limits: ReaderResourceLimits,
+    ): List<ContentElement> {
+        if (depth >= limits.maxFb2StructuralDepth) {
+            throw ResourceLimitException(
+                ResourceLimitKind.STRUCTURAL_DEPTH,
+                "FB2 note-section nesting exceeds ${limits.maxFb2StructuralDepth} levels",
+            )
+        }
         val id = parser.getAttributeValue(null, "id")
-        val sectionDepth = parser.depth
-        val pieces = mutableListOf<NotePiece>()
+        val sectionLanguage = languageOf(parser) ?: inheritedLanguage
+        val elements = mutableListOf<ContentElement>()
         while (true) {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> when (parser.name) {
-                    "section" -> parseNoteSection(parser, notes)
+                    "section" -> elements += parseNoteSection(
+                        parser = parser,
+                        notes = notes,
+                        referencedImages = referencedImages,
+                        stylesheet = stylesheet,
+                        inheritedLanguage = sectionLanguage,
+                        depth = depth + 1,
+                        limits = limits,
+                    )
                     "title" -> {
-                        if (parser.depth == sectionDepth + 1) {
-                            // The direct note title is normally its printed
-                            // number ("1"); the popup already identifies the
-                            // item, so keep the historical no-duplicate label.
-                            parser.skipElement()
-                        } else {
-                            val title = collectTitle(parser, mutableSetOf())
-                            val withoutImages = resolveInlineImages(title, emptyMap())
-                            if (withoutImages.text.isNotBlank()) {
-                                pieces += NotePiece(withoutImages, NotePieceKind.NORMAL)
-                            }
-                        }
-                    }
-
-                    "p", "subtitle", "text-author", "v", "date", "style" -> {
-                        val inline = parseInline(parser).build()
-                        if (inline.length > 0) {
-                            pieces += NotePiece(
-                                inline,
-                                if (parser.name == "v") NotePieceKind.VERSE else NotePieceKind.NORMAL,
+                        val title = collectTitle(
+                            parser,
+                            referencedImages,
+                            stylesheet,
+                            sectionLanguage,
+                        )
+                        if (title.text.isNotBlank()) {
+                            elements += ContentElement.Heading(
+                                styledText = title,
+                                level = (4 + depth).coerceAtMost(6),
+                                block = withLanguage(TITLE_BLOCK, sectionLanguage),
                             )
                         }
                     }
 
-                    "table" -> {
-                        parseTable(parser, mutableSetOf()).forEach { row ->
-                            val line = AnnotatedString.Builder()
-                            row.cells.forEachIndexed { index, cell ->
-                                if (index > 0) line.append("    ")
-                                line.append(resolveInlineImages(cell.text, emptyMap()))
-                            }
-                            if (line.length > 0) {
-                                pieces += NotePiece(line.toAnnotatedString(), NotePieceKind.NORMAL)
-                            }
+                    "date", "v" -> {
+                        val inline = parseInline(
+                            parser,
+                            referencedImages,
+                            stylesheet,
+                            inheritedLanguage = sectionLanguage,
+                        ).build()
+                        if (inline.length > 0) {
+                            elements += ContentElement.Paragraph(
+                                inline,
+                                if (parser.name == "v") {
+                                    ParagraphStyle.POEM
+                                } else {
+                                    ParagraphStyle.NORMAL
+                                },
+                            )
                         }
                     }
 
-                    "empty-line" -> {
-                        pieces += NotePiece(AnnotatedString(""), NotePieceKind.EMPTY)
-                        parser.skipElement()
-                    }
-
-                    "image" -> {
-                        // The text-only note sheet cannot draw rich blocks yet,
-                        // but FB2's author-provided alternative is preferable
-                        // to silently deleting the illustration.
-                        parser.getAttributeValue(null, "alt")
-                            ?.trim()
-                            ?.takeIf { it.isNotEmpty() }
-                            ?.let { pieces += NotePiece(AnnotatedString(it), NotePieceKind.NORMAL) }
-                        parser.skipElement()
-                    }
-
-                    else -> Unit // cite/poem/stanza wrappers: walk their children
+                    else -> handleBlock(
+                        parser = parser,
+                        out = elements,
+                        referencedImages = referencedImages,
+                        style = ParagraphStyle.NORMAL,
+                        stylesheet = stylesheet,
+                        inheritedLanguage = sectionLanguage,
+                    )
                 }
 
                 XmlPullParser.END_TAG -> if (parser.name == "section") break
                 XmlPullParser.END_DOCUMENT -> break
             }
         }
-        if (id != null && pieces.isNotEmpty()) {
-            val combined = AnnotatedString.Builder()
-            pieces.forEachIndexed { index, piece ->
-                if (index > 0) {
-                    val previous = pieces[index - 1]
-                    combined.append(
-                        when {
-                            previous.kind == NotePieceKind.VERSE &&
-                                piece.kind == NotePieceKind.VERSE -> "\n"
-                            previous.kind == NotePieceKind.EMPTY -> "\n"
-                            piece.kind == NotePieceKind.EMPTY -> "\n\n"
-                            else -> "\n\n"
-                        },
-                    )
-                }
-                combined.append(piece.text)
-            }
-            notes["#$id"] = combined.toAnnotatedString()
+        if (id != null) {
+            if (elements.isNotEmpty()) notes["#$id"] = NoteDocument(elements.toList())
+            // A separately-addressable nested note must not be duplicated in
+            // its parent's document.
+            return emptyList()
         }
+        return elements
     }
 
-    private enum class NotePieceKind { NORMAL, VERSE, EMPTY }
-
-    private class NotePiece(
-        val text: AnnotatedString,
-        val kind: NotePieceKind,
-    )
-
-    /** Replaces `#id` image placeholders with extracted files on disk. */
-    private fun resolveImages(
-        chapters: List<Chapter>,
+    /** Writes referenced binary images once and returns FB2 id → file path. */
+    private fun extractImages(
         binaries: Map<String, BinaryAsset>,
         imagesDir: File,
-    ): List<Chapter> {
-        val paths = if (binaries.isEmpty()) {
+    ): Map<String, String> = if (binaries.isEmpty()) {
             emptyMap()
         } else {
             imagesDir.mkdirs()
@@ -531,10 +643,25 @@ object Fb2Parser {
                     .absolutePath
             }
         }
+
+    /** Replaces `#id` image placeholders with extracted files on disk. */
+    private fun resolveImages(
+        chapters: List<Chapter>,
+        paths: Map<String, String>,
+    ): List<Chapter> {
         return chapters.map { ch ->
             Chapter(
                 title = ch.title,
-                elements = ch.elements.mapNotNull { element ->
+                elements = resolveElements(ch.elements, paths),
+                depth = ch.depth,
+            )
+        }
+    }
+
+    private fun resolveElements(
+        elements: List<ContentElement>,
+        paths: Map<String, String>,
+    ): List<ContentElement> = elements.mapNotNull { element ->
                     when (element) {
                         is ContentElement.Image ->
                             paths[element.path.removePrefix("#")]
@@ -569,6 +696,7 @@ object Fb2Parser {
                                             rowSpan = cell.rowSpan,
                                             align = cell.align,
                                             header = cell.header,
+                                            block = cell.block,
                                         )
                                     },
                                     isHeader = row.isHeader,
@@ -579,11 +707,7 @@ object Fb2Parser {
 
                         else -> element
                     }
-                },
-                depth = ch.depth,
-            )
-        }
-    }
+                }
 
     /**
      * Points inline-image annotations at real files. A reference with no
@@ -652,6 +776,9 @@ object Fb2Parser {
         chapters: MutableList<Chapter>,
         referencedImages: MutableSet<String>,
         anchorLocations: MutableMap<String, Pair<Int, Int>>,
+        stylesheet: Fb2Stylesheet,
+        inheritedLanguage: String?,
+        limits: ReaderResourceLimits,
     ) {
         val preamble = mutableListOf<ContentElement>()
         val preambleAnchors = mutableMapOf<String, Int>()
@@ -661,21 +788,40 @@ object Fb2Parser {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "title" -> {
-                        val title = collectTitle(parser, referencedImages)
+                        val title = collectTitle(
+                            parser,
+                            referencedImages,
+                            stylesheet,
+                            inheritedLanguage,
+                        )
                         if (title.length > 0) {
                             preamble += ContentElement.Heading(
                                 title,
                                 level = 1,
-                                block = TITLE_BLOCK,
+                                block = withLanguage(TITLE_BLOCK, inheritedLanguage),
                             )
                         }
                     }
 
-                    "section" -> collected += parseSectionTree(parser, referencedImages, depth = 0)
+                    "section" -> collected += parseSectionTree(
+                        parser,
+                        referencedImages,
+                        depth = 0,
+                        stylesheet = stylesheet,
+                        inheritedLanguage = inheritedLanguage,
+                        limits = limits,
+                    )
 
                     else -> {
                         registerAnchor(parser, preambleAnchors, preamble.size)
-                        handleBlock(parser, preamble, referencedImages, ParagraphStyle.NORMAL)
+                        handleBlock(
+                            parser,
+                            preamble,
+                            referencedImages,
+                            ParagraphStyle.NORMAL,
+                            stylesheet = stylesheet,
+                            inheritedLanguage = inheritedLanguage,
+                        )
                     }
                 }
 
@@ -730,7 +876,17 @@ object Fb2Parser {
         parser: XmlPullParser,
         referencedImages: MutableSet<String>,
         depth: Int,
+        stylesheet: Fb2Stylesheet,
+        inheritedLanguage: String?,
+        limits: ReaderResourceLimits,
     ): List<RawChapter> {
+        if (depth >= limits.maxFb2StructuralDepth) {
+            throw ResourceLimitException(
+                ResourceLimitKind.STRUCTURAL_DEPTH,
+                "FB2 section nesting exceeds ${limits.maxFb2StructuralDepth} levels",
+            )
+        }
+        val sectionLanguage = languageOf(parser) ?: inheritedLanguage
         val result = mutableListOf<RawChapter>()
         var ownTitle: String? = null
         val ownElements = mutableListOf<ContentElement>()
@@ -763,7 +919,12 @@ object Fb2Parser {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "title" -> {
-                        val title = collectTitle(parser, referencedImages)
+                        val title = collectTitle(
+                            parser,
+                            referencedImages,
+                            stylesheet,
+                            sectionLanguage,
+                        )
                         if (title.length > 0) {
                             val plainTitle = title.text
                                 .replace(INLINE_IMAGE_CHAR, "")
@@ -772,14 +933,21 @@ object Fb2Parser {
                             if (ownTitle == null && result.isEmpty()) ownTitle = plainTitle
                             sink() += ContentElement.Heading(
                                 title,
-                                level = (2 + depth).coerceAtMost(5),
-                                block = TITLE_BLOCK,
+                                level = (2 + depth).coerceAtMost(6),
+                                block = withLanguage(TITLE_BLOCK, sectionLanguage),
                             )
                         }
                     }
 
                     "section" -> {
-                        val sub = parseSectionTree(parser, referencedImages, depth + 1)
+                        val sub = parseSectionTree(
+                            parser,
+                            referencedImages,
+                            depth + 1,
+                            stylesheet,
+                            sectionLanguage,
+                            limits,
+                        )
                         if (sub.size == 1 && sub[0].title == null) {
                             // Untitled subsection: a scene break, not a chapter.
                             val offset = sink().size
@@ -801,7 +969,14 @@ object Fb2Parser {
 
                     else -> {
                         registerAnchor(parser, anchorSink(), sink().size)
-                        handleBlock(parser, sink(), referencedImages, ParagraphStyle.NORMAL)
+                        handleBlock(
+                            parser,
+                            sink(),
+                            referencedImages,
+                            ParagraphStyle.NORMAL,
+                            stylesheet = stylesheet,
+                            inheritedLanguage = sectionLanguage,
+                        )
                     }
                 }
 
@@ -825,12 +1000,33 @@ object Fb2Parser {
         referencedImages: MutableSet<String>,
         style: ParagraphStyle,
         block: BlockStyle? = null,
+        stylesheet: Fb2Stylesheet,
+        inheritedLanguage: String? = null,
     ) {
         when (parser.name) {
             "p" -> {
-                val inline = parseInline(parser, referencedImages)
+                val language = languageOf(parser) ?: inheritedLanguage
+                val computed = stylesheet.computed(
+                    "p",
+                    parser.getAttributeValue(null, "style"),
+                )
+                val inline = parseInline(
+                    parser,
+                    referencedImages,
+                    stylesheet,
+                    computed,
+                    language,
+                    blockStyleApplied = true,
+                )
                 if (!inline.isBlank) {
-                    out += ContentElement.Paragraph(inline.build(), style, block)
+                    out += ContentElement.Paragraph(
+                        inline.build(),
+                        style,
+                        withLanguage(
+                            computed.applyTo(block),
+                            language,
+                        ),
+                    )
                 } else {
                     // <p><image/></p> with no text is a standalone
                     // illustration, not a paragraph — show it full width.
@@ -839,12 +1035,27 @@ object Fb2Parser {
             }
 
             "text-author" -> {
-                val inline = parseInline(parser, referencedImages)
+                val language = languageOf(parser) ?: inheritedLanguage
+                val computed = stylesheet.computed(
+                    "text-author",
+                    parser.getAttributeValue(null, "style"),
+                )
+                val inline = parseInline(
+                    parser,
+                    referencedImages,
+                    stylesheet,
+                    computed,
+                    language,
+                    blockStyleApplied = true,
+                )
                 if (!inline.isBlank) {
                     out += ContentElement.Paragraph(
                         inline.build(),
                         ParagraphStyle.QUOTE,
-                        TEXT_AUTHOR_BLOCK,
+                        withLanguage(
+                            computed.applyTo(TEXT_AUTHOR_BLOCK),
+                            language,
+                        ),
                     )
                 } else {
                     inline.imageRefs.forEach { out += ContentElement.Image(it) }
@@ -852,13 +1063,28 @@ object Fb2Parser {
             }
 
             "subtitle" -> {
-                val inline = parseInline(parser, referencedImages)
+                val language = languageOf(parser) ?: inheritedLanguage
+                val computed = stylesheet.computed(
+                    "subtitle",
+                    parser.getAttributeValue(null, "style"),
+                )
+                val inline = parseInline(
+                    parser,
+                    referencedImages,
+                    stylesheet,
+                    computed,
+                    language,
+                    blockStyleApplied = true,
+                )
                 val text = inline.build()
                 if (text.length > 0) {
                     out += ContentElement.Heading(
                         text,
                         level = 4,
-                        block = SUBTITLE_BLOCK,
+                        block = withLanguage(
+                            computed.applyTo(SUBTITLE_BLOCK),
+                            language,
+                        ),
                     )
                 }
             }
@@ -884,24 +1110,60 @@ object Fb2Parser {
             }
 
             "epigraph" -> parseContainer(
-                parser, out, referencedImages, ParagraphStyle.QUOTE, EPIGRAPH_BLOCK,
+                parser,
+                out,
+                referencedImages,
+                ParagraphStyle.QUOTE,
+                EPIGRAPH_BLOCK,
+                stylesheet,
+                inheritedLanguage,
             )
 
             "cite" -> parseContainer(
-                parser, out, referencedImages, ParagraphStyle.QUOTE, null,
+                parser,
+                out,
+                referencedImages,
+                ParagraphStyle.QUOTE,
+                null,
+                stylesheet,
+                inheritedLanguage,
             )
 
             // An annotation is a compact section/summary, not a quotation.
             // It may itself contain a real <cite>, which will still switch to
             // quote semantics when encountered by parseContainer.
             "annotation" -> parseContainer(
-                parser, out, referencedImages, ParagraphStyle.NORMAL, block,
+                parser,
+                out,
+                referencedImages,
+                ParagraphStyle.NORMAL,
+                block,
+                stylesheet,
+                inheritedLanguage,
             )
 
-            "poem" -> parsePoem(parser, out, referencedImages, block)
+            "poem" -> parsePoem(
+                parser,
+                out,
+                referencedImages,
+                block,
+                stylesheet,
+                inheritedLanguage,
+            )
 
             "table" -> {
-                val rows = parseTable(parser, referencedImages)
+                val tableLanguage = languageOf(parser) ?: inheritedLanguage
+                val parsed = parseTable(
+                    parser,
+                    referencedImages,
+                    stylesheet,
+                    tableLanguage,
+                )
+                val rows = parsed.first
+                val fallbackBlock = withLanguage(
+                    parsed.second.applyTo(block),
+                    tableLanguage,
+                )?.copy(firstLineIndent = false) ?: BlockStyle(firstLineIndent = false)
                 val columnCount = rows.maxOfOrNull { r -> r.cells.sumOf { it.colSpan } } ?: 0
                 when {
                     rows.isEmpty() || columnCount == 0 -> Unit
@@ -912,7 +1174,7 @@ object Fb2Parser {
                                 out += ContentElement.Paragraph(
                                     cell.text,
                                     style,
-                                    BlockStyle(firstLineIndent = false),
+                                    fallbackBlock,
                                 )
                             }
                         }
@@ -924,20 +1186,32 @@ object Fb2Parser {
                             out += ContentElement.Paragraph(
                                 androidx.compose.ui.text.AnnotatedString(text),
                                 style,
-                                BlockStyle(firstLineIndent = false),
+                                fallbackBlock,
                             )
                         }
                     }
 
-                    else -> out += ContentElement.Table(rows)
+                    else -> out += ContentElement.Table(
+                        rows,
+                        withLanguage(parsed.second.applyTo(block), tableLanguage),
+                    )
                 }
             }
 
-            // FB2.1 named style block (<style name="…">…</style>): the name
-            // refers to a <stylesheet> no real book ships — keep the text as
-            // a plain paragraph instead of dropping it.
+            // A top-level named style is invalid in the XSD but occurs in
+            // damaged/converter-produced files: keep and style its text as a
+            // paragraph instead of dropping otherwise readable content.
             "style" -> {
-                val inline = parseInline(parser, referencedImages).build()
+                val computed = stylesheet.computedNamed(
+                    parser.getAttributeValue(null, "name"),
+                )
+                val inline = parseInline(
+                    parser,
+                    referencedImages,
+                    stylesheet,
+                    computed,
+                    inheritedLanguage,
+                ).build()
                 if (inline.length > 0) {
                     out += ContentElement.Paragraph(inline, style, block)
                 }
@@ -951,38 +1225,68 @@ object Fb2Parser {
     private fun parseTable(
         parser: XmlPullParser,
         referencedImages: MutableSet<String>,
-    ): List<TableRow> {
+        stylesheet: Fb2Stylesheet,
+        inheritedLanguage: String?,
+    ): Pair<List<TableRow>, Fb2Stylesheet.Computed> {
+        val tableStyle = stylesheet.computed(
+            "table",
+            parser.getAttributeValue(null, "style"),
+        )
         val rows = mutableListOf<TableRow>()
         while (true) {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "tr" -> {
+                        val rowAlign = blockAlignOf(parser.getAttributeValue(null, "align"))
+                        val rowStyle = stylesheet.computed(
+                            "tr",
+                            parser.getAttributeValue(null, "style"),
+                            inherited = tableStyle,
+                        )
                         val cells = mutableListOf<TableCell>()
                         rowLoop@ while (true) {
                             when (parser.next()) {
                                 XmlPullParser.START_TAG -> when (parser.name) {
                                     "td", "th" -> {
-                                        val header = parser.name == "th"
+                                        val element = parser.name
+                                        val header = element == "th"
+                                        val cellLanguage = languageOf(parser) ?: inheritedLanguage
                                         // Attributes must be read BEFORE
                                         // parseInline advances the parser.
                                         val colSpan = parser.getAttributeValue(null, "colspan")
                                             ?.toIntOrNull()?.coerceIn(1, 10) ?: 1
                                         val rowSpan = parser.getAttributeValue(null, "rowspan")
                                             ?.toIntOrNull()?.coerceIn(1, 20) ?: 1
-                                        val align = when (
-                                            parser.getAttributeValue(null, "align")?.lowercase()
-                                        ) {
-                                            "center" -> BlockAlign.CENTER
-                                            "right" -> BlockAlign.END
-                                            "left" -> BlockAlign.START
-                                            else -> if (header) BlockAlign.CENTER else null
-                                        }
+                                        val presentationalAlign = blockAlignOf(
+                                            parser.getAttributeValue(null, "align"),
+                                        ) ?: rowAlign
+                                        val computed = stylesheet.computed(
+                                            element,
+                                            parser.getAttributeValue(null, "style"),
+                                            inherited = rowStyle,
+                                        )
                                         cells += TableCell(
-                                            text = parseInline(parser, referencedImages).build(),
+                                            text = parseInline(
+                                                parser,
+                                                referencedImages,
+                                                stylesheet,
+                                                computed,
+                                                cellLanguage,
+                                                relativeToStyle = tableStyle,
+                                            ).build(),
                                             colSpan = colSpan,
                                             rowSpan = rowSpan,
-                                            align = align,
+                                            align = computed.align
+                                                ?: presentationalAlign
+                                                ?: if (header) BlockAlign.CENTER else null,
                                             header = header,
+                                            block = withLanguage(
+                                                computed.colorBlockStyle(
+                                                    relativeTo = tableStyle,
+                                                    inheritedBackgroundArgb = rowStyle.backgroundColorArgb,
+                                                ),
+                                                cellLanguage,
+                                            ),
                                         )
                                     }
 
@@ -1003,8 +1307,8 @@ object Fb2Parser {
                     else -> parser.skipElement()
                 }
 
-                XmlPullParser.END_TAG -> if (parser.name == "table") return rows
-                XmlPullParser.END_DOCUMENT -> return rows
+                XmlPullParser.END_TAG -> if (parser.name == "table") return rows to tableStyle
+                XmlPullParser.END_DOCUMENT -> return rows to tableStyle
             }
         }
     }
@@ -1016,11 +1320,22 @@ object Fb2Parser {
         referencedImages: MutableSet<String>,
         style: ParagraphStyle,
         block: BlockStyle?,
+        stylesheet: Fb2Stylesheet,
+        inheritedLanguage: String?,
     ) {
         val containerName = parser.name
+        val containerLanguage = languageOf(parser) ?: inheritedLanguage
         while (true) {
             when (parser.next()) {
-                XmlPullParser.START_TAG -> handleBlock(parser, out, referencedImages, style, block)
+                XmlPullParser.START_TAG -> handleBlock(
+                    parser,
+                    out,
+                    referencedImages,
+                    style,
+                    block,
+                    stylesheet,
+                    containerLanguage,
+                )
                 XmlPullParser.END_TAG -> if (parser.name == containerName) return
                 XmlPullParser.END_DOCUMENT -> return
             }
@@ -1032,17 +1347,25 @@ object Fb2Parser {
         out: MutableList<ContentElement>,
         referencedImages: MutableSet<String>,
         block: BlockStyle? = null,
+        stylesheet: Fb2Stylesheet,
+        inheritedLanguage: String?,
     ) {
+        val poemLanguage = languageOf(parser) ?: inheritedLanguage
         while (true) {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "title" -> {
-                        val title = collectTitle(parser, referencedImages)
+                        val title = collectTitle(
+                            parser,
+                            referencedImages,
+                            stylesheet,
+                            poemLanguage,
+                        )
                         if (title.length > 0) {
                             out += ContentElement.Heading(
                                 title,
                                 level = 4,
-                                block = SUBTITLE_BLOCK,
+                                block = withLanguage(SUBTITLE_BLOCK, poemLanguage),
                             )
                         }
                     }
@@ -1050,16 +1373,27 @@ object Fb2Parser {
                     "stanza" -> {
                         val stanza = InlineTextBuilder()
                         var firstLine = true
+                        var verseCount = 0
+                        var stanzaLanguage: String? = null
+                        var oneStanzaLanguage = true
                         while (true) {
                             when (parser.next()) {
                                 XmlPullParser.START_TAG -> when (parser.name) {
                                     "title" -> {
-                                        val title = collectTitle(parser, referencedImages)
+                                        val title = collectTitle(
+                                            parser,
+                                            referencedImages,
+                                            stylesheet,
+                                            poemLanguage,
+                                        )
                                         if (title.length > 0) {
                                             out += ContentElement.Heading(
                                                 title,
                                                 level = 5,
-                                                block = SUBTITLE_BLOCK,
+                                                block = withLanguage(
+                                                    SUBTITLE_BLOCK,
+                                                    poemLanguage,
+                                                ),
                                             )
                                         }
                                     }
@@ -1070,12 +1404,37 @@ object Fb2Parser {
                                         referencedImages,
                                         ParagraphStyle.POEM,
                                         block,
+                                        stylesheet,
+                                        poemLanguage,
                                     )
 
                                     "v" -> {
                                         if (!firstLine) stanza.lineBreak()
                                         firstLine = false
-                                        appendInline(parser, stanza, referencedImages)
+                                        val verseLanguage = languageOf(parser) ?: poemLanguage
+                                        if (verseCount++ == 0) {
+                                            stanzaLanguage = verseLanguage
+                                        } else if (verseLanguage != stanzaLanguage) {
+                                            oneStanzaLanguage = false
+                                        }
+                                        val computed = stylesheet.computed(
+                                            "v",
+                                            parser.getAttributeValue(null, "style"),
+                                        )
+                                        val spans = listOfNotNull(
+                                            computed.spanStyle(),
+                                            verseLanguage?.let {
+                                                SpanStyle(localeList = LocaleList(it))
+                                            },
+                                        )
+                                        spans.forEach(stanza::pushStyle)
+                                        appendInline(
+                                            parser,
+                                            stanza,
+                                            referencedImages,
+                                            stylesheet,
+                                        )
+                                        repeat(spans.size) { stanza.pop() }
                                     }
 
                                     else -> parser.skipElement()
@@ -1090,21 +1449,41 @@ object Fb2Parser {
                             out += ContentElement.Paragraph(
                                 stanzaText,
                                 ParagraphStyle.POEM,
-                                block,
+                                withLanguage(
+                                    block,
+                                    stanzaLanguage.takeIf { oneStanzaLanguage },
+                                ),
                             )
                         }
                     }
 
                     "text-author", "epigraph" -> handleBlock(
-                        parser, out, referencedImages, ParagraphStyle.QUOTE, block,
+                        parser,
+                        out,
+                        referencedImages,
+                        ParagraphStyle.QUOTE,
+                        block,
+                        stylesheet,
+                        poemLanguage,
                     )
 
                     "subtitle" -> handleBlock(
-                        parser, out, referencedImages, ParagraphStyle.POEM, block,
+                        parser,
+                        out,
+                        referencedImages,
+                        ParagraphStyle.POEM,
+                        block,
+                        stylesheet,
+                        poemLanguage,
                     )
 
                     "date" -> {
-                        val inline = parseInline(parser, referencedImages)
+                        val inline = parseInline(
+                            parser,
+                            referencedImages,
+                            stylesheet,
+                            inheritedLanguage = poemLanguage,
+                        )
                         val date = inline.build()
                         if (date.length > 0) {
                             out += ContentElement.Paragraph(
@@ -1130,9 +1509,25 @@ object Fb2Parser {
     private fun parseInline(
         parser: XmlPullParser,
         referencedImages: MutableSet<String>? = null,
+        stylesheet: Fb2Stylesheet = Fb2Stylesheet.EMPTY,
+        parentStyle: Fb2Stylesheet.Computed? = null,
+        inheritedLanguage: String? = null,
+        blockStyleApplied: Boolean = false,
+        relativeToStyle: Fb2Stylesheet.Computed? = null,
     ): InlineTextBuilder {
         val builder = InlineTextBuilder()
-        appendInline(parser, builder, referencedImages)
+        val language = languageOf(parser) ?: inheritedLanguage
+        val spans = listOfNotNull(
+            if (blockStyleApplied) {
+                parentStyle?.decorationSpanStyle()
+            } else {
+                parentStyle?.spanStyle(relativeToStyle)
+            },
+            language?.let { SpanStyle(localeList = LocaleList(it)) },
+        )
+        spans.forEach(builder::pushStyle)
+        appendInline(parser, builder, referencedImages, stylesheet)
+        repeat(spans.size) { builder.pop() }
         return builder
     }
 
@@ -1140,6 +1535,7 @@ object Fb2Parser {
         parser: XmlPullParser,
         out: InlineTextBuilder,
         referencedImages: MutableSet<String>? = null,
+        stylesheet: Fb2Stylesheet = Fb2Stylesheet.EMPTY,
     ) {
         // Tracks how many pushes (styles/annotations) each open tag made.
         val pushed = ArrayDeque<Int>()
@@ -1188,6 +1584,29 @@ object Fb2Parser {
                             pushes++
                         }
                     }
+                    if (parser.name == "style") {
+                        stylesheet.computedNamed(
+                            parser.getAttributeValue(null, "name"),
+                        ).spanStyle()?.let { namedStyle ->
+                            out.pushStyle(namedStyle)
+                            pushes++
+                        }
+                    }
+                    languageSpan(parser)?.let { languageStyle ->
+                        out.pushStyle(languageStyle)
+                        pushes++
+                    }
+                    languageOf(parser)?.let { inlineLanguage ->
+                        out.pushAnnotation(
+                            BIDI_TAG,
+                            if (LanguageTag.isRtl(inlineLanguage)) {
+                                InlineBidiMode.ISOLATE_RTL.name
+                            } else {
+                                InlineBidiMode.ISOLATE_LTR.name
+                            },
+                        )
+                        pushes++
+                    }
                     val style = inlineStyleFor(parser.name)
                     if (style != null) {
                         out.pushStyle(style)
@@ -1233,12 +1652,24 @@ object Fb2Parser {
     private fun collectTitle(
         parser: XmlPullParser,
         referencedImages: MutableSet<String>,
+        stylesheet: Fb2Stylesheet,
+        inheritedLanguage: String?,
     ): AnnotatedString {
         val parts = mutableListOf<AnnotatedString>()
         while (true) {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> if (parser.name == "p") {
-                    val inline = parseInline(parser, referencedImages).build()
+                    val computed = stylesheet.computed(
+                        "p",
+                        parser.getAttributeValue(null, "style"),
+                    )
+                    val inline = parseInline(
+                        parser,
+                        referencedImages,
+                        stylesheet,
+                        computed,
+                        inheritedLanguage,
+                    ).build()
                     if (inline.length > 0) parts += inline
                 } else if (parser.name == "empty-line") {
                     parts += AnnotatedString("")
@@ -1367,6 +1798,41 @@ object Fb2Parser {
         return scheme in SAFE_EXTERNAL_SCHEMES
     }
 
+    private fun blockAlignOf(value: String?): BlockAlign? = when (value?.trim()?.lowercase()) {
+        "left" -> BlockAlign.LEFT
+        "right" -> BlockAlign.RIGHT
+        "center" -> BlockAlign.CENTER
+        else -> null
+    }
+
+    /** FB2's styleType/pType carries xml:lang down to individual text runs. */
+    private fun languageOf(parser: XmlPullParser): String? {
+        for (index in 0 until parser.attributeCount) {
+            if (parser.getAttributeName(index) != "lang") continue
+            val raw = parser.getAttributeValue(index)?.trim().orEmpty()
+            if (raw.isNotEmpty()) return LanguageTag.normalize(raw) ?: raw.lowercase()
+        }
+        return null
+    }
+
+    private fun languageSpan(parser: XmlPullParser): SpanStyle? =
+        languageOf(parser)?.let { SpanStyle(localeList = LocaleList(it)) }
+
+    private fun withLanguage(block: BlockStyle?, language: String?): BlockStyle? {
+        if (language == null) return block
+        return (block ?: BlockStyle.DEFAULT).copy(
+            language = language,
+            // FB2 2.x has xml:lang but no standard dir attribute. Script
+            // direction is therefore the only lossless fallback it can give
+            // us for Arabic/Hebrew paragraphs, headings, lists and cells.
+            direction = block?.direction ?: if (LanguageTag.isRtl(language)) {
+                BookTextDirection.RTL
+            } else {
+                BookTextDirection.LTR
+            },
+        )
+    }
+
     /** Records a block/section XML id at its visible element position. */
     private fun registerAnchor(
         parser: XmlPullParser,
@@ -1377,8 +1843,76 @@ object Fb2Parser {
         if (id.isNotEmpty()) anchors.putIfAbsent("#$id", elementIndex)
     }
 
-    private fun decodeBase64(text: String): ByteArray? =
-        runCatching { java.util.Base64.getMimeDecoder().decode(text.trim()) }.getOrNull()
+    /**
+     * Reads the current element without letting XmlPullParser.nextText()
+     * concatenate an attacker-controlled payload. Once the ceiling is hit we
+     * keep advancing to the end tag but retain no more characters.
+     */
+    private fun readElementTextLimited(parser: XmlPullParser, maxChars: Int): String? {
+        check(parser.eventType == XmlPullParser.START_TAG)
+        val startDepth = parser.depth
+        val out = StringBuilder(minOf(maxChars, 16 * 1024))
+        var oversized = false
+        while (true) {
+            when (parser.next()) {
+                XmlPullParser.TEXT,
+                XmlPullParser.CDSECT,
+                XmlPullParser.IGNORABLE_WHITESPACE,
+                XmlPullParser.ENTITY_REF,
+                -> if (!oversized) {
+                    val text = parser.text.orEmpty()
+                    if (text.length > maxChars - out.length) {
+                        oversized = true
+                        out.setLength(0)
+                    } else {
+                        out.append(text)
+                    }
+                }
+
+                XmlPullParser.START_TAG -> parser.skipElement()
+                XmlPullParser.END_TAG -> if (parser.depth == startDepth) {
+                    return if (oversized) null else out.toString()
+                }
+
+                XmlPullParser.END_DOCUMENT -> return null
+            }
+        }
+    }
+
+    private fun maxEncodedBase64Chars(maxDecodedBytes: Long): Int {
+        // Base64 is 4/3 of the binary. The extra allowance accepts pretty
+        // printed MIME whitespace without permitting whitespace-only bombs.
+        val whitespace = minOf(1024L * 1024, maxDecodedBytes / 16 + 1024)
+        val encoded = maxDecodedBytes + maxDecodedBytes / 2 + whitespace
+        return minOf(encoded, Int.MAX_VALUE.toLong()).toInt()
+    }
+
+    private fun decodeBase64(text: String, maxBytes: Long): ByteArray? = runCatching {
+        java.util.Base64.getMimeDecoder()
+            .wrap(AsciiCharSequenceInputStream(text))
+            .use { decoded -> decoded.readBytesBounded(maxBytes, "FB2 binary resource") }
+    }.getOrNull()
+
+    /** Zero-copy ASCII view over the already bounded XML text node. */
+    private class AsciiCharSequenceInputStream(
+        private val text: CharSequence,
+    ) : InputStream() {
+        private var index = 0
+
+        override fun read(): Int =
+            if (index >= text.length) -1 else text[index++].code.takeIf { it <= 0xff } ?: '?'.code
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            if (length == 0) return 0
+            if (index >= text.length) return -1
+            val count = minOf(length, text.length - index)
+            for (destination in offset until offset + count) {
+                val value = text[index++].code
+                buffer[destination] = (if (value <= 0xff) value else '?'.code).toByte()
+            }
+            return count
+        }
+    }
 
     private fun sanitizeFileName(name: String): String =
         name.replace(Regex("[^A-Za-z0-9._-]"), "_")
@@ -1400,15 +1934,18 @@ object Fb2Parser {
             "image/bmp", "image/x-ms-bmp" -> "bmp"
             "image/avif" -> "avif"
             else -> null
-        } ?: return safe
-        val current = safe.substringAfterLast('.', missingDelimiterValue = "")
-        return if (current.equals(suffix, ignoreCase = true) ||
-            suffix == "jpg" && current.equals("jpeg", ignoreCase = true)
-        ) {
-            safe
-        } else {
-            "$safe.$suffix"
         }
+        val displayName = suffix?.let { wanted ->
+            val current = safe.substringAfterLast('.', missingDelimiterValue = "")
+            if (current.equals(wanted, ignoreCase = true) ||
+                wanted == "jpg" && current.equals("jpeg", ignoreCase = true)
+            ) {
+                safe
+            } else {
+                "$safe.$wanted"
+            }
+        } ?: safe
+        return resourceCacheFileName("fb2", id, displayName)
     }
 
     /** Skips the current element and everything inside it. */

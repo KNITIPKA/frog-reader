@@ -49,7 +49,7 @@ class HtmlMapperHtml5Test {
         val caption = paragraphs(elements).single { it.text.text.startsWith("Fig. 1") }
         assertEquals(BlockAlign.CENTER, caption.block?.align)
         assertEquals(true, caption.block?.italic)
-        assertEquals(0.9f, caption.block!!.fontScale, 0.001f)
+        assertEquals(0.9f, requireNotNull(caption.block!!.fontScale), 0.001f)
         assertEquals(false, caption.block?.firstLineIndent)
     }
 
@@ -60,8 +60,70 @@ class HtmlMapperHtml5Test {
             css = ".left { text-align: left; font-style: normal; }",
         )
         val caption = paragraphs(elements).single()
-        assertEquals(BlockAlign.START, caption.block?.align)
+        assertEquals(BlockAlign.LEFT, caption.block?.align)
         assertEquals(false, caption.block?.italic)
+    }
+
+    @Test
+    fun `standalone inline style works without a linked stylesheet`() {
+        val elements = mapped(
+            "<p style='text-align:right; font-style:italic'>Inline author CSS</p>",
+        )
+        val paragraph = paragraphs(elements).single()
+
+        assertEquals(BlockAlign.RIGHT, paragraph.block?.align)
+        assertEquals(true, paragraph.block?.italic)
+    }
+
+    @Test
+    fun `leading floated text span becomes one exact toggleable drop cap`() {
+        val paragraph = paragraphs(
+            mapped(
+                """
+                <p dir="rtl"><span class="cap" lang="en" dir="ltr">K</span>eep this
+                explicit portable initial exactly once in the paragraph text.</p>
+                """.trimIndent(),
+                css = """
+                    .cap { float:right; font-size:3.4em; font-family:serif;
+                        font-weight:bold; font-style:italic; color:rebeccapurple;
+                        background-color:#ff08; }
+                """.trimIndent(),
+            ),
+        ).single()
+
+        assertEquals(
+            "Keep this explicit portable initial exactly once in the paragraph text.",
+            paragraph.text.text,
+        )
+        assertEquals(1, paragraph.text.text.count { it == 'K' })
+        // Its decoration is stored in FirstLetterStyle instead of the text:
+        // turning both reader toggles off therefore restores a plain K.
+        assertTrue(paragraph.text.spanStyles.none { it.start == 0 && it.end > 0 })
+
+        val cap = requireNotNull(paragraph.block?.firstLetter)
+        assertEquals(3.4f, cap.scale, 0.001f)
+        assertEquals(true, cap.bold)
+        assertEquals(true, cap.italic)
+        assertEquals("serif", cap.fontFamily)
+        assertEquals(0xff663399.toInt(), cap.foregroundColorArgb)
+        assertEquals(0x88ffff00.toInt(), cap.backgroundColorArgb)
+        assertEquals(false, cap.leftSide)
+        assertEquals(BookTextDirection.LTR, cap.direction)
+        assertEquals("en", cap.language)
+        assertEquals(1, cap.sourceTextLength)
+    }
+
+    @Test
+    fun `later or long floated text is not misclassified as a drop cap`() {
+        val result = paragraphs(
+            mapped(
+                "<p>Before <span class='cap'>K</span> after.</p>" +
+                    "<p><span class='cap'>Long</span> rest.</p>",
+                css = ".cap { float:left; font-size:3em; }",
+            ),
+        )
+
+        assertTrue(result.all { it.block?.firstLetter == null })
     }
 
     @Test
@@ -237,7 +299,7 @@ class HtmlMapperHtml5Test {
             """<p align="center">Centered.</p><div align="right"><p>Right.</p></div>""",
         )
         assertEquals(BlockAlign.CENTER, paragraphs(elements)[0].block?.align)
-        assertEquals(BlockAlign.END, paragraphs(elements)[1].block?.align)
+        assertEquals(BlockAlign.RIGHT, paragraphs(elements)[1].block?.align)
     }
 
     @Test

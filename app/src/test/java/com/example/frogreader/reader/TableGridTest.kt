@@ -3,7 +3,11 @@ package com.example.frogreader.reader
 import androidx.compose.ui.text.AnnotatedString
 import com.example.frogreader.data.model.TableCell
 import com.example.frogreader.data.model.TableRow
+import com.example.frogreader.data.parser.InlineTextBuilder
 import com.example.frogreader.ui.reader.TableGrid
+import com.example.frogreader.ui.reader.tableCellInlineContent
+import com.example.frogreader.ui.reader.tableCellMinIntrinsicWidthPx
+import com.example.frogreader.ui.reader.tableCellPlaceholders
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -130,5 +134,66 @@ class TableGridTest {
         val barrier = booleanArrayOf(true, false, false, false)
         assertEquals(0, TableGrid.rowsThatFit(heights, barrier, 0, 150))
         assertEquals(2, TableGrid.rowsThatFit(heights, barrier, 0, 250))
+    }
+
+    @Test
+    fun `table cell inline images share placeholder geometry with drawing`() {
+        val builder = InlineTextBuilder()
+        builder.text("Before ")
+        builder.inlineImage("/tmp/table-cap.png", "decorative cap")
+        builder.text(" after")
+        val text = builder.build()
+
+        val placeholders = tableCellPlaceholders(text)
+        val content = tableCellInlineContent(text, invertImages = false)
+
+        assertEquals(1, placeholders.size)
+        assertEquals(setOf("/tmp/table-cap.png"), content.keys)
+        assertEquals(placeholders.single().item, content.getValue("/tmp/table-cap.png").placeholder)
+    }
+
+    @Test
+    fun `inline image placeholder is an unbreakable table intrinsic`() {
+        val builder = InlineTextBuilder()
+        builder.text("wideword ")
+        builder.inlineImage("/tmp/panorama.png", "panorama")
+        builder.text(" tail")
+        val text = builder.build()
+        var measuredPlaceholder = false
+
+        val minWidth = tableCellMinIntrinsicWidthPx(text) { run, placeholders ->
+            if (placeholders.isNotEmpty()) {
+                measuredPlaceholder = true
+                // A panoramic image is much wider than its one-character
+                // model representation and must win the min intrinsic.
+                240
+            } else {
+                run.length * 8
+            }
+        }
+
+        assertTrue(measuredPlaceholder)
+        assertEquals(240, minWidth)
+    }
+
+    @Test
+    fun `many inline images select intrinsic runs in linear work`() {
+        val builder = InlineTextBuilder()
+        repeat(1_000) { index ->
+            builder.text("w$index ")
+            builder.inlineImage("/tmp/image-$index.png", null)
+            builder.text(" ")
+        }
+        val text = builder.build()
+        var measurements = 0
+
+        tableCellMinIntrinsicWidthPx(text) { run, placeholders ->
+            measurements++
+            if (placeholders.isEmpty()) run.length else 100
+        }
+
+        // Each image run is measured once; the three longest ordinary-word
+        // candidates add at most three callbacks.
+        assertTrue(measurements <= 1_003)
     }
 }

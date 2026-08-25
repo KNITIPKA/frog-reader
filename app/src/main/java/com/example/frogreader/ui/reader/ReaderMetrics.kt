@@ -21,7 +21,9 @@ import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.BlockStyle
 import com.example.frogreader.data.model.BookTextDirection
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.data.model.HeadingDefaults
 import com.example.frogreader.data.model.ParagraphStyle
+import com.example.frogreader.data.parser.LanguageTag
 import com.example.frogreader.ui.theme.fontFamilyFor
 
 /**
@@ -53,9 +55,10 @@ object ReaderMetrics {
     }
 
     /**
-     * Extra start/end padding beyond the base column padding.
-     * Fractional indents (an epigraph's `margin-left: 30%`) need the width
-     * of the content column; em indents scale with the base font size.
+     * Effective logical start/end padding beyond the base column padding.
+     * Logical and physical CSS insets are retained separately in [BlockStyle];
+     * folding physical left/right into this pair keeps pagination dependent
+     * only on the sum while preserving the correct side at render time.
      */
     fun horizontalInsets(
         element: ContentElement,
@@ -71,12 +74,71 @@ object ReaderMetrics {
 
         var start = (contentWidth * block.indentStartFrac) +
             (fontSize * block.indentStartEm).dp
+        var end = (contentWidth * block.indentEndFrac) +
+            (fontSize * block.indentEndEm).dp
         // A quote whose CSS specifies no indent of its own still keeps the
         // reader's default inset, so quotations stay visually set off.
         if (start < kindInset) start = kindInset
-        val end = (fontSize * block.indentEndEm).dp
+        val left = (contentWidth * block.indentLeftFrac) +
+            (fontSize * block.indentLeftEm).dp
+        val right = (contentWidth * block.indentRightFrac) +
+            (fontSize * block.indentRightEm).dp
+        if (isRtl(element)) {
+            start += right
+            end += left
+        } else {
+            start += left
+            end += right
+        }
         return start.coerceAtMost(contentWidth * 0.45f) to
-            end.coerceAtMost(contentWidth * 0.2f)
+            end.coerceAtMost(contentWidth * 0.45f)
+    }
+
+    /**
+     * Converts the author's logical start/end indents to physical left/right
+     * independently of the Android UI locale. Pagination only needs their
+     * sum; rendering needs this mapping to place an RTL block on the correct
+     * side of the page.
+     */
+    fun physicalHorizontalInsets(
+        element: ContentElement,
+        contentWidth: Dp,
+        fontSize: Float,
+    ): Pair<Dp, Dp> {
+        val (start, end) = horizontalInsets(element, contentWidth, fontSize)
+        return if (isRtl(element)) end to start else start to end
+    }
+
+    /** Effective base direction for geometry; AUTO/null follows first strong text. */
+    fun isRtl(element: ContentElement): Boolean {
+        val block = blockOf(element)
+        when (block?.direction) {
+            BookTextDirection.LTR -> return false
+            BookTextDirection.RTL -> return true
+            BookTextDirection.AUTO, null -> Unit
+        }
+        val text = when (element) {
+            is ContentElement.Paragraph -> element.text.text
+            is ContentElement.Heading -> element.text
+            is ContentElement.Table -> element.flatText()
+            else -> ""
+        }
+        firstStrongRtl(text)?.let { return it }
+        return LanguageTag.isRtl(block?.language)
+    }
+
+    private fun firstStrongRtl(text: String): Boolean? {
+        var offset = 0
+        while (offset < text.length) {
+            val codePoint = text.codePointAt(offset)
+            when (Character.getDirectionality(codePoint)) {
+                Character.DIRECTIONALITY_LEFT_TO_RIGHT -> return false
+                Character.DIRECTIONALITY_RIGHT_TO_LEFT,
+                Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC -> return true
+            }
+            offset += Character.charCount(codePoint)
+        }
+        return null
     }
 
     /** Vertical padding above/below an element (top, bottom). */
@@ -119,6 +181,7 @@ object ReaderMetrics {
         language: String? = null,
     ): TextStyle {
         val block = blockOf(element)
+        val resolvedLanguage = block?.language ?: language
         val hyphenate = if (settings.bookStyles && block?.hyphens != null) {
             block.hyphens == true
         } else {
@@ -133,11 +196,11 @@ object ReaderMetrics {
             lineBreak = LineBreak.Paragraph,
             // The book's language picks the hyphenation patterns; without it
             // a Russian book on an en-US device never hyphenates at all.
-            localeList = (block?.language ?: language)?.let { LocaleList(it) },
+            localeList = resolvedLanguage?.let { LocaleList(it) },
             textDirection = when (block?.direction) {
                 BookTextDirection.LTR -> TextDirection.Ltr
                 BookTextDirection.RTL -> TextDirection.Rtl
-                null -> TextDirection.Unspecified
+                BookTextDirection.AUTO, null -> autoTextDirection(resolvedLanguage)
             },
         )
         return when (element) {
@@ -205,6 +268,8 @@ object ReaderMetrics {
             BlockAlign.END -> TextAlign.End
             BlockAlign.START -> if (settings.bookStyles) TextAlign.Start else defaultAlign
             BlockAlign.JUSTIFY -> if (settings.bookStyles) TextAlign.Justify else defaultAlign
+            BlockAlign.LEFT -> TextAlign.Left
+            BlockAlign.RIGHT -> TextAlign.Right
             null -> defaultAlign
         }
 
@@ -244,15 +309,17 @@ object ReaderMetrics {
         base: TextStyle,
     ): TextStyle {
         val block = element.block
-        // fontScale == 1 means the book didn't size this heading itself;
-        // fall back to the per-level defaults.
-        val scale = block?.fontScale?.takeIf { it != 1f } ?: headingScale(element.level)
+        // null means the publisher did not size the heading. An explicit
+        // 1em is meaningful and must override the semantic H1-H6 default.
+        val scale = block?.fontScale ?: headingScale(element.level)
         val defaultAlign = if (element.level <= 2) TextAlign.Center else TextAlign.Start
         val align = when (block?.align) {
             BlockAlign.CENTER -> TextAlign.Center
             BlockAlign.END -> TextAlign.End
             BlockAlign.START -> TextAlign.Start
             BlockAlign.JUSTIFY -> defaultAlign
+            BlockAlign.LEFT -> TextAlign.Left
+            BlockAlign.RIGHT -> TextAlign.Right
             null -> defaultAlign
         }
         val lineMult = if (settings.bookStyles && block?.lineHeightMult != null) {
@@ -270,12 +337,16 @@ object ReaderMetrics {
         )
     }
 
-    fun headingScale(level: Int): Float = when (level) {
-        1 -> 1.5f
-        2 -> 1.32f
-        3 -> 1.18f
-        else -> 1.06f
-    }
+    /**
+     * Reader defaults for the complete HTML/ebook heading hierarchy.
+     *
+     * Keep every level distinct: EPUB/KF8 expose h1…h6 directly and FB2/MOBI
+     * normalize their structural depth to the same range.  The values are
+     * deliberately gentler than a browser's desktop UA stylesheet, because
+     * the narrow reading column must remain usable at the user's maximum base
+     * font size.  They still form a clear hierarchy around body text.
+     */
+    fun headingScale(level: Int): Float = HeadingDefaults.scale(level)
 
     /** Height of the divider line itself (padding is added separately). */
     val dividerHeight = 1.dp
@@ -284,7 +355,7 @@ object ReaderMetrics {
     val tableCellPadding = 6.dp
 
     /**
-     * Style of a drop cap glyph (CSS `::first-letter`) at an exact,
+     * Style of a drop cap glyph (pseudo or explicit float) at an exact,
      * geometry-fitted size. Font padding is stripped so the glyph fills
      * its box instead of hanging above four shortened lines.
      */
@@ -294,20 +365,39 @@ object ReaderMetrics {
         cap: com.example.frogreader.data.model.FirstLetterStyle?,
         bookFonts: Map<String, FontFamily>,
         language: String?,
-    ): TextStyle = TextStyle(
-        fontSize = capFontSizeSp.sp,
-        lineHeight = capFontSizeSp.sp,
-        fontFamily = cap?.fontFamily?.let { bookFonts[it] }
-            ?: fontFamilyFor(settings.font, settings.customFontPath),
-        fontWeight = if (cap?.bold == true) FontWeight.Bold else null,
-        fontStyle = if (cap?.italic == true) FontStyle.Italic else FontStyle.Normal,
-        localeList = language?.let { LocaleList(it) },
-        platformStyle = PlatformTextStyle(includeFontPadding = false),
-        lineHeightStyle = LineHeightStyle(
-            alignment = LineHeightStyle.Alignment.Center,
-            trim = LineHeightStyle.Trim.Both,
-        ),
-    )
+    ): TextStyle {
+        val resolvedLanguage = cap?.language ?: language
+        return TextStyle(
+            fontSize = capFontSizeSp.sp,
+            lineHeight = capFontSizeSp.sp,
+            fontFamily = if (settings.bookStyles) {
+                cap?.fontFamily?.let { family ->
+                    bookFonts[family] ?: when (family) {
+                        "serif" -> FontFamily.Serif
+                        "sans-serif", "sans" -> FontFamily.SansSerif
+                        "monospace" -> FontFamily.Monospace
+                        "cursive" -> FontFamily.Cursive
+                        else -> null
+                    }
+                }
+            } else {
+                null
+            } ?: fontFamilyFor(settings.font, settings.customFontPath),
+            fontWeight = if (cap?.bold == true) FontWeight.Bold else null,
+            fontStyle = if (cap?.italic == true) FontStyle.Italic else FontStyle.Normal,
+            localeList = resolvedLanguage?.let { LocaleList(it) },
+            textDirection = when (cap?.direction) {
+                BookTextDirection.LTR -> TextDirection.Ltr
+                BookTextDirection.RTL -> TextDirection.Rtl
+                BookTextDirection.AUTO, null -> autoTextDirection(resolvedLanguage)
+            },
+            platformStyle = PlatformTextStyle(includeFontPadding = false),
+            lineHeightStyle = LineHeightStyle(
+                alignment = LineHeightStyle.Alignment.Center,
+                trim = LineHeightStyle.Trim.Both,
+            ),
+        )
+    }
 
     /**
      * Text style of a table cell. Slightly smaller than body text, no
@@ -321,13 +411,59 @@ object ReaderMetrics {
         scale: Float,
         header: Boolean,
         language: String?,
-    ): TextStyle = TextStyle(
-        fontSize = (fontSize * 0.92f * scale).sp,
-        lineHeight = (fontSize * 0.92f * scale * 1.3f).sp,
-        fontFamily = fontFamilyFor(settings.font, settings.customFontPath),
-        fontWeight = if (header) FontWeight.Bold else null,
-        hyphens = Hyphens.None,
-        lineBreak = LineBreak.Paragraph,
-        localeList = language?.let { LocaleList(it) },
-    )
+        tableBlock: BlockStyle? = null,
+        cellBlock: BlockStyle? = null,
+        bookFonts: Map<String, FontFamily> = emptyMap(),
+    ): TextStyle {
+        // Table CSS belongs to the grid as a whole; cell AnnotatedString
+        // spans then carry only their relative overrides (for example a td
+        // at 80% inside a table at 150%).  Applying the table scale here is
+        // essential because both pagination and rendering call this exact
+        // function.  Previously Table.block affected only outer margins, so
+        // publisher font-size/family/line-height silently vanished.
+        val blockScale = cellBlock?.fontScale ?: tableBlock?.fontScale ?: 1f
+        val resolvedSize = fontSize * 0.92f * scale * blockScale
+        val publisherLineHeight = cellBlock?.lineHeightMult ?: tableBlock?.lineHeightMult
+        val resolvedLineHeight = if (settings.bookStyles && publisherLineHeight != null) {
+            publisherLineHeight
+        } else {
+            1.3f
+        }
+        val fontBlock = when {
+            cellBlock?.fontFamily != null -> cellBlock
+            else -> tableBlock
+        }
+        val resolvedBold = cellBlock?.bold ?: tableBlock?.bold
+        val resolvedItalic = cellBlock?.italic ?: tableBlock?.italic
+        val resolvedLanguage = cellBlock?.language ?: tableBlock?.language ?: language
+        val resolvedDirection = cellBlock?.direction ?: tableBlock?.direction
+        return TextStyle(
+            fontSize = resolvedSize.sp,
+            lineHeight = (resolvedSize * resolvedLineHeight).sp,
+            fontFamily = bookFamilyFor(fontBlock, settings, bookFonts)
+                ?: fontFamilyFor(settings.font, settings.customFontPath),
+            fontWeight = when {
+                resolvedBold == true -> FontWeight.Bold
+                resolvedBold == false -> FontWeight.Normal
+                header -> FontWeight.Bold
+                else -> null
+            },
+            fontStyle = when (resolvedItalic) {
+                true -> FontStyle.Italic
+                false -> FontStyle.Normal
+                null -> FontStyle.Normal
+            },
+            hyphens = Hyphens.None,
+            lineBreak = LineBreak.Paragraph,
+            localeList = resolvedLanguage?.let { LocaleList(it) },
+            textDirection = when (resolvedDirection) {
+                BookTextDirection.LTR -> TextDirection.Ltr
+                BookTextDirection.RTL -> TextDirection.Rtl
+                BookTextDirection.AUTO, null -> autoTextDirection(resolvedLanguage)
+            },
+        )
+    }
+
+    private fun autoTextDirection(language: String?): TextDirection =
+        if (LanguageTag.isRtl(language)) TextDirection.ContentOrRtl else TextDirection.ContentOrLtr
 }

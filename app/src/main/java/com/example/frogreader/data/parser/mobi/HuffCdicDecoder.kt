@@ -1,6 +1,7 @@
 package com.example.frogreader.data.parser.mobi
 
-import java.io.ByteArrayOutputStream
+import com.example.frogreader.data.parser.ResourceLimitException
+import com.example.frogreader.data.parser.ResourceLimitKind
 import java.io.IOException
 
 /**
@@ -9,7 +10,12 @@ import java.io.IOException
  * KindleUnpack algorithm. Any structural violation throws IOException
  * ("damaged book"), deliberately distinct from the DRM rejection.
  */
-internal class HuffCdicDecoder(huffRecord: ByteArray, cdicRecords: List<ByteArray>) {
+internal class HuffCdicDecoder(
+    huffRecord: ByteArray,
+    cdicRecords: Iterable<ByteArray>,
+    private val maxDecodedBytes: Int = 32 * 1024 * 1024,
+    private val maxDictionaryBytes: Int = 32 * 1024 * 1024,
+) {
 
     /** Per-first-byte: code length (1..32). */
     private val codeLengths = IntArray(256)
@@ -26,6 +32,7 @@ internal class HuffCdicDecoder(huffRecord: ByteArray, cdicRecords: List<ByteArra
 
     private val dictionary: Array<ByteArray?>
     private val terminal: BooleanArray
+    private var decodedDictionaryBytes = 0
 
     init {
         if (!huffRecord.magic(0, "HUFF") || huffRecord.size < 24) {
@@ -56,7 +63,11 @@ internal class HuffCdicDecoder(huffRecord: ByteArray, cdicRecords: List<ByteArra
         // CDIC phrase dictionary, possibly spread over several records.
         val phrases: MutableList<ByteArray?> = mutableListOf()
         val flags = mutableListOf<Boolean>()
+        var sourceBytes = 0L
+        var phraseBytes = 0L
         for (cdic in cdicRecords) {
+            if (cdic.size > maxDictionaryBytes - sourceBytes) throw dictionaryLimit()
+            sourceBytes += cdic.size
             if (!cdic.magic(0, "CDIC") || cdic.size < 16) {
                 throw IOException("Damaged MOBI: bad CDIC record")
             }
@@ -72,7 +83,9 @@ internal class HuffCdicDecoder(huffRecord: ByteArray, cdicRecords: List<ByteArra
                 val lengthWord = cdic.u16(at)
                 val length = lengthWord and 0x7FFF
                 if (at + 2 + length > cdic.size) throw IOException("Damaged MOBI: CDIC phrase")
+                if (length > maxDictionaryBytes - phraseBytes) throw dictionaryLimit()
                 phrases += cdic.copyOfRange(at + 2, at + 2 + length)
+                phraseBytes += length
                 flags += (lengthWord and 0x8000) != 0
             }
         }
@@ -92,6 +105,18 @@ internal class HuffCdicDecoder(huffRecord: ByteArray, cdicRecords: List<ByteArra
             throw IOException("Damaged MOBI: HUFF output overflow", e)
         }
         return o - dstOff
+    }
+
+    /** Decompresses one record without allowing a hidden oversized expansion. */
+    fun decompressBounded(
+        src: ByteArray,
+        off: Int,
+        len: Int,
+        maxOutputBytes: Int,
+    ): ByteArray {
+        val out = BoundedHuffOutput(maxOutputBytes)
+        decode(src, off, len, MAX_DEPTH) { out.write(it) }
+        return out.toByteArray()
     }
 
     /** Bit-stream decode with the classic 64-bit accumulator. */
@@ -145,13 +170,26 @@ internal class HuffCdicDecoder(huffRecord: ByteArray, cdicRecords: List<ByteArra
         if (terminal[index]) return phrase
         if (depth <= 0) throw IOException("Damaged MOBI: CDIC recursion too deep")
         dictionary[index] = null // cycle guard while decoding this phrase
-        val out = ByteArrayOutputStream(phrase.size * 2)
+        val remaining = maxDecodedBytes - decodedDictionaryBytes
+        if (remaining <= 0) throw decodedLimit()
+        val out = BoundedHuffOutput(remaining)
         decode(phrase, 0, phrase.size, depth - 1) { out.write(it) }
         val decoded = out.toByteArray()
+        decodedDictionaryBytes += decoded.size
         dictionary[index] = decoded
         terminal[index] = true
         return decoded
     }
+
+    private fun decodedLimit() = ResourceLimitException(
+        ResourceLimitKind.ENTRY_SIZE,
+        "MOBI HUFF text expands beyond $maxDecodedBytes bytes",
+    )
+
+    private fun dictionaryLimit() = ResourceLimitException(
+        ResourceLimitKind.ENTRY_SIZE,
+        "MOBI HUFF dictionary exceeds $maxDictionaryBytes bytes",
+    )
 
     private fun u64(bytes: ByteArray, off: Int): Long {
         var v = 0L
@@ -164,4 +202,30 @@ internal class HuffCdicDecoder(huffRecord: ByteArray, cdicRecords: List<ByteArra
     private companion object {
         const val MAX_DEPTH = 32
     }
+}
+
+private class BoundedHuffOutput(private val maxBytes: Int) {
+    private var bytes = ByteArray(minOf(maxBytes, 8 * 1024).coerceAtLeast(0))
+    private var size = 0
+
+    fun write(value: ByteArray) {
+        if (value.size > maxBytes - size) {
+            throw ResourceLimitException(
+                ResourceLimitKind.ENTRY_SIZE,
+                "MOBI HUFF output exceeds $maxBytes bytes",
+            )
+        }
+        val needed = size + value.size
+        if (needed > bytes.size) {
+            var capacity = minOf(maxBytes, maxOf(8 * 1024, bytes.size))
+            while (capacity < needed) {
+                capacity = minOf(maxBytes, maxOf(needed, capacity + capacity / 2))
+            }
+            bytes = bytes.copyOf(capacity)
+        }
+        System.arraycopy(value, 0, bytes, size, value.size)
+        size = needed
+    }
+
+    fun toByteArray(): ByteArray = bytes.copyOf(size)
 }

@@ -2,9 +2,7 @@
 <resources>
     <!-- Window theme shown before Compose takes over (splash + first frame).
          All real theming happens in Compose (MaterialExpressiveTheme + dynamic color). -->
-    <style name="Theme.FrogReader" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:enableOnBackInvokedCallback">true</item>
-    </style>
+    <style name="Theme.FrogReader" parent="android:Theme.Material.Light.NoActionBar" />
 
     <!-- The activity's manifest theme, so the system starting window is the
          splash. installSplashScreen() swaps in postSplashScreenTheme as soon

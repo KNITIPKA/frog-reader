@@ -53,6 +53,7 @@ Runs on **Android 8.0+ (minSdk 26)**.
 - **Hardware controls** — turn pages with the device volume buttons.
 - **Footnotes** — open footnotes inline or hide footnote markers from the reading text.
 - **Decorated initials** — render publisher-defined drop caps.
+- **Right-to-left reading (preview)** — RTL-aware Arabic and Hebrew text, mixed-direction content, page progression and logical alignment; final physical-device validation is pending.
 - **Dark-mode image inversion** — automatically invert bright scans and diagrams in dark themes.
 - **Chapter and book progress** — see reading progress and pages remaining.
 
@@ -69,6 +70,7 @@ Runs on **Android 8.0+ (minSdk 26)**.
 
 - **Full-text search** with live match previews.
 - **Table of contents** navigation.
+- **Smart return history** — return to the exact reading position after links, search, contents, bookmarks, progress scrubbing or a long continuous-scroll fling.
 - **Text selection** inside the reader.
 - **Quotes, bookmarks and notes** stored with your library.
 - **Custom pagination engine** with cached page layouts for fast navigation.
@@ -141,7 +143,6 @@ FrogReader uses its own parsing and rendering pipeline instead of relying on a g
 The following features and improvements are planned for upcoming releases:
 
 - [ ] **Enhanced Rendering Engine** — Further speed optimizations, smoother layout computation, and expanded typography/CSS capabilities.
-- [ ] **Navigation Jump History** — Quick "Return to previous page" button in the reader when jumping or scrubbing across chapters.
 - [ ] **Redesigned Book Edit & Metadata Screen** — Complete UI overhaul with support for editing all metadata fields (title, author, series, tags, description, and custom cover images).
 - [ ] **Reader Screen Improvements & New Modes** — Polish and refinements for the existing reading screen, along with two new dedicated reading modes: Compact and Minimalist.
 - [ ] **Profile & Reading Hub**:
@@ -153,7 +154,6 @@ The following features and improvements are planned for upcoming releases:
   - Achievements.
 - [ ] **Physical Book Tracking** — Add physical/paper books to your library with an active reading timer that logs reading sessions directly into your statistics.
 - [ ] **Enhanced Home-Screen Widgets** — New Jetpack Glance widgets (streak counters, reading stats, quote of the day, shelf quick-access).
-- [ ] **Right-to-Left (RTL) Text & Reading Support** — Full RTL layout mirroring, page navigation, and support for right-to-left scripts (such as Arabic and Hebrew).
 - [ ] **Multilingual App Localization** — Community translations and multilingual UI support for additional languages.
 - [ ] **Extended Format Support** — Native **PDF** and **Markdown (`.md`)** parsing and rendering.
 - [ ] **Google Play Store Release** — Public release on Google Play for seamless automatic updates.

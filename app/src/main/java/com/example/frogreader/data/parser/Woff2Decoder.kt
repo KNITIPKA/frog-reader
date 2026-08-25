@@ -16,6 +16,7 @@ object Woff2Decoder {
 
     private const val MAX_TABLES = 512
     private const val MAX_TABLE_SIZE = 32 * 1024 * 1024
+    private const val DEFAULT_MAX_DECODED_BYTES = 32 * 1024 * 1024
     private const val TTCF = 0x74746366L
 
     /** The spec's known-table-tags array; directory entries index into it. */
@@ -36,7 +37,12 @@ object Woff2Decoder {
             bytes[2] == 'F'.code.toByte() && bytes[3] == '2'.code.toByte()
 
     /** Decoded sfnt bytes, or null on anything unsupported or damaged. */
-    fun decode(woff2: ByteArray): ByteArray? = runCatching { decodeOrNull(woff2) }.getOrNull()
+    fun decode(
+        woff2: ByteArray,
+        maxDecodedBytes: Int = DEFAULT_MAX_DECODED_BYTES,
+    ): ByteArray? = runCatching {
+        if (maxDecodedBytes <= 0) null else decodeOrNull(woff2, maxDecodedBytes)
+    }.getOrNull()
 
     // ------------------------------------------------------------ pipeline
 
@@ -50,7 +56,7 @@ object Woff2Decoder {
         var data: ByteArray = ByteArray(0)
     }
 
-    private fun decodeOrNull(woff2: ByteArray): ByteArray? {
+    private fun decodeOrNull(woff2: ByteArray, maxDecodedBytes: Int): ByteArray? {
         if (!isWoff2(woff2) || woff2.size < 48) return null
         val header = Reader(woff2, 4)
         val flavor = header.u32()
@@ -59,13 +65,16 @@ object Woff2Decoder {
         val numTables = header.u16()
         header.u16() // reserved
         header.u32() // totalSfntSize (hint only)
-        val totalCompressedSize = header.u32().toInt()
+        val totalCompressedSizeLong = header.u32()
+        if (totalCompressedSizeLong > Int.MAX_VALUE) return null
+        val totalCompressedSize = totalCompressedSizeLong.toInt()
         if (numTables == 0 || numTables > MAX_TABLES) return null
 
         // ---- table directory (starts at 48)
         val reader = Reader(woff2, 48)
         val entries = ArrayList<Entry>(numTables)
         var totalUncompressed = 0L
+        var estimatedSfnt = (12 + numTables * 16).toLong()
         repeat(numTables) {
             val flags = reader.u8()
             val tagIndex = flags and 0x3F
@@ -79,9 +88,12 @@ object Woff2Decoder {
             val dataLength = if (transformed) reader.uintBase128() else origLength
             if (origLength > MAX_TABLE_SIZE || dataLength > MAX_TABLE_SIZE) return null
             totalUncompressed += dataLength
+            val paddedOrig = (origLength.toLong() + 3L) / 4L * 4L
+            if (paddedOrig > maxDecodedBytes - estimatedSfnt) return null
+            estimatedSfnt += paddedOrig
             entries += Entry(tag, origLength, transformed, dataLength)
         }
-        if (totalUncompressed > MAX_TABLE_SIZE * 2L) return null
+        if (totalUncompressed > maxDecodedBytes) return null
 
         // ---- one Brotli stream covers every table's (transformed) data
         if (reader.pos + totalCompressedSize > woff2.size) return null
@@ -95,6 +107,9 @@ object Woff2Decoder {
                 if (n <= 0) return null
                 off += n
             }
+            // The directory's transformed lengths must describe the complete
+            // Brotli stream, not merely a prefix of it.
+            if (stream.read() != -1) return null
         }
         var slice = 0
         for (entry in entries) {
@@ -110,7 +125,7 @@ object Woff2Decoder {
         if (glyfEntry?.transformed == true || locaEntry?.transformed == true) {
             if (glyfEntry?.transformed != true || locaEntry?.transformed != true) return null
             if (locaEntry.dataLength != 0) return null
-            val result = reconstructGlyf(glyfEntry.data) ?: return null
+            val result = reconstructGlyf(glyfEntry.data, maxDecodedBytes) ?: return null
             glyfEntry.data = result.glyf
             locaEntry.data = result.loca
             xMins = result.xMins
@@ -132,7 +147,7 @@ object Woff2Decoder {
             hmtx.data = reconstructHmtx(hmtx.data, numGlyphs, numHMetrics, mins) ?: return null
         }
 
-        return assembleSfnt(flavor, entries)
+        return assembleSfnt(flavor, entries, maxDecodedBytes)
     }
 
     // ------------------------------------------------------------ glyf/loca
@@ -145,7 +160,7 @@ object Woff2Decoder {
         val indexFormat: Int,
     )
 
-    private fun reconstructGlyf(data: ByteArray): GlyfResult? {
+    private fun reconstructGlyf(data: ByteArray, maxDecodedBytes: Int): GlyfResult? {
         val header = Reader(data)
         if (data.size < 36) return null
         header.u32() // version (reserved)
@@ -177,7 +192,7 @@ object Woff2Decoder {
         val bboxBitmap = bboxStream.bytes(bitmapSize)
         fun hasBbox(i: Int) = bboxBitmap[i / 8].toInt() and (0x80 ushr (i % 8)) != 0
 
-        val out = ByteArrayOutputStream()
+        val out = LimitedByteArrayOutputStream(maxDecodedBytes)
         val locaOffsets = IntArray(numGlyphs + 1)
         val xMins = IntArray(numGlyphs)
         for (glyph in 0 until numGlyphs) {
@@ -400,7 +415,11 @@ object Woff2Decoder {
 
     // ------------------------------------------------------------ sfnt
 
-    private fun assembleSfnt(flavor: Long, entries: List<Entry>): ByteArray {
+    private fun assembleSfnt(
+        flavor: Long,
+        entries: List<Entry>,
+        maxDecodedBytes: Int,
+    ): ByteArray? {
         val sorted = entries.sortedBy { it.tag } // sfnt directories are tag-sorted
         val numTables = sorted.size
 
@@ -417,10 +436,14 @@ object Woff2Decoder {
         val searchRange = 16 * (1 shl entrySelector)
         val rangeShift = numTables * 16 - searchRange
 
-        var total = 12 + numTables * 16
-        for (entry in sorted) total += padded(entry.data.size)
+        var total = (12 + numTables * 16).toLong()
+        for (entry in sorted) {
+            val padded = padded(entry.data.size).toLong()
+            if (padded > maxDecodedBytes - total) return null
+            total += padded
+        }
 
-        val out = ByteArray(total)
+        val out = ByteArray(total.toInt())
         writeU32(out, 0, flavor)
         writeU16(out, 4, numTables)
         writeU16(out, 6, searchRange)
@@ -439,6 +462,34 @@ object Woff2Decoder {
             record += 16
         }
         return out
+    }
+
+    /** ByteArrayOutputStream that fails before its growth allocation. */
+    private class LimitedByteArrayOutputStream(
+        private val maxBytes: Int,
+    ) : ByteArrayOutputStream(minOf(maxBytes, 32)) {
+        override fun write(value: Int) {
+            ensureBoundedCapacity(count + 1)
+            buf[count++] = value.toByte()
+        }
+
+        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+            if (length < 0 || offset < 0 || offset > bytes.size - length) {
+                throw IndexOutOfBoundsException()
+            }
+            ensureBoundedCapacity(count + length)
+            System.arraycopy(bytes, offset, buf, count, length)
+            count += length
+        }
+
+        private fun ensureBoundedCapacity(required: Int) {
+            if (required < 0 || required > maxBytes) {
+                throw IllegalStateException("WOFF2 output limit")
+            }
+            if (required <= buf.size) return
+            val grown = maxOf(required, buf.size + buf.size / 2 + 1).coerceAtMost(maxBytes)
+            buf = buf.copyOf(grown)
+        }
     }
 
     private fun checksum(bytes: ByteArray, offset: Int, paddedLength: Int): Long {

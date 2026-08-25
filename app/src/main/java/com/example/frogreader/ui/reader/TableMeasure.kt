@@ -7,12 +7,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
@@ -56,6 +59,7 @@ fun measureTableLayout(
     fontSize: Float,
     contentWidthPx: Int,
     language: String?,
+    bookFonts: Map<String, FontFamily> = emptyMap(),
 ): TableLayout = with(density) {
     val grid = TableGrid.build(table.rows)
     val columnCount = grid.columnCount.coerceAtLeast(1)
@@ -77,12 +81,30 @@ fun measureTableLayout(
                 val span = cell.colSpan.coerceIn(1, 10).coerceAtMost(columnCount - col)
                 val style = ReaderMetrics.tableCellStyle(
                     settings, fontSize, scale, cell.header, language,
+                    table.block, cell.block, bookFonts,
                 )
+                val bidiCell = BidiLayoutText.of(cell.text)
                 val maxIntrinsic = measurer
-                    .measure(cell.text, style, constraints = Constraints())
+                    .measure(
+                        bidiCell.display,
+                        style,
+                        placeholders = tableCellPlaceholders(bidiCell.display),
+                        constraints = Constraints(),
+                    )
                     .size.width + 2 * cellPadPx
-                val minIntrinsic =
-                    longestWordWidthPx(cell.text.text, style, measurer) + 2 * cellPadPx
+                val minIntrinsic = tableCellMinIntrinsicWidthPx(cell.text) { run, placeholders ->
+                    val bidiRun = BidiLayoutText.of(run)
+                    measurer.measure(
+                        text = bidiRun.display,
+                        style = style,
+                        placeholders = if (bidiRun.hasControls) {
+                            tableCellPlaceholders(bidiRun.display)
+                        } else {
+                            placeholders
+                        },
+                        constraints = Constraints(),
+                    ).size.width
+                } + 2 * cellPadPx
                 if (span <= 1) {
                     if (minIntrinsic > minW[col]) minW[col] = minIntrinsic
                     if (maxIntrinsic > maxW[col]) maxW[col] = maxIntrinsic
@@ -117,10 +139,13 @@ fun measureTableLayout(
             for (c in col until col + span) cellWidth += widths[c]
             val style = ReaderMetrics.tableCellStyle(
                 settings, fontSize, chosenScale, cell.header, language,
+                table.block, cell.block, bookFonts,
             )
+            val bidiCell = BidiLayoutText.of(cell.text)
             val textHeight = measurer.measure(
-                text = cell.text,
+                text = bidiCell.display,
                 style = style,
+                placeholders = tableCellPlaceholders(bidiCell.display),
                 constraints = Constraints(maxWidth = (cellWidth - 2 * cellPadPx).coerceAtLeast(1)),
             ).size.height
             val total = textHeight + 2 * cellPadPx
@@ -145,26 +170,62 @@ fun measureTableLayout(
     TableLayout(grid, widths, rowHeights, chosenScale)
 }
 
-/** Width of the longest word (top-3 by length measured; proportional-safe). */
-private fun longestWordWidthPx(
-    text: String,
-    style: TextStyle,
-    measurer: TextMeasurer,
+/**
+ * Width of the widest unbreakable run in a cell. Besides the three longest
+ * ordinary runs, every run containing an inline-image placeholder is measured
+ * even when it is only one U+FFFC character. Treating that character as a
+ * normal ~1em glyph made the table allocator believe a panoramic image fitted
+ * in a narrow column; the real placeholder was then clipped at draw time.
+ *
+ * The measuring callback keeps this policy independently unit-testable while
+ * production still uses the exact same [TextMeasurer], [TextStyle] and
+ * placeholder geometry as final row measurement and rendering.
+ */
+internal fun tableCellMinIntrinsicWidthPx(
+    text: AnnotatedString,
+    measure: (AnnotatedString, List<AnnotatedString.Range<Placeholder>>) -> Int,
 ): Int {
-    if (text.isBlank()) return 0
-    val candidates = text.split(' ', '\n', '\t')
-        .filter { it.isNotEmpty() }
-        .sortedByDescending { it.length }
+    if (text.isEmpty()) return 0
+
+    val runs = NON_WHITESPACE_RUN.findAll(text.text).toList()
+    if (runs.isEmpty()) return 0
+    val imageMarks = tableCellPlaceholders(text)
+    val candidateRanges = linkedSetOf<IntRange>()
+
+    runs.sortedByDescending { it.value.length }
         .take(3)
-    var max = 0
-    for (word in candidates) {
-        val width = measurer
-            .measure(AnnotatedString(word), style, constraints = Constraints())
-            .size.width
-        if (width > max) max = width
+        .forEach { candidateRanges += it.range }
+
+    // Include the complete non-breaking run around every placeholder. This
+    // also handles an image directly adjacent to text without a break point.
+    if (imageMarks.isNotEmpty()) {
+        val orderedMarks = imageMarks.sortedBy { it.start }
+        var markIndex = 0
+        for (run in runs) {
+            val runStart = run.range.first
+            val runEnd = run.range.last + 1
+            while (markIndex < orderedMarks.size && orderedMarks[markIndex].end <= runStart) {
+                markIndex++
+            }
+            if (markIndex < orderedMarks.size &&
+                orderedMarks[markIndex].start < runEnd &&
+                orderedMarks[markIndex].end > runStart
+            ) {
+                candidateRanges += run.range
+            }
+        }
     }
-    return max
+
+    var widest = 0
+    for (range in candidateRanges) {
+        val fragment = text.subSequence(range.first, range.last + 1)
+        val width = measure(fragment, tableCellPlaceholders(fragment))
+        if (width > widest) widest = width
+    }
+    return widest
 }
+
+private val NON_WHITESPACE_RUN = Regex("\\S+")
 
 /**
  * Draws rows [rowStart] until [rowEnd] of a measured table: absolutely
@@ -181,6 +242,10 @@ fun TableBlock(
     settings: ReaderSettings,
     fontSize: Float,
     language: String?,
+    bookFonts: Map<String, FontFamily> = emptyMap(),
+    invertImages: Boolean = false,
+    footnotes: FootnoteHandler? = null,
+    searchHighlight: String? = null,
     colors: ReaderColors,
     highlights: ReaderHighlights? = null,
     itemIndex: Int = -1,
@@ -188,6 +253,12 @@ fun TableBlock(
 ) {
     val density = LocalDensity.current
     val cellSpans = remember(table) { SelectionText.tableCellSpans(table) }
+    val tableColors = publisherColorPair(
+        table.block,
+        settings.bookStyles,
+        colors.text,
+        colors.background,
+    )
 
     class CellPlacement(
         val row: Int,
@@ -202,6 +273,7 @@ fun TableBlock(
         val columnCount = layout.grid.columnCount.coerceAtLeast(1)
         val colOffsets = IntArray(columnCount + 1)
         for (c in 1..columnCount) colOffsets[c] = colOffsets[c - 1] + layout.colWidthsPx[c - 1]
+        val rtlColumns = ReaderMetrics.isRtl(table)
 
         val drawRows = buildList {
             if (headerRepeated && rowStart > 0) add(0)
@@ -233,7 +305,7 @@ fun TableBlock(
                 list += CellPlacement(
                     row = r,
                     cellIndex = ci,
-                    x = colOffsets[col],
+                    x = tableCellPhysicalX(colOffsets, col, span, rtlColumns),
                     y = rowOffsets[visual],
                     width = colOffsets[col + span] - colOffsets[col],
                     height = height,
@@ -248,6 +320,19 @@ fun TableBlock(
         modifier = modifier.drawBehind {
             val stroke = Stroke(width = 1f)
             for (p in placements) {
+                if (settings.bookStyles) {
+                    table.rows[p.row].cells[p.cellIndex].block
+                        ?.backgroundColorArgb
+                        ?.let { Color(it) }
+                        ?.takeIf { it.alpha > 0f }
+                        ?.let { cellBackground ->
+                            drawRect(
+                                color = cellBackground,
+                                topLeft = Offset(p.x.toFloat(), p.y.toFloat()),
+                                size = Size(p.width.toFloat(), p.height.toFloat()),
+                            )
+                        }
+                }
                 drawRect(
                     color = borderColor,
                     topLeft = Offset(p.x.toFloat(), p.y.toFloat()),
@@ -260,6 +345,32 @@ fun TableBlock(
             for (p in placements) {
                 val cell = table.rows[p.row].cells[p.cellIndex]
                 val align = cell.align ?: if (cell.header) BlockAlign.CENTER else null
+                val cellColors = publisherColorPair(
+                    foregroundArgb = cell.block?.foregroundColorArgb
+                        ?: table.block?.foregroundColorArgb,
+                    backgroundArgb = cell.block?.backgroundColorArgb
+                        ?: table.block?.backgroundColorArgb,
+                    enabled = settings.bookStyles,
+                    defaultForeground = tableColors.foreground,
+                    surroundingBackground = if (cell.block?.backgroundColorArgb != null) {
+                        tableColors.effectiveBackground
+                    } else {
+                        colors.background
+                    },
+                )
+                val linkColor = readableReaderForeground(
+                    colors.accent,
+                    cellColors.effectiveBackground,
+                )
+                val decorated = cell.text
+                    .withPublisherColors(settings.bookStyles, cellColors)
+                    .withFootnoteLinks(linkColor, footnotes)
+                    .withSearchHighlight(
+                        searchHighlight,
+                        colors.accent.copy(alpha = 0.3f),
+                    )
+                val bidiDisplay = remember(decorated) { BidiLayoutText.of(decorated) }
+                val display = bidiDisplay.display
                 // A table's character space is its flattened text, the same
                 // one search and bookmark previews already use, so a cell is
                 // addressable like any other run of text in the book.
@@ -268,16 +379,29 @@ fun TableBlock(
                     itemIndex = itemIndex,
                     charStart = cellSpans.getOrNull(p.row)?.getOrNull(p.cellIndex)?.start ?: 0,
                     length = cell.text.length,
+                    bidi = bidiDisplay,
                 )
                 Text(
-                    text = cell.text,
+                    text = display,
+                    inlineContent = tableCellInlineContent(display, invertImages),
                     style = ReaderMetrics
-                        .tableCellStyle(settings, fontSize, layout.fontScale, cell.header, language)
+                        .tableCellStyle(
+                            settings,
+                            fontSize,
+                            layout.fontScale,
+                            cell.header,
+                            language,
+                            table.block,
+                            cell.block,
+                            bookFonts,
+                        )
                         .copy(
-                            color = colors.text,
+                            color = cellColors.foreground,
                             textAlign = when (align) {
                                 BlockAlign.CENTER -> TextAlign.Center
                                 BlockAlign.END -> TextAlign.End
+                                BlockAlign.LEFT -> TextAlign.Left
+                                BlockAlign.RIGHT -> TextAlign.Right
                                 else -> TextAlign.Start
                             },
                         ),
@@ -315,3 +439,26 @@ fun TableBlock(
         }
     }
 }
+
+/** First authored table column is physically rightmost in an RTL table. */
+internal fun tableCellPhysicalX(
+    columnOffsets: IntArray,
+    logicalColumn: Int,
+    span: Int,
+    rtl: Boolean,
+): Int {
+    val start = logicalColumn.coerceIn(0, columnOffsets.lastIndex)
+    val end = (start + span.coerceAtLeast(1)).coerceIn(start, columnOffsets.lastIndex)
+    return if (rtl) columnOffsets.last() - columnOffsets[end] else columnOffsets[start]
+}
+
+/** Shared table-cell image geometry for measurement and drawing. */
+internal fun tableCellPlaceholders(
+    text: AnnotatedString,
+) = inlineImagePlaceholders(text)
+
+/** Drawable counterpart of [tableCellPlaceholders]. */
+internal fun tableCellInlineContent(
+    text: AnnotatedString,
+    invertImages: Boolean,
+) = inlineImageContent(text, invertImages)

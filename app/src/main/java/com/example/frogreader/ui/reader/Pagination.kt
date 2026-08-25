@@ -55,7 +55,7 @@ class BookPage(
  * Bumped whenever pagination decisions or parser output that affects layout
  * change — stale disk caches then miss on the key and are recomputed.
  */
-const val LAYOUT_ENGINE_VERSION = 8
+const val LAYOUT_ENGINE_VERSION = 9
 
 class PaginationSpec(
     val contentWidthPx: Int,
@@ -182,15 +182,16 @@ suspend fun paginateBook(
                             ReaderMetrics.horizontalInsets(el, contentWidthDp, spec.fontSize)
                         val w = (spec.contentWidthPx - sInset.roundToPx() - eInset.roundToPx())
                             .coerceAtLeast(1)
+                        val bidiText = BidiLayoutText.of(text)
                         val nextLayout = measurer.measure(
-                            text = text,
+                            text = bidiText.display,
                             style = ReaderMetrics.textStyle(
                                 el, spec.settings, spec.fontSize,
                                 bookFonts = spec.bookFonts,
                                 language = spec.language,
                             ),
                             constraints = Constraints(maxWidth = w),
-                            placeholders = inlineImagePlaceholders(text),
+                            placeholders = inlineImagePlaceholders(bidiText.display),
                         )
                         // A following heading moves whole; a paragraph must
                         // contribute at least its first two lines.
@@ -245,15 +246,16 @@ suspend fun paginateBook(
                         ReaderMetrics.horizontalInsets(element, contentWidthDp, spec.fontSize)
                     val widthPx =
                         spec.contentWidthPx - startInset.roundToPx() - endInset.roundToPx()
+                    val fullBidi = BidiLayoutText.of(fullText)
                     val layout = measurer.measure(
-                        text = fullText,
+                        text = fullBidi.display,
                         style = ReaderMetrics.textStyle(
                             element, spec.settings, spec.fontSize,
                             bookFonts = spec.bookFonts,
                             language = spec.language,
                         ),
                         constraints = Constraints(maxWidth = widthPx.coerceAtLeast(1)),
-                        placeholders = inlineImagePlaceholders(fullText),
+                        placeholders = inlineImagePlaceholders(fullBidi.display),
                     )
 
                     // Headings: never split across pages, and never strand at
@@ -280,6 +282,7 @@ suspend fun paginateBook(
                     // the paragraph's first characters; the loop below then
                     // packs the remainder from a fresh full-width layout.
                     var packedText = fullText
+                    var packedBidi = fullBidi
                     var packLayout = layout
                     var packBase = 0
                     var firstPart = true
@@ -346,8 +349,9 @@ suspend fun paginateBook(
                             packBase = sideBox.besideEndChar
                             firstPart = false
                             packedText = fullText.subSequence(packBase, fullText.length)
+                            packedBidi = BidiLayoutText.of(packedText)
                             packLayout = measurer.measure(
-                                text = packedText,
+                                text = packedBidi.display,
                                 style = ReaderMetrics.textStyle(
                                     element, spec.settings, spec.fontSize,
                                     isParagraphStart = false,
@@ -355,7 +359,7 @@ suspend fun paginateBook(
                                     language = spec.language,
                                 ),
                                 constraints = Constraints(maxWidth = widthPx.coerceAtLeast(1)),
-                                placeholders = inlineImagePlaceholders(packedText),
+                                placeholders = inlineImagePlaceholders(packedBidi.display),
                             )
                         }
                     }
@@ -367,7 +371,9 @@ suspend fun paginateBook(
                         while (cursor < raw.length && raw[cursor].isWhitespace()) cursor++
                         if (cursor >= raw.length) break
 
-                        val startLine = packLayout.getLineForOffset(cursor)
+                        val startLine = packLayout.getLineForOffset(
+                            packedBidi.layoutStart(cursor),
+                        )
                         val topOffset = packLayout.getLineTop(startLine)
                         val remaining = spec.contentHeightPx - usedPx - vPaddingPx
 
@@ -395,22 +401,31 @@ suspend fun paginateBook(
                         var fragmentHeight: Int
                         while (true) {
                             val lastLine = endLine >= packLayout.lineCount - 1
-                            endChar = if (lastLine) raw.length else packLayout.getLineEnd(endLine)
+                            endChar = if (lastLine) {
+                                raw.length
+                            } else {
+                                packedBidi.sourceOffset(packLayout.getLineEnd(endLine))
+                            }
                             if (!lastLine) {
                                 // Never cut mid-word (auto-hyphenation breaks words).
                                 endChar = retreatToWordBoundary(raw, cursor, endChar)
-                                if (endChar <= cursor) endChar = packLayout.getLineEnd(endLine)
+                                if (endChar <= cursor) {
+                                    endChar = packedBidi.sourceOffset(
+                                        packLayout.getLineEnd(endLine),
+                                    )
+                                }
                             }
                             fragmentHeight = if (cursor == 0 && lastLine) {
                                 // Whole paragraph: the big layout IS standalone.
                                 ceil(packLayout.getLineBottom(endLine)).toInt()
                             } else {
                                 val fragment = packedText.subSequence(cursor, endChar)
+                                val bidiFragment = BidiLayoutText.of(fragment)
                                 measurer.measure(
-                                    text = fragment,
+                                    text = bidiFragment.display,
                                     style = fragmentStyle,
                                     constraints = Constraints(maxWidth = widthPx.coerceAtLeast(1)),
-                                    placeholders = inlineImagePlaceholders(fragment),
+                                    placeholders = inlineImagePlaceholders(bidiFragment.display),
                                 ).size.height
                             }
                             if (fragmentHeight <= remaining || endLine <= startLine) break
@@ -444,20 +459,25 @@ suspend fun paginateBook(
 
                                 is BreakRules.SplitDecision.PlaceFewer -> {
                                     endLine = decision.endLine
-                                    endChar = packLayout.getLineEnd(endLine)
+                                    endChar = packedBidi.sourceOffset(
+                                        packLayout.getLineEnd(endLine),
+                                    )
                                     retreatToWordBoundary(raw, cursor, endChar)
                                         .takeIf { it > cursor }
                                         ?.let { endChar = it }
                                     // Fewer trailing lines only shrink the
                                     // fragment — it still fits the page.
                                     val fragment = packedText.subSequence(cursor, endChar)
+                                    val bidiFragment = BidiLayoutText.of(fragment)
                                     fragmentHeight = measurer.measure(
-                                        text = fragment,
+                                        text = bidiFragment.display,
                                         style = fragmentStyle,
                                         constraints = Constraints(
                                             maxWidth = widthPx.coerceAtLeast(1),
                                         ),
-                                        placeholders = inlineImagePlaceholders(fragment),
+                                        placeholders = inlineImagePlaceholders(
+                                            bidiFragment.display,
+                                        ),
                                     ).size.height
                                 }
 
@@ -528,7 +548,7 @@ suspend fun paginateBook(
                     if (element.rows.isEmpty()) continue
                     val layout = measureTableLayout(
                         element, measurer, spec.density, spec.settings,
-                        spec.fontSize, spec.contentWidthPx, spec.language,
+                        spec.fontSize, spec.contentWidthPx, spec.language, spec.bookFonts,
                     )
                     val repeatHeader = element.rows.first().isHeader && element.rows.size > 1
                     var row = 0

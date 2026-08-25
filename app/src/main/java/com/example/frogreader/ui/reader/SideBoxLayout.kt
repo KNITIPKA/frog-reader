@@ -2,6 +2,7 @@ package com.example.frogreader.ui.reader
 
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -24,7 +25,7 @@ import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 /**
- * "Side box" paragraph shaping: a drop cap (CSS `::first-letter`) or a
+ * "Side box" paragraph shaping: a drop cap (pseudo or explicit float) or a
  * small floated image sits beside the paragraph's first lines; the rest of
  * the text continues at full width. The plan is computed once with the
  * pagination's measurer and stored in the page part, so measure and render
@@ -86,7 +87,10 @@ fun planSideBox(
     }
 
     val cap = block.firstLetter?.takeIf { it.isDropCap } ?: return null
-    val capText = SideBoxRules.capPrefix(paragraph.text.text) ?: return null
+    val capText = SideBoxRules.capPrefix(
+        paragraph.text.text,
+        cap.sourceTextLength,
+    ) ?: return null
     val besideStyle = ReaderMetrics.textStyle(
         paragraph, settings, fontSize,
         isParagraphStart = false, bookFonts = bookFonts, language = language,
@@ -108,8 +112,9 @@ fun planSideBox(
 
     val probeWidth = (widthPx - reference.size.width - gapPx)
         .coerceAtLeast((fontSize * 4).toInt())
+    val bidiRest = BidiLayoutText.of(rest)
     val probe = measurer.measure(
-        text = rest,
+        text = bidiRest.display,
         style = besideStyle,
         constraints = Constraints(maxWidth = probeWidth),
     )
@@ -138,7 +143,7 @@ fun planSideBox(
     val capTopPx = (baselineLast - capLayout.firstBaseline).roundToInt()
     return planBeside(
         paragraph, measurer, settings, fontSize, bookFonts, language,
-        widthPx, capText = capText, imagePath = null, leftSide = true,
+        widthPx, capText = capText, imagePath = null, leftSide = cap.leftSide,
         boxW = capLayout.size.width, boxH = boxH, gapPx = gapPx,
         capFontSizeSp = capSp, capTopPx = capTopPx,
     )
@@ -176,8 +181,9 @@ private fun planBeside(
         paragraph, settings, fontSize,
         isParagraphStart = false, bookFonts = bookFonts, language = language,
     )
+    val bidiRest = BidiLayoutText.of(rest)
     val layout = measurer.measure(
-        text = rest,
+        text = bidiRest.display,
         style = besideStyle,
         constraints = Constraints(maxWidth = besideW.coerceAtLeast(1)),
     )
@@ -193,15 +199,17 @@ private fun planBeside(
         besideEndRelative = rest.length
         compositeH = maxOf(boxH, ceil(layout.getLineBottom(layout.lineCount - 1)).toInt())
     } else {
-        var end = layout.getLineEnd(lines - 1)
+        var end = bidiRest.sourceOffset(layout.getLineEnd(lines - 1))
         retreatToWordBoundary(rest.text, 0, end)
             .takeIf { it > 0 }
             ?.let { end = it }
         if (end <= 0) return null
         // Standalone re-measure: a fragment's own first/last-line font
         // paddings differ from the big layout's interior lines.
+        val fragment = rest.subSequence(0, end)
+        val bidiFragment = BidiLayoutText.of(fragment)
         val fragmentHeight = measurer.measure(
-            text = rest.subSequence(0, end),
+            text = bidiFragment.display,
             style = besideStyle,
             constraints = Constraints(maxWidth = besideW.coerceAtLeast(1)),
         ).size.height
@@ -248,10 +256,16 @@ fun SideBoxComposite(
     itemIndex: Int = -1,
     modifier: Modifier = Modifier,
 ) {
+    val blockColors = publisherColorPair(
+        element.block,
+        settings.bookStyles,
+        colors.text,
+        colors.background,
+    )
     val besideStyle = ReaderMetrics.textStyle(
         element, settings, fontSize,
         isParagraphStart = false, bookFonts = bookFonts, language = language,
-    ).copy(color = colors.text)
+    ).copy(color = blockColors.foreground)
 
     // The cap eats the paragraph's first characters; the beside-text picks up
     // exactly where it ends — in both reading modes (paged pagination stores
@@ -262,21 +276,34 @@ fun SideBoxComposite(
     } else {
         null // a floated image occupies no characters
     }
-    val besideFragment =
-        rememberTextFragment(highlights, itemIndex, capLength, besideText.length)
+    val bidiBeside = remember(besideText) { BidiLayoutText.of(besideText) }
+    val besideFragment = rememberTextFragment(
+        highlights, itemIndex, capLength, besideText.length, bidiBeside,
+    )
 
     Layout(
         modifier = modifier,
         content = {
             if (sideBox.capText != null) {
                 val cap = element.block?.firstLetter
+                val capColors = publisherColorPair(
+                    foregroundArgb = cap?.foregroundColorArgb
+                        ?: element.block?.foregroundColorArgb,
+                    backgroundArgb = cap?.backgroundColorArgb,
+                    enabled = settings.bookStyles,
+                    defaultForeground = blockColors.foreground,
+                    surroundingBackground = blockColors.effectiveBackground,
+                )
                 val capSize = sideBox.capFontSizeSp.takeIf { it > 0f }
                     ?: (fontSize * (cap?.scale ?: 2.6f).coerceIn(1.8f, 4f))
                 Text(
                     text = sideBox.capText,
                     style = ReaderMetrics
                         .dropCapStyle(settings, capSize, cap, bookFonts, language)
-                        .copy(color = colors.text),
+                        .copy(
+                            color = capColors.foreground,
+                            background = capColors.background ?: androidx.compose.ui.graphics.Color.Unspecified,
+                        ),
                     softWrap = false,
                     onTextLayout = { capFragment?.layout = it },
                     modifier = Modifier.readerHighlights(capFragment, highlights),
@@ -290,7 +317,7 @@ fun SideBoxComposite(
                 )
             }
             Text(
-                text = besideText,
+                text = bidiBeside.display,
                 style = besideStyle,
                 onTextLayout = { besideFragment?.layout = it },
                 modifier = Modifier.readerHighlights(besideFragment, highlights),

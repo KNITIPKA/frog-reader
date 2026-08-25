@@ -17,6 +17,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.text.TextLayoutResult
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.ui.reader.BidiLayoutText
 
 /**
  * One rendered `Text` and the slice of the book it draws.
@@ -31,6 +32,8 @@ class TextFragment(
     val itemIndex: Int,
     val charStart: Int,
     val length: Int,
+    /** Source/display offset map when this Text contains layout-only bidi controls. */
+    val bidi: BidiLayoutText?,
     /**
      * Which generation of the layout this fragment belongs to. The pager is
      * rebuilt wholesale on every committed pinch step (`key(current.key, …)`),
@@ -63,7 +66,12 @@ class TextFragment(
             cacheOwner = layout
             paths.clear()
         }
-        return paths.getOrPut(span) { layout.getPathForRange(span.start, span.end) }
+        return paths.getOrPut(span) {
+            layout.getPathForRange(
+                bidi?.layoutStart(span.start) ?: span.start,
+                bidi?.layoutEnd(span.end) ?: span.end,
+            )
+        }
     }
 
     /** True while this fragment holds [anchor]'s character. */
@@ -197,8 +205,47 @@ class SelectionController {
         val coords = fragment.coords ?: return null
         val layout = fragment.layout ?: return null
         val local = coords.localPositionOf(space, point)
-        val offset = layout.getOffsetForPosition(local).coerceIn(0, fragment.length)
+        val layoutOffset = layout.getOffsetForPosition(local)
+        val offset = (fragment.bidi?.sourceOffset(layoutOffset) ?: layoutOffset)
+            .coerceIn(0, fragment.length)
         return BookAnchor(fragment.itemIndex, fragment.charStart + offset)
+    }
+
+    /**
+     * Caret of an exact source-text anchor, including anchors currently
+     * clipped inside one very tall scrolling paragraph. Navigation restore
+     * uses this after composing the target item, then moves the caret back to
+     * the reader's stable safe-top line. Unlike selection painting this must
+     * not require the caret to already be visible.
+     */
+    fun caretAt(anchor: BookAnchor): Rect? {
+        val space = liveSpace() ?: return null
+        var best: TextFragment? = null
+        var bestScore = Int.MAX_VALUE
+        for (candidate in fragments) {
+            if (candidate.layout == null) continue
+            val coords = candidate.coords ?: continue
+            if (!coords.isAttached || !candidate.holds(anchor)) continue
+            val local = anchor.charOffset - candidate.charStart
+            // At a split boundary prefer the fragment that starts there; it
+            // owns the following character and remains stable after reflow.
+            val boundaryPenalty = if (local == candidate.length && local > 0) 1 else 0
+            val score = boundaryPenalty * 1_000_000 - candidate.epoch
+            if (score < bestScore) {
+                best = candidate
+                bestScore = score
+            }
+        }
+        val fragment = best ?: return null
+        val coords = fragment.coords ?: return null
+        val layout = fragment.layout ?: return null
+        val local = (anchor.charOffset - fragment.charStart).coerceIn(0, fragment.length)
+        val layoutOffset = fragment.bidi?.layoutStart(local) ?: local
+        val caret = layout.getCursorRect(layoutOffset)
+        return Rect(
+            space.localPositionOf(coords, caret.topLeft),
+            space.localPositionOf(coords, caret.bottomRight),
+        )
     }
 
     /**
@@ -248,7 +295,11 @@ class SelectionController {
         val coords = fragment.coords ?: return null
         val layout = fragment.layout ?: return null
         val local = (anchor.charOffset - fragment.charStart).coerceIn(0, fragment.length)
-        val caret = layout.getCursorRect(local)
+        val layoutOffset = when (edge) {
+            SelectionEdge.START -> fragment.bidi?.layoutStart(local)
+            SelectionEdge.END -> fragment.bidi?.layoutEnd(local)
+        } ?: local
+        val caret = layout.getCursorRect(layoutOffset)
         return Rect(
             space.localPositionOf(coords, caret.topLeft),
             space.localPositionOf(coords, caret.bottomRight),
@@ -409,11 +460,12 @@ fun rememberTextFragment(
     itemIndex: Int,
     charStart: Int,
     length: Int,
+    bidi: BidiLayoutText? = null,
 ): TextFragment? {
     if (highlights == null) return null
     val controller = highlights.controller
-    val fragment = remember(itemIndex, charStart, length, highlights.epoch) {
-        TextFragment(itemIndex, charStart, length, highlights.epoch)
+    val fragment = remember(itemIndex, charStart, length, bidi, highlights.epoch) {
+        TextFragment(itemIndex, charStart, length, bidi, highlights.epoch)
     }
     DisposableEffect(fragment) {
         controller.register(fragment)

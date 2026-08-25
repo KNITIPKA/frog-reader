@@ -143,6 +143,29 @@ class Woff2DecoderTest {
         assertNull(Woff2Decoder.decode(ByteArray(100) { 7 }))
     }
 
+    @Test
+    fun `decoded output budget rejects brotli table expansion before allocation`() {
+        val table = ByteArray(4_000) { (it and 7).toByte() }
+        val expanding = Woff2TestFonts.buildWoff2(
+            listOf(Woff2TestFonts.Spec("name", table)),
+        )
+        assertNull(Woff2Decoder.decode(expanding, maxDecodedBytes = 1_024))
+        assertTrue(Woff2Decoder.decode(expanding, maxDecodedBytes = 8_192) != null)
+    }
+
+    @Test
+    fun `directory cannot understate Brotli output and hide trailing decoded bytes`() {
+        val valid = Woff2TestFonts.buildWoff2(
+            listOf(Woff2TestFonts.Spec("name", ByteArray(64) { it.toByte() })),
+        )
+        // One table directory entry starts at 48: flags, then the one-byte
+        // UIntBase128 original length. Keep its encoded width unchanged.
+        assertEquals(64, valid[49].toInt() and 0xFF)
+        val understated = valid.copyOf()
+        understated[49] = 63
+        assertNull(Woff2Decoder.decode(understated))
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private fun u16(bytes: ByteArray, at: Int): Int =

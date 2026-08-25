@@ -6,6 +6,7 @@ import androidx.compose.ui.unit.TextUnitType
 import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.parser.CssResolver
+import com.example.frogreader.data.parser.HtmlExpansionBudget
 import com.example.frogreader.data.parser.HtmlMapper
 import com.example.frogreader.ui.reader.svgAspectRatio
 import org.jsoup.Jsoup
@@ -134,6 +135,33 @@ class GeneratedContentTest {
         val sized = paragraph.text.spanStyles
             .single { it.item.fontSize == TextUnit(1.5f, TextUnitType.Em) }
         assertTrue(paragraph.text.text.substring(sized.start, sized.end).startsWith("◆"))
+    }
+
+    @Test
+    fun `generated text has per-run and shared book aggregate limits`() {
+        val budget = HtmlExpansionBudget(
+            maxGeneratedRunChars = 4,
+            maxGeneratedTotalChars = 6,
+        )
+        val css = resolver(
+            "p::before { content: \"abc\"; } p.too-long::after { content: \"12345\"; }",
+        )
+        fun map(html: String) = HtmlMapper(
+            resolveImage = { null },
+            css = css,
+            expansionBudget = budget,
+        ).map(Jsoup.parse(html).body())
+            .filterIsInstance<ContentElement.Paragraph>()
+            .map { it.text.text }
+
+        // Two 3-character decorations consume the six-character aggregate;
+        // the third and every overlong single run degrade independently.
+        assertEquals(
+            listOf("abcx", "abcx", "x"),
+            map("<p>x</p><p>x</p><p class='too-long'>x</p>"),
+        )
+        // The same budget is shared by the next chapter/mapper.
+        assertEquals(listOf("x"), map("<p>x</p>"))
     }
 
     // ---------------------------------------------------------------- svg

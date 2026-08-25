@@ -1,5 +1,7 @@
 package com.example.frogreader.parser.mobi
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.FOOTNOTE_TAG
@@ -43,6 +45,47 @@ class MobiParserKf8Test {
     }
 
     @Test
+    fun `kf8 keeps inline css and legacy table colors without a css flow`() {
+        val file = tempFolder.newFile("colors.azw3")
+        val colors = MobiBuilder.Kf8Spec(
+            skeletons = listOf("<html><body text=\"#006400\" bgcolor=\"linen\"></body></html>"),
+            fragments = listOf(
+                listOf(
+                    "<p style=\"background-color:aliceblue\">Plain " +
+                        "<span style=\"color:rebeccapurple;background-color:#ff08\">accent</span>.</p>" +
+                        "<table bgcolor=\"navy\"><tr bgcolor=\"teal\">" +
+                        "<td style=\"color:yellow\">A</td><td style=\"color:yellow\">B</td>" +
+                        "</tr></table>",
+                ),
+            ),
+            css = "",
+        )
+        MobiBuilder.buildKf8(file, colors)
+
+        val content = MobiParser.parseContent(file, tempFolder.newFolder())
+        val paragraph = content.chapters.single().elements
+            .filterIsInstance<ContentElement.Paragraph>().single()
+        assertEquals(0xff006400.toInt(), paragraph.block?.foregroundColorArgb)
+        assertEquals(0xfff0f8ff.toInt(), paragraph.block?.backgroundColorArgb)
+        val accentOffset = paragraph.text.text.indexOf("accent")
+        val accent = paragraph.text.spanStyles.last {
+            it.start <= accentOffset && it.end >= accentOffset + 6 &&
+                it.item.color != Color.Unspecified
+        }.item
+        assertEquals(0xff663399.toInt(), accent.color.toArgb())
+        assertEquals(0x88ffff00.toInt(), accent.background.toArgb())
+
+        val table = content.chapters.single().elements
+            .filterIsInstance<ContentElement.Table>().single()
+        assertEquals(0xff006400.toInt(), table.block?.foregroundColorArgb)
+        assertEquals(0xff000080.toInt(), table.block?.backgroundColorArgb)
+        table.rows.single().cells.forEach { cell ->
+            assertEquals(0xffffff00.toInt(), cell.block?.foregroundColorArgb)
+            assertEquals(0xff008080.toInt(), cell.block?.backgroundColorArgb)
+        }
+    }
+
+    @Test
     fun `pure azw3 parses parts with css notes and images`() {
         val file = tempFolder.newFile("book.azw3")
         MobiBuilder.buildKf8(file, spec())
@@ -80,6 +123,49 @@ class MobiParserKf8Test {
 
         assertEquals("Вторая часть", content.chapters[1].title)
         assertEquals("ru", content.language) // Cyrillic heuristic
+    }
+
+    @Test
+    fun `KF8 note preserves long rich fragment and next-note boundary`() {
+        val shell = "<html xmlns:epub=\"http://www.idpf.org/2007/ops\"><head>" +
+            "<link rel=\"stylesheet\" type=\"text/css\" href=\"kindle:flow:0001?mime=text/css\"/>" +
+            "</head><body></body></html>"
+        val longText = "Long KF8 note text ".repeat(50)
+        val rich = MobiBuilder.Kf8Spec(
+            skeletons = listOf(shell),
+            fragments = listOf(
+                listOf(
+                    "<p>Main<a epub:type=\"noteref\" href=\"kindle:pos:fid:0001:off:0000000000\">[1]</a>" +
+                        "<a epub:type=\"noteref\" href=\"kindle:pos:fid:0002:off:0000000000\">[2]</a>.</p>",
+                    "<aside epub:type=\"footnote\" id=\"source1\"><h4>Rich KF8 note</h4>" +
+                        "<p class=\"styled\">$longText</p><p>Second.</p><p id=\"internal-anchor\">Third.</p><p>Fourth.</p><p>Fifth.</p>" +
+                        "<blockquote><p>Quoted.</p></blockquote>" +
+                        "<table><tr><th>Key</th><th>Value</th></tr><tr><td>A</td><td>B</td></tr></table>" +
+                        "<img src=\"kindle:embed:0001?mime=image/png\" alt=\"KF8 diagram\"/></aside>",
+                    "<aside epub:type=\"footnote\" id=\"source2\"><p>Second KF8 note.</p></aside>",
+                ),
+            ),
+            css = ".styled { text-align: center; font-size: 1.2em; }",
+        )
+        val file = tempFolder.newFile("rich.azw3")
+        MobiBuilder.buildKf8(file, rich)
+
+        val content = MobiParser.parseContent(file, tempFolder.newFolder())
+        val note = content.notes.values.first { it.text.contains("Rich KF8 note") }
+
+        assertTrue(note.text.length > 700)
+        assertTrue(note.elements.first() is ContentElement.Heading)
+        assertTrue(note.elements.count { it is ContentElement.Paragraph } >= 6)
+        assertTrue(note.elements.any { it is ContentElement.Table })
+        val styled = note.elements.filterIsInstance<ContentElement.Paragraph>()
+            .first { it.text.text.startsWith("Long KF8") }
+        assertEquals(BlockAlign.CENTER, styled.block?.align)
+        assertEquals(1.2f, styled.block?.fontScale ?: 0f, 0.001f)
+        val image = note.elements.filterIsInstance<ContentElement.Image>().single()
+        assertTrue(File(image.path).isFile)
+        assertEquals("KF8 diagram", image.altText)
+        assertTrue(!note.text.contains("Second KF8 note."))
+        assertTrue(content.notes.values.any { it.text == "Second KF8 note." })
     }
 
     @Test
@@ -173,6 +259,69 @@ class MobiParserKf8Test {
             .chapters.first().elements.filterIsInstance<ContentElement.Paragraph>()
             .first { it.text.text.startsWith("Центрированный") }
         assertEquals(BlockAlign.CENTER, paragraph.block?.align)
+    }
+
+    @Test
+    fun `kf8 css import resolves compiled flows with media and cycle guards`() {
+        val base = spec()
+        val imported = MobiBuilder.Kf8Spec(
+            skeletons = base.skeletons,
+            fragments = base.fragments,
+            css = """
+                /* @import url("kindle:flow:0003?mime=text/css"); */
+                @import url("kindle:flow:0002?mime=text/css") amzn-kf8;
+                @import url("kindle:flow:0003?mime=text/css") amzn-kf8;
+                @import url("kindle:flow:0002?mime=text/css") amzn-kf8;
+                @import url("kindle:flow:0004?mime=text/css") amzn-mobi;
+                .fake { content: "@import url(kindle:flow:0003?mime=text/css)"; }
+            """.trimIndent(),
+            additionalCssFlows = listOf(
+                // The reverse import is deliberately cyclic: it must not
+                // recurse forever or apply the parent twice.
+                "@import url(kindle:flow:0001?mime=text/css); " +
+                    ".centered { text-align: right; }",
+                ".centered { text-align: left; }",
+                ".centered { text-align: center; }",
+            ),
+        )
+        val file = tempFolder.newFile("imports.azw3")
+        MobiBuilder.buildKf8(file, imported)
+
+        val paragraph = MobiParser.parseContent(file, tempFolder.newFolder())
+            .chapters.first().elements.filterIsInstance<ContentElement.Paragraph>()
+            .first { it.text.text.startsWith("Центрированный") }
+
+        assertEquals(BlockAlign.RIGHT, paragraph.block?.align)
+    }
+
+    @Test
+    fun `kf8 css import iteratively reaches a deeply nested flow`() {
+        val base = spec()
+        val extraFlows = (2..70).map { flow ->
+            if (flow == 70) {
+                ".centered { text-align: right; }"
+            } else {
+                val next = (flow + 1).toString(32).uppercase().padStart(4, '0')
+                "@import url(kindle:flow:$next?mime=text/css);"
+            }
+        }
+        val first = 2.toString(32).uppercase().padStart(4, '0')
+        val deeplyNested = MobiBuilder.Kf8Spec(
+            skeletons = base.skeletons,
+            fragments = base.fragments,
+            css = "@import url(kindle:flow:$first?mime=text/css);",
+            additionalCssFlows = extraFlows,
+        )
+        val file = tempFolder.newFile("deep-imports.azw3")
+        MobiBuilder.buildKf8(file, deeplyNested)
+
+        val paragraph = MobiParser.parseContent(file, tempFolder.newFolder())
+            .chapters.first().elements.filterIsInstance<ContentElement.Paragraph>()
+            .first { it.text.text.startsWith("Центрированный") }
+
+        // This used to stop at a recursive depth of 32. The explicit DFS
+        // stack reaches the final sheet without risking a JVM stack overflow.
+        assertEquals(BlockAlign.RIGHT, paragraph.block?.align)
     }
 
     @Test

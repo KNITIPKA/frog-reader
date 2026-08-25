@@ -1,5 +1,7 @@
 package com.example.frogreader.parser.mobi
 
+import com.example.frogreader.data.parser.ResourceLimitException
+import com.example.frogreader.data.parser.ResourceLimitKind
 import com.example.frogreader.data.parser.mobi.Exth
 import com.example.frogreader.data.parser.mobi.HuffCdicDecoder
 import com.example.frogreader.data.parser.mobi.MobiDoc
@@ -283,5 +285,18 @@ class HuffCdicTest {
         assertThrows(IOException::class.java) {
             HuffCdicDecoder(ByteArray(10), emptyList())
         }
+    }
+
+    @Test
+    fun `HUFF raw dictionary aggregate is bounded during sequential ingestion`() {
+        val error = assertThrows(ResourceLimitException::class.java) {
+            HuffCdicDecoder(
+                buildHuff(),
+                listOf(buildCdic(), buildCdic()),
+                maxDecodedBytes = 1_024,
+                maxDictionaryBytes = buildCdic().size + 1,
+            )
+        }
+        assertEquals(ResourceLimitKind.ENTRY_SIZE, error.kind)
     }
 }

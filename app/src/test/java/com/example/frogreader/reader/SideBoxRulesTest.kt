@@ -52,4 +52,12 @@ class SideBoxRulesTest {
         val text = "𐐀 and then the paragraph continues long enough."
         assertEquals("𐐀", SideBoxRules.capPrefix(text))
     }
+
+    @Test
+    fun `explicit span consumes its exact source prefix`() {
+        val text = "«Книга начинается с явной буквицы и длинного остатка текста."
+        assertEquals("«К", SideBoxRules.capPrefix(text, explicitLength = 2))
+        assertNull(SideBoxRules.capPrefix(text, explicitLength = 0))
+        assertNull(SideBoxRules.capPrefix("Коротко.", explicitLength = 1))
+    }
 }

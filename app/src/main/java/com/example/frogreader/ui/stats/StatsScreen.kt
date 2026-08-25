@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -50,7 +51,6 @@ import com.example.frogreader.R
 import com.example.frogreader.data.streakDays
 import java.time.LocalDate
 import java.time.format.TextStyle
-import java.util.Locale
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
@@ -238,6 +238,7 @@ private fun DaysChart(
     minutesFor: (LocalDate) -> Float,
     goalMinutes: Int,
 ) {
+    val locale = LocalLocale.current.platformLocale
     val maxMinutes = days.maxOf { minutesFor(it) }.coerceAtLeast(goalMinutes.toFloat())
     Row(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -272,7 +273,7 @@ private fun DaysChart(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = date.dayOfWeek.getDisplayName(TextStyle.NARROW, Locale.getDefault()),
+                    text = date.dayOfWeek.getDisplayName(TextStyle.NARROW, locale),
                     style = MaterialTheme.typography.labelSmall,
                     color = if (date == LocalDate.now()) {
                         MaterialTheme.colorScheme.primary

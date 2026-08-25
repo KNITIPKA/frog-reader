@@ -90,11 +90,11 @@ class RealBooksTest {
         val epigraph = chapter.elements.drop(headingIndex).filterIsInstance<ContentElement.Paragraph>()
             .first { it.text.text.startsWith("Мы перестали искать монстров") }
         assertEquals(true, epigraph.block?.italic)
-        assertEquals(0.30f, epigraph.block?.indentStartFrac ?: 0f, 0.02f)
+        assertEquals(0.30f, epigraph.block?.indentLeftFrac ?: 0f, 0.02f)
 
         val author = chapter.elements.drop(headingIndex).filterIsInstance<ContentElement.Paragraph>()
             .first { it.text.text == "Чарльз Дарвин" }
-        assertTrue((author.block?.indentStartEm ?: 0f) >= 2.9f)
+        assertTrue((author.block?.indentLeftEm ?: 0f) >= 2.9f)
     }
 
     @Test
@@ -206,7 +206,7 @@ class RealBooksTest {
             headings.first { it.text.startsWith("Глава 1") }.block?.align,
         )
         assertEquals(
-            BlockAlign.START,
+            BlockAlign.LEFT,
             headings.first { it.text.startsWith("Глава 3") }.block?.align,
         )
         // The book asks for monospace + line-height 1.9 (publisher mode).

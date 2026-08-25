@@ -13,7 +13,11 @@ import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookContent
 import com.example.frogreader.data.model.Bookmark
+import com.example.frogreader.data.model.BookNavigationTarget
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.data.model.LinkedDocumentTarget
+import com.example.frogreader.data.model.NoteDocument
+import com.example.frogreader.data.model.PageProgression
 import com.example.frogreader.data.model.previewText
 import com.example.frogreader.data.model.Quote
 import com.example.frogreader.data.model.ReadingProgress
@@ -29,6 +33,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.frogreader.ui.reader.selection.BookSelection
@@ -39,6 +44,29 @@ import java.util.UUID
 class ReaderItem(
     val chapterIndex: Int,
     val element: ContentElement,
+)
+
+/** One transient document that is intentionally outside normal reading order. */
+class ReaderLinkedDocument(
+    val id: String,
+    val title: String?,
+    val items: List<ReaderItem>,
+)
+
+/** Destination used by the reader's Contents UI. */
+sealed interface ReaderNavigationTarget {
+    data class ReadingOrder(
+        val flatItemIndex: Int,
+        val chapterIndex: Int,
+    ) : ReaderNavigationTarget
+
+    data class Linked(val target: LinkedDocumentTarget) : ReaderNavigationTarget
+}
+
+class ReaderNavigationEntry(
+    val title: String?,
+    val depth: Int,
+    val target: ReaderNavigationTarget,
 )
 
 sealed interface ReaderState {
@@ -53,16 +81,24 @@ sealed interface ReaderState {
         val chapterTitles: List<String?>,
         /** Nesting depth of each chapter (0 = top level) — the TOC tree. */
         val chapterDepths: List<Int>,
-        /** Footnote key → note text, for tappable [53]-style references. */
-        val notes: Map<String, androidx.compose.ui.text.AnnotatedString>,
+        /** Footnote key → rich transient document for tappable references. */
+        val notes: Map<String, NoteDocument>,
         /** Link key → flat item index, for Contents entries and references. */
         val linkTargets: Map<String, Int> = emptyMap(),
+        /** EPUB `linear="no"` documents, rendered only after an explicit link. */
+        val linkedDocuments: Map<String, ReaderLinkedDocument> = emptyMap(),
+        /** Link key → location inside [linkedDocuments]. */
+        val linkedDocumentTargets: Map<String, LinkedDocumentTarget> = emptyMap(),
+        /** Typed author-defined TOC; may point into either content surface. */
+        val navigation: List<ReaderNavigationEntry> = emptyList(),
         /** What the book's own formatting asks for (publisher's mode). */
         val publisherStyle: com.example.frogreader.data.model.PublisherStyle? = null,
         /** Embedded font family name → loaded font (publisher's formatting). */
         val bookFonts: Map<String, androidx.compose.ui.text.font.FontFamily> = emptyMap(),
         /** The book's language tag ("ru", "uk", …) — drives hyphenation. */
         val language: String? = null,
+        /** Resolved logical page order; never DEFAULT inside the active reader. */
+        val pageProgression: PageProgression = PageProgression.LTR,
     ) : ReaderState {
         fun chapterAt(flatIndex: Int): Int =
             chapterStarts.indexOfLast { it <= flatIndex }.coerceAtLeast(0)
@@ -129,6 +165,68 @@ class ReaderViewModel(
      */
     var currentCharOffset: Int = 0
         private set
+
+    /** Pixel offset of the first visible item in scroll mode (0 in pages). */
+    var currentScrollOffset: Int = 0
+        private set
+
+    private val navigationHistory = ReaderNavigationHistory()
+    private val _navigationBackAvailable = MutableStateFlow(false)
+    private val _navigationReturnVisible = MutableStateFlow(false)
+    private var navigationPromptJob: Job? = null
+    private var navigationExpiryJob: Job? = null
+    /** Whether an in-book jump has an exact origin the reader can return to. */
+    val navigationBackAvailable: StateFlow<Boolean> = _navigationBackAvailable.asStateFlow()
+    /** Short-lived visual affordance; history itself outlives the chip. */
+    val navigationReturnVisible: StateFlow<Boolean> = _navigationReturnVisible.asStateFlow()
+
+    fun rememberNavigationOrigin(location: ReaderReturnLocation) {
+        navigationHistory.push(location)
+        _navigationBackAvailable.value = navigationHistory.canGoBack
+        revealNavigationReturn()
+        navigationExpiryJob?.cancel()
+        navigationExpiryJob = viewModelScope.launch {
+            delay(NAVIGATION_HISTORY_TTL_MS)
+            clearNavigationHistory()
+        }
+    }
+
+    fun takeNavigationOrigin(): ReaderReturnLocation? = navigationHistory.pop().also {
+        _navigationBackAvailable.value = navigationHistory.canGoBack
+        if (navigationHistory.canGoBack) revealNavigationReturn() else hideNavigationReturn()
+    }
+
+    /** Re-show the chip when the user deliberately opens the reader chrome. */
+    fun revealNavigationReturn() {
+        if (!navigationHistory.canGoBack) return
+        navigationPromptJob?.cancel()
+        _navigationReturnVisible.value = true
+        navigationPromptJob = viewModelScope.launch {
+            delay(NAVIGATION_PROMPT_MS)
+            _navigationReturnVisible.value = false
+        }
+    }
+
+    private fun hideNavigationReturn() {
+        navigationPromptJob?.cancel()
+        navigationPromptJob = null
+        _navigationReturnVisible.value = false
+    }
+
+    fun clearNavigationHistory() {
+        navigationHistory.clear()
+        navigationExpiryJob?.cancel()
+        navigationExpiryJob = null
+        _navigationBackAvailable.value = false
+        hideNavigationReturn()
+    }
+
+    /** Updates the exact transient position without scheduling a disk write. */
+    fun observeVisiblePosition(flatIndex: Int, scrollOffset: Int, charOffset: Int = 0) {
+        currentFlatIndex = flatIndex
+        currentScrollOffset = scrollOffset
+        currentCharOffset = charOffset
+    }
 
     /**
      * Recomputes pages in the background unless [key] is already available.
@@ -213,6 +311,8 @@ class ReaderViewModel(
                 return@launch
             }
             currentFlatIndex = book.progress.elementIndex
+            currentScrollOffset = book.progress.scrollOffset
+            clearNavigationHistory()
             runCatching { repository.loadContent(book) }
                 .onSuccess { content ->
                     loadedBook = book
@@ -246,6 +346,9 @@ class ReaderViewModel(
             // Item texts are about to change — cached match offsets go stale.
             searchJob?.cancel()
             _searchResults.value = null
+            // Character anchors in the jump stack belong to the old item
+            // stream (notably when hide-footnotes rewrites inline text).
+            clearNavigationHistory()
         }
         val next = withContext(Dispatchers.Default) { buildReady(book, content, hideFootnotes) }
         withContext(Dispatchers.Main.immediate) { _state.value = next }
@@ -256,6 +359,12 @@ class ReaderViewModel(
         content: BookContent,
         hideFootnotes: Boolean,
     ): ReaderState {
+        // A cover is chrome around the reading order, not a substitute for
+        // one.  In particular an EPUB whose entire spine is linear="no" must
+        // not become Ready with an empty chapterStarts list: ReaderScreen's
+        // chapter/progress coordinate space would be undefined.
+        if (!content.hasSequentialContent()) return ReaderState.Error
+
         val items = mutableListOf<ReaderItem>()
 
         // Title page: the cover opens the book before the text.
@@ -266,23 +375,82 @@ class ReaderViewModel(
         val chapterStarts = mutableListOf<Int>()
         val chapterTitles = mutableListOf<String?>()
         val chapterDepths = mutableListOf<Int>()
+        fun adjustedText(text: androidx.compose.ui.text.AnnotatedString) =
+            if (hideFootnotes) text.withoutFootnotes() else text.withFootnoteRefStyle()
+        fun adjusted(element: ContentElement): ContentElement = when (element) {
+            is ContentElement.Paragraph -> element.copy(text = adjustedText(element.text))
+            is ContentElement.Heading -> element.copy(
+                styledText = adjustedText(element.styledText),
+            )
+            is ContentElement.Table -> element.copy(
+                rows = element.rows.map { row ->
+                    com.example.frogreader.data.model.TableRow(
+                        cells = row.cells.map { cell ->
+                            com.example.frogreader.data.model.TableCell(
+                                text = adjustedText(cell.text),
+                                colSpan = cell.colSpan,
+                                rowSpan = cell.rowSpan,
+                                align = cell.align,
+                                header = cell.header,
+                                block = cell.block,
+                            )
+                        },
+                        isHeader = row.isHeader,
+                    )
+                },
+            )
+            else -> element
+        }
         content.chapters.forEachIndexed { index, chapter ->
             chapterStarts += items.size
             chapterTitles += chapter.title
             chapterDepths += chapter.depth
             chapter.elements.forEach { element ->
-                val adjusted = if (element is ContentElement.Paragraph) {
-                    element.copy(
-                        text = if (hideFootnotes) {
-                            element.text.withoutFootnotes()
-                        } else {
-                            element.text.withFootnoteRefStyle()
-                        },
+                items += ReaderItem(index, adjusted(element))
+            }
+        }
+
+        val linkedDocuments = content.linkedDocuments.mapValues { (_, document) ->
+            ReaderLinkedDocument(
+                id = document.id,
+                title = document.title,
+                items = document.elements.map { ReaderItem(0, adjusted(it)) },
+            )
+        }
+        val navigation = content.navigation.mapNotNull { entry ->
+            val target = when (val source = entry.target) {
+                is BookNavigationTarget.ReadingOrder -> {
+                    val start = chapterStarts.getOrNull(source.chapterIndex)
+                        ?: return@mapNotNull null
+                    ReaderNavigationTarget.ReadingOrder(
+                        flatItemIndex = (start + source.elementIndex)
+                            .coerceIn(0, items.lastIndex.coerceAtLeast(0)),
+                        chapterIndex = source.chapterIndex,
                     )
-                } else {
-                    element
                 }
-                items += ReaderItem(index, adjusted)
+
+                is BookNavigationTarget.Linked -> {
+                    val document = linkedDocuments[source.documentId]
+                        ?: return@mapNotNull null
+                    if (source.elementIndex !in document.items.indices) return@mapNotNull null
+                    ReaderNavigationTarget.Linked(
+                        LinkedDocumentTarget(source.documentId, source.elementIndex),
+                    )
+                }
+            }
+            ReaderNavigationEntry(entry.title, entry.depth, target)
+        }.ifEmpty {
+            // FB2/MOBI and EPUBs without nav/NCX retain the historical flat
+            // chapter list, now expressed through the same typed target.
+            chapterTitles.mapIndexed { index, title ->
+                ReaderNavigationEntry(
+                    title = title,
+                    depth = chapterDepths[index],
+                    target = ReaderNavigationTarget.ReadingOrder(
+                        flatItemIndex = chapterStarts[index],
+                        chapterIndex = index,
+                    ),
+                )
             }
         }
 
@@ -295,7 +463,13 @@ class ReaderViewModel(
                 chapterStarts = chapterStarts,
                 chapterTitles = chapterTitles,
                 chapterDepths = chapterDepths,
-                notes = if (hideFootnotes) emptyMap() else content.notes,
+                notes = if (hideFootnotes) {
+                    emptyMap()
+                } else {
+                    content.notes.mapValues { (_, note) ->
+                        NoteDocument(note.elements.map(::adjusted))
+                    }
+                },
                 // (chapter, element) → flat index the readers actually seek to.
                 linkTargets = content.linkTargets.mapNotNull { (key, target) ->
                     val (chapter, element) = target
@@ -303,8 +477,18 @@ class ReaderViewModel(
                         key to (start + element).coerceIn(0, items.lastIndex.coerceAtLeast(0))
                     }
                 }.toMap(),
+                linkedDocuments = linkedDocuments,
+                linkedDocumentTargets = content.linkedDocumentTargets.filterValues { target ->
+                    val document = linkedDocuments[target.documentId]
+                    document != null && target.elementIndex in document.items.indices
+                },
+                navigation = navigation,
                 bookFonts = loadBookFonts(content),
                 language = content.language,
+                pageProgression = ReaderProgression.resolve(
+                    content.pageProgression,
+                    content.language,
+                ),
                 publisherStyle = com.example.frogreader.data.model.publisherStyleOf(content),
             )
         }
@@ -356,8 +540,7 @@ class ReaderViewModel(
 
     fun saveProgress(firstVisibleIndex: Int, scrollOffset: Int, charOffset: Int = 0) {
         val ready = _state.value as? ReaderState.Ready ?: return
-        currentFlatIndex = firstVisibleIndex
-        currentCharOffset = charOffset
+        observeVisiblePosition(firstVisibleIndex, scrollOffset, charOffset)
         val fraction = if (ready.items.size <= 1) {
             0f
         } else {
@@ -526,6 +709,9 @@ class ReaderViewModel(
     }
 
     companion object {
+        private const val NAVIGATION_PROMPT_MS = 12_000L
+        private const val NAVIGATION_HISTORY_TTL_MS = 5 * 60_000L
+
         fun factory(bookId: String) = viewModelFactory {
             initializer {
                 val app = this[APPLICATION_KEY] as FrogReaderApp
@@ -540,3 +726,7 @@ class ReaderViewModel(
         }
     }
 }
+
+/** True only when the publication has something in its sequential surface. */
+internal fun BookContent.hasSequentialContent(): Boolean =
+    chapters.any { it.elements.isNotEmpty() }

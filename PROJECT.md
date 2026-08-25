@@ -1,5 +1,11 @@
 # Project: FrogReader
 
+> [!NOTE]
+> This file preserves the completed Alpha 1 repository-cleanup plan as a
+> historical record. Current features and release status live in `README.md`
+> and `CHANGELOG.md`; the milestone labels and test counts below are not the
+> ALPHA 2 release checklist.
+
 ## Overview
 FrogReader is a modern, high-performance native Android e-book reader built with Kotlin 2.x and Jetpack Compose (Material 3 Expressive). It features custom pagination, WOFF2/Brotli typography decoding, rich multi-format parsing (EPUB, FB2, MOBI6, KF8/AZW3), split atomic JSON persistence, automated backups, and cross-page text selection.
 

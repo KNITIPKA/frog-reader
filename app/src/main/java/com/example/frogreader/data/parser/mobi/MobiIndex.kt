@@ -1,5 +1,10 @@
 package com.example.frogreader.data.parser.mobi
 
+import com.example.frogreader.data.parser.ResourceLimitException
+import com.example.frogreader.data.parser.ResourceLimitKind
+import com.example.frogreader.data.parser.rethrowIfResourceLimit
+import java.util.concurrent.CancellationException
+
 /**
  * INDX/TAGX/CNCX index machinery — the structure MOBI uses for the NCX
  * table of contents and KF8's SKEL/FRAG tables. The layout is the classic
@@ -13,8 +18,16 @@ internal object MobiIndex {
 
     class Parsed(val entries: List<IndexEntry>, val cncx: Map<Int, String>)
 
-    fun parse(section: MobiSection, firstRecord: Int): Parsed? =
-        runCatching { parseOrNull(section, firstRecord) }.getOrNull()
+    fun parse(section: MobiSection, firstRecord: Int, required: Boolean = false): Parsed? {
+        return try {
+            parseOrNull(section, firstRecord)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (required) error.rethrowIfResourceLimit()
+            null
+        }
+    }
 
     private class TagxEntry(
         val tag: Int,
@@ -39,6 +52,10 @@ internal object MobiIndex {
         val controlByteCount = header.index32(headerLength + 8)
         if (tagxLength < 12 || headerLength + tagxLength > header.size) return null
         if (controlByteCount !in 1..8) return null
+        val tagxEntryCount = (tagxLength - 12) / 4
+        if (tagxEntryCount > section.pdb.limits.maxMobiTagxEntries) {
+            throw countLimit("MOBI TAGX", section.pdb.limits.maxMobiTagxEntries)
+        }
         val tagx = mutableListOf<TagxEntry>()
         var p = headerLength + 12
         while (p + 4 <= headerLength + tagxLength) {
@@ -54,6 +71,8 @@ internal object MobiIndex {
 
         // Entry records follow the header record.
         val entries = mutableListOf<IndexEntry>()
+        val valueBudget = IndexValueBudget(section.pdb.limits.maxMobiIndexValues)
+        var totalEntries = 0
         for (r in 1..entryRecordCount) {
             if (!section.hasRecord(firstRecord + r)) return null
             val record = section.record(firstRecord + r)
@@ -61,12 +80,16 @@ internal object MobiIndex {
             val idxtOffset = record.index32(20) // 'start'
             val count = record.index32(24) // 'count'
             if (count !in 0..8192) return null
+            if (count > section.pdb.limits.maxMobiIndexEntries - totalEntries) {
+                throw countLimit("MOBI index", section.pdb.limits.maxMobiIndexEntries)
+            }
+            totalEntries += count
             if (!record.magic(idxtOffset, "IDXT")) return null
             for (e in 0 until count) {
                 val offAt = idxtOffset + 4 + 2 * e
                 if (offAt + 2 > record.size) return null
                 val entryOffset = record.u16(offAt)
-                entries += parseEntry(record, entryOffset, tagx, controlByteCount)
+                entries += parseEntry(record, entryOffset, tagx, controlByteCount, valueBudget)
                     ?: return null
             }
         }
@@ -74,7 +97,8 @@ internal object MobiIndex {
         // CNCX string pool after the entry records; keys are offsets into
         // the CONCATENATION of the CNCX records.
         val cncx = mutableMapOf<Int, String>()
-        var cncxBase = 0
+        var cncxBase = 0L
+        var cncxBytes = 0L
         for (c in 0 until cncxCount) {
             val index = firstRecord + 1 + entryRecordCount + c
             if (!section.hasRecord(index)) break
@@ -84,12 +108,25 @@ internal object MobiIndex {
                 val start = q
                 val (length, consumed) = forwardVarint(record, q) ?: break
                 if (length <= 0L || q + consumed + length > record.size) break
-                cncx[cncxBase + start] = runCatching {
+                if (cncx.size >= section.pdb.limits.maxMobiCncxEntries) {
+                    throw countLimit("MOBI CNCX", section.pdb.limits.maxMobiCncxEntries)
+                }
+                val decodedBytes = length * 2L
+                if (cncxBytes > section.pdb.limits.maxMobiCncxBytes - decodedBytes ||
+                    cncxBase + start > Int.MAX_VALUE
+                ) {
+                    throw ResourceLimitException(
+                        ResourceLimitKind.ACTUAL_AGGREGATE,
+                        "MOBI CNCX exceeds ${section.pdb.limits.maxMobiCncxBytes} retained bytes",
+                    )
+                }
+                cncxBytes += decodedBytes
+                cncx[(cncxBase + start).toInt()] = runCatching {
                     String(record, q + consumed, length.toInt(), Charsets.UTF_8)
                 }.getOrNull() ?: break
                 q += consumed + length.toInt()
             }
-            cncxBase += record.size
+            cncxBase += record.size.toLong()
         }
 
         return Parsed(entries, cncx)
@@ -101,6 +138,7 @@ internal object MobiIndex {
         entryOffset: Int,
         tagx: List<TagxEntry>,
         controlByteCount: Int,
+        valueBudget: IndexValueBudget,
     ): IndexEntry? {
         if (entryOffset < 0 || entryOffset + 1 > record.size) return null
         val labelLength = record[entryOffset].toInt() and 0xFF
@@ -152,6 +190,7 @@ internal object MobiIndex {
                 repeat(tag.valueCount * tag.valuesPerEntry) {
                     val (value, consumed) = forwardVarint(record, dataStart) ?: return null
                     dataStart += consumed
+                    valueBudget.take()
                     values += value
                 }
             } else {
@@ -160,6 +199,7 @@ internal object MobiIndex {
                     val (value, consumed) = forwardVarint(record, dataStart) ?: return null
                     dataStart += consumed
                     consumedTotal += consumed
+                    valueBudget.take()
                     values += value
                 }
             }
@@ -167,6 +207,19 @@ internal object MobiIndex {
         }
         return IndexEntry(label, tags)
     }
+
+    private class IndexValueBudget(private val maxValues: Int) {
+        private var count = 0
+        fun take() {
+            if (count >= maxValues) throw countLimit("MOBI index values", maxValues)
+            count++
+        }
+    }
+
+    private fun countLimit(label: String, max: Int) = ResourceLimitException(
+        ResourceLimitKind.ENTRY_COUNT,
+        "$label exceeds $max retained entries",
+    )
 
     /** Forward varint: 7 bits per byte, the byte with 0x80 set terminates. */
     fun forwardVarint(data: ByteArray, offset: Int): Pair<Long, Int>? {

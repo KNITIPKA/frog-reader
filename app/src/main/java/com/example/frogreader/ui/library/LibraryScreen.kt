@@ -97,6 +97,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -225,6 +226,7 @@ fun LibraryScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
+    val resources = LocalResources.current
     val density = LocalDensity.current
 
     var bookToEdit by remember { mutableStateOf<Book?>(null) }
@@ -331,20 +333,20 @@ fun LibraryScreen(
         selection.retain(alive)
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(resources) {
         viewModel.messages.collect { message ->
             when (message) {
                 is LibraryMessage.Imported -> {
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     snackbarHostState.showSnackbar(
-                        context.getString(R.string.library_imported, message.title),
+                        resources.getString(R.string.library_imported, message.title),
                     )
                 }
 
                 is LibraryMessage.Replaced -> {
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     snackbarHostState.showSnackbar(
-                        context.getString(R.string.library_replaced, message.title),
+                        resources.getString(R.string.library_replaced, message.title),
                     )
                 }
 
@@ -354,34 +356,34 @@ fun LibraryScreen(
                     )
                     snackbarHostState.showSnackbar(
                         if (message.failed > 0) {
-                            context.getString(
+                            resources.getString(
                                 R.string.library_imported_many_partial,
                                 message.added,
                                 message.failed,
                             )
                         } else {
-                            context.getString(R.string.library_imported_many, message.added)
+                            resources.getString(R.string.library_imported_many, message.added)
                         },
                     )
                 }
 
                 LibraryMessage.ImportCancelled -> {
                     snackbarHostState.showSnackbar(
-                        context.getString(R.string.library_import_cancelled),
+                        resources.getString(R.string.library_import_cancelled),
                     )
                 }
 
                 LibraryMessage.ImportFailed -> {
                     haptics.performHapticFeedback(HapticFeedbackType.Reject)
                     snackbarHostState.showSnackbar(
-                        context.getString(R.string.library_import_failed),
+                        resources.getString(R.string.library_import_failed),
                     )
                 }
 
                 LibraryMessage.ImportFailedDrm -> {
                     haptics.performHapticFeedback(HapticFeedbackType.Reject)
                     snackbarHostState.showSnackbar(
-                        context.getString(R.string.library_import_failed_drm),
+                        resources.getString(R.string.library_import_failed_drm),
                     )
                 }
             }

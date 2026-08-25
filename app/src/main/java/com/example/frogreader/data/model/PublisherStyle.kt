@@ -15,7 +15,7 @@ class PublisherStyle(
     /** Line height as a multiple of the font size. */
     val lineHeight: Float? = null,
     val hyphenation: Boolean? = null,
-    /** The book draws decorated initials (CSS `::first-letter`). */
+    /** The book draws decorated initials (`::first-letter` or an explicit float). */
     val dropCaps: Boolean = false,
     /** Display name of the face the book sets for its body text. */
     val fontName: String? = null,

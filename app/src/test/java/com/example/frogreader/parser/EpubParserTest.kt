@@ -1,6 +1,9 @@
 package com.example.frogreader.parser
 
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.Color
+import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.parser.BookParsers
@@ -89,6 +92,9 @@ class EpubParserTest {
                 <body>
                   <h1>Chapter One</h1>
                   <p>Plain and <strong>bold</strong> words.</p>
+                  <p id="publisher-colors" style="color:#123456;background-color:rgb(250 240 230)">
+                    Color <span style="color:hsl(300 100% 25%);background-color:#ff08">span</span>.
+                  </p>
                   <p><img src="../images/pic.png" alt=""/></p>
                   <blockquote><p>Quoted line.</p></blockquote>
                 </body>
@@ -117,6 +123,27 @@ class EpubParserTest {
         assertEquals("Test Book", metadata.title)
         assertEquals("John Doe", metadata.author)
         assertArrayEquals(byteArrayOf(9, 8, 7), metadata.coverBytes)
+    }
+
+    @Test
+    fun `epub keeps inline publisher foreground and background without a stylesheet`() {
+        val epub = tempFolder.newFile("publisher-colors.epub")
+        buildTestEpub(epub)
+
+        val content = EpubParser.parseContent(epub, tempFolder.newFolder())
+        val paragraph = content.chapters.first().elements
+            .filterIsInstance<ContentElement.Paragraph>()
+            .first { it.text.text.startsWith("Color") }
+
+        assertEquals(0xff123456.toInt(), paragraph.block?.foregroundColorArgb)
+        assertEquals(0xfffaf0e6.toInt(), paragraph.block?.backgroundColorArgb)
+        val spanOffset = paragraph.text.text.indexOf("span")
+        val span = paragraph.text.spanStyles.last {
+            it.start <= spanOffset && it.end >= spanOffset + 4 &&
+                it.item.color != Color.Unspecified
+        }.item
+        assertEquals(0xff800080.toInt(), span.color.toArgb())
+        assertEquals(0x88ffff00.toInt(), span.background.toArgb())
     }
 
     private fun writeMetadataEpub(target: File, metadataXml: String) {
@@ -306,7 +333,9 @@ class EpubParserTest {
         assertEquals("Chapter Two", chapters[1].title)
 
         val elements = chapters[0].elements
-        assertEquals(ContentElement.Heading("Chapter One", 1), elements[0])
+        val heading = elements[0] as ContentElement.Heading
+        assertEquals("Chapter One", heading.text)
+        assertEquals(1, heading.level)
 
         val paragraph = elements[1] as ContentElement.Paragraph
         assertEquals("Plain and bold words.", paragraph.text.text)
@@ -439,6 +468,77 @@ class EpubParserTest {
             .single()
         assertEquals("OPS/notes.xhtml#n53", annotation.item)
         assertEquals("[53]", paragraph.text.text.substring(annotation.start, annotation.end))
+    }
+
+    @Test
+    fun `EPUB semantic note keeps full rich container and exact sibling boundary`() {
+        val epub = tempFolder.newFile("rich-notes.epub")
+        val longText = "Long EPUB note text ".repeat(50)
+        ZipOutputStream(epub.outputStream()).use { zip ->
+            fun entry(name: String, content: ByteArray) {
+                zip.putNextEntry(ZipEntry(name))
+                zip.write(content)
+                zip.closeEntry()
+            }
+            fun entry(name: String, content: String) = entry(name, content.toByteArray())
+            entry(
+                "META-INF/container.xml",
+                """<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>""",
+            )
+            entry(
+                "OPS/content.opf",
+                """<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" version="3.0"><metadata><dc:title>Rich notes</dc:title></metadata><manifest><item id="main" href="main.xhtml" media-type="application/xhtml+xml"/><item id="notes" href="notes.xhtml" media-type="application/xhtml+xml"/><item id="pic" href="pic.png" media-type="image/png"/></manifest><spine><itemref idref="main"/><itemref idref="notes" linear="no"/></spine></package>""",
+            )
+            entry(
+                "OPS/main.xhtml",
+                """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><p>Main<a epub:type="noteref" href="notes.xhtml#n1">1</a>.</p></body></html>""",
+            )
+            entry(
+                "OPS/notes.xhtml",
+                """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><style>.styled { text-align: center; font-size: 1.2em; }</style></head><body>
+                  <aside epub:type="footnote" id="n1">
+                    <h4>Authored heading</h4>
+                    <p class="styled">$longText</p><p>Second.</p><p>Third.</p><p>Fourth.</p><p>Fifth.</p>
+                    <blockquote><p>Quoted.</p></blockquote>
+                    <ul><li>Listed.</li></ul>
+                    <table><tr><th>Key</th><th>Value</th></tr><tr><td>A</td><td>B</td></tr></table>
+                    <img src="pic.png" alt="Rich diagram"/>
+                    <p>Inline <img src="pic.png" alt="Inline diagram"/> tail.</p>
+                    <p>See <a epub:type="noteref" href="#n2">next note</a>.</p>
+                  </aside>
+                  <aside epub:type="footnote" id="n2"><p>Second note only.</p></aside>
+                </body></html>""",
+            )
+            entry("OPS/pic.png", byteArrayOf(1, 2, 3, 4))
+        }
+
+        val content = EpubParser.parseContent(epub, tempFolder.newFolder())
+        val note = content.notes.getValue("OPS/notes.xhtml#n1")
+
+        assertTrue(note.text.length > 700)
+        assertTrue(note.elements.first() is ContentElement.Heading)
+        assertTrue(note.elements.count { it is ContentElement.Paragraph } >= 8)
+        assertTrue(note.elements.any { it is ContentElement.Table })
+        val styled = note.elements.filterIsInstance<ContentElement.Paragraph>()
+            .first { it.text.text.startsWith("Long EPUB") }
+        assertEquals(BlockAlign.CENTER, styled.block?.align)
+        assertEquals(1.2f, styled.block?.fontScale ?: 0f, 0.001f)
+        val image = note.elements.filterIsInstance<ContentElement.Image>().single()
+        assertTrue(File(image.path).isFile)
+        assertEquals("Rich diagram", image.altText)
+        val inline = note.elements.filterIsInstance<ContentElement.Paragraph>()
+            .flatMap { paragraph ->
+                paragraph.text.getStringAnnotations(
+                    com.example.frogreader.data.model.INLINE_IMAGE_TAG,
+                    0,
+                    paragraph.text.length,
+                )
+            }
+            .single()
+        assertTrue(File(inline.item).isFile)
+        assertTrue(!note.text.contains("Second note only."))
+        assertEquals("Second note only.", content.notes.getValue("OPS/notes.xhtml#n2").text)
+        assertTrue("OPS/notes.xhtml" in content.linkedDocuments)
     }
 
     @Test

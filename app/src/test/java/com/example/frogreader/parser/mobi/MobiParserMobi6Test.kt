@@ -1,6 +1,8 @@
 package com.example.frogreader.parser.mobi
 
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.FOOTNOTE_TAG
@@ -49,6 +51,46 @@ class MobiParserMobi6Test {
         return html
     }
 
+    @Test
+    fun `mobi6 keeps css and legacy html publisher colors`() {
+        val file = tempFolder.newFile("colors.mobi")
+        MobiBuilder.buildMobi6(
+            target = file,
+            html = """
+                <html><body text="#006400" bgcolor="linen">
+                  <p style="background-color:aliceblue">Plain
+                    <font color="rebeccapurple" bgcolor="#ff08">accent</font>.</p>
+                  <table bgcolor="navy"><tr bgcolor="teal">
+                    <td color="yellow">A</td><td color="yellow">B</td>
+                  </tr></table>
+                </body></html>
+            """.trimIndent(),
+            compress = true,
+        )
+
+        val content = MobiParser.parseContent(file, tempFolder.newFolder())
+        val paragraph = content.chapters.single().elements
+            .filterIsInstance<ContentElement.Paragraph>().single()
+        assertEquals(0xff006400.toInt(), paragraph.block?.foregroundColorArgb)
+        assertEquals(0xfff0f8ff.toInt(), paragraph.block?.backgroundColorArgb)
+        val accentOffset = paragraph.text.text.indexOf("accent")
+        val accent = paragraph.text.spanStyles.last {
+            it.start <= accentOffset && it.end >= accentOffset + 6 &&
+                it.item.color != Color.Unspecified
+        }.item
+        assertEquals(0xff663399.toInt(), accent.color.toArgb())
+        assertEquals(0x88ffff00.toInt(), accent.background.toArgb())
+
+        val table = content.chapters.single().elements
+            .filterIsInstance<ContentElement.Table>().single()
+        assertEquals(0xff006400.toInt(), table.block?.foregroundColorArgb)
+        assertEquals(0xff000080.toInt(), table.block?.backgroundColorArgb)
+        table.rows.single().cells.forEach { cell ->
+            assertEquals(0xffffff00.toInt(), cell.block?.foregroundColorArgb)
+            assertEquals(0xff008080.toInt(), cell.block?.backgroundColorArgb)
+        }
+    }
+
     private fun parse(compress: Boolean): Pair<com.example.frogreader.data.model.BookContent, File> {
         val file = tempFolder.newFile("book.mobi")
         MobiBuilder.buildMobi6(
@@ -93,6 +135,59 @@ class MobiParserMobi6Test {
             .single()
         assertEquals(note.key, annotation.item)
         assertEquals("[1]", paragraph.text.text.substring(annotation.start, annotation.end))
+    }
+
+    @Test
+    fun `MOBI6 note keeps all rich blocks and stops at next filepos note`() {
+        val firstPlaceholder = "1111111111"
+        val secondPlaceholder = "2222222222"
+        val longText = "Long MOBI note text ".repeat(50)
+        var html = """
+            <html><body>
+              <p>Main<a filepos="$firstPlaceholder">[1]</a> and
+                <a filepos="$secondPlaceholder">[2]</a>.</p>
+              <mbp:pagebreak/>
+              <aside class="footnote" id="source1">
+                <h4>Rich MOBI note</h4>
+                <p style="text-align:center;font-size:120%">$longText</p><p>Second.</p><p id="internal-anchor">Third.</p><p>Fourth.</p><p>Fifth.</p>
+                <blockquote><p>Quoted.</p></blockquote>
+                <table><tr><th>Key</th><th>Value</th></tr><tr><td>A</td><td>B</td></tr></table>
+                <img recindex="00001" alt="MOBI diagram"/>
+              </aside>
+              <aside class="footnote" id="source2"><p>Second note boundary.</p></aside>
+            </body></html>
+        """.trimIndent()
+        fun byteOffset(needle: String): Int = html.substring(0, html.indexOf(needle))
+            .toByteArray(Charsets.UTF_8).size
+        val firstOffset = byteOffset("<aside class=\"footnote\" id=\"source1\">")
+        val secondOffset = byteOffset("<aside class=\"footnote\" id=\"source2\">")
+        html = html
+            .replace(firstPlaceholder, firstOffset.toString().padStart(10, '0'))
+            .replace(secondPlaceholder, secondOffset.toString().padStart(10, '0'))
+
+        val file = tempFolder.newFile("rich.mobi")
+        MobiBuilder.buildMobi6(
+            target = file,
+            html = html,
+            compress = true,
+            images = listOf(MobiBuilder.fakePng(19)),
+        )
+        val content = MobiParser.parseContent(file, tempFolder.newFolder())
+        val note = content.notes.values.first { it.text.contains("Rich MOBI note") }
+
+        assertTrue(note.text.length > 700)
+        assertTrue(note.elements.first() is ContentElement.Heading)
+        assertTrue(note.elements.count { it is ContentElement.Paragraph } >= 6)
+        assertTrue(note.elements.any { it is ContentElement.Table })
+        val styled = note.elements.filterIsInstance<ContentElement.Paragraph>()
+            .first { it.text.text.startsWith("Long MOBI") }
+        assertEquals(BlockAlign.CENTER, styled.block?.align)
+        assertEquals(1.2f, styled.block?.fontScale ?: 0f, 0.001f)
+        val image = note.elements.filterIsInstance<ContentElement.Image>().single()
+        assertTrue(File(image.path).isFile)
+        assertEquals("MOBI diagram", image.altText)
+        assertTrue(!note.text.contains("Second note boundary."))
+        assertTrue(content.notes.values.any { it.text == "Second note boundary." })
     }
 
     @Test
@@ -244,7 +339,7 @@ class MobiParserMobi6Test {
             .filterIsInstance<ContentElement.Paragraph>()
 
         assertEquals(
-            BlockAlign.END,
+            BlockAlign.RIGHT,
             paragraphs.single { it.text.text == "Вторая версия." }.block?.align,
         )
         assertEquals(
@@ -264,7 +359,7 @@ class MobiParserMobi6Test {
         val paragraphs = MobiParser.parseContent(file, tempFolder.newFolder())
             .chapters.single().elements.filterIsInstance<ContentElement.Paragraph>()
         assertEquals(BlockAlign.CENTER, paragraphs[0].block?.align)
-        assertEquals(BlockAlign.END, paragraphs[1].block?.align)
+        assertEquals(BlockAlign.RIGHT, paragraphs[1].block?.align)
     }
 
     @Test

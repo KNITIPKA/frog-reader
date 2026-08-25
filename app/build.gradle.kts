@@ -25,8 +25,8 @@ android {
         applicationId = "knitipka.frogreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = (versionProps.getProperty("code") ?: "1").toInt()
-        versionName = versionProps.getProperty("name") ?: "ALPHA 1"
+        versionCode = (versionProps.getProperty("code") ?: "2").toInt()
+        versionName = versionProps.getProperty("name") ?: "ALPHA 2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -53,6 +53,15 @@ android {
             isReturnDefaultValues = true
         }
     }
+}
+
+// The persistent FrogCompare corpus is generated only when explicitly asked.
+// Gradle project properties do not reach the forked unit-test JVM by default.
+tasks.withType<Test>().configureEach {
+    systemProperty(
+        "frogreader.generateTestBooks",
+        providers.gradleProperty("generateTestBooks").getOrElse("false"),
+    )
 }
 
 dependencies {

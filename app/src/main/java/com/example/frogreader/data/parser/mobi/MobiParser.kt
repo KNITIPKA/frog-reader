@@ -6,9 +6,14 @@ import com.example.frogreader.data.model.BookFont
 import com.example.frogreader.data.model.BookMetadata
 import com.example.frogreader.data.model.Chapter
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.data.model.NoteDocument
 import com.example.frogreader.data.parser.CssResolver
 import com.example.frogreader.data.parser.HtmlMapper
+import com.example.frogreader.data.parser.HtmlExpansionBudget
 import com.example.frogreader.data.parser.LanguageTag
+import com.example.frogreader.data.parser.ReaderResourceLimits
+import com.example.frogreader.data.parser.ResourceLimitException
+import com.example.frogreader.data.parser.ResourceLimitKind
 import com.example.frogreader.data.parser.Woff2Decoder
 import com.example.frogreader.data.parser.WoffDecoder
 import com.example.frogreader.data.parser.buildNotes
@@ -22,6 +27,8 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
+import java.util.ArrayDeque
+import java.util.concurrent.CancellationException
 
 /**
  * MOBI/AZW/AZW3 parser. MOBI6 books decode their Mobipocket HTML into the
@@ -34,7 +41,11 @@ object MobiParser {
 
     // ---------------------------------------------------------------- metadata
 
-    fun parseMetadata(file: File): BookMetadata = MobiDoc.open(file).use { doc ->
+    fun parseMetadata(file: File): BookMetadata =
+        parseMetadata(file, ReaderResourceLimits.DEFAULT)
+
+    internal fun parseMetadata(file: File, limits: ReaderResourceLimits): BookMetadata =
+        MobiDoc.open(file, limits).use { doc ->
         val main = doc.kf8 ?: doc.mobi6
         val mainCharset = main.mobi?.charset ?: Charsets.UTF_8
         val backupCharset = doc.mobi6.mobi?.charset ?: Charsets.UTF_8
@@ -81,7 +92,11 @@ object MobiParser {
                 ?: continue
             // The offset is 0-based from firstImageIndex; resources are 1-based.
             val record = section.resourceRecord(offset + 1) ?: continue
-            val bytes = section.pdb.record(record)
+            val bytes = section.pdb.recordOptional(
+                record,
+                section.pdb.limits.maxCoverBytes,
+                "MOBI cover",
+            ) ?: continue
             // FONT records sniff as resources too — a cover must be an image.
             if (MobiSection.looksLikeImage(bytes, 0, bytes.size)) return bytes
         }
@@ -90,14 +105,26 @@ object MobiParser {
 
     // ---------------------------------------------------------------- content
 
-    fun parseContent(file: File, imagesDir: File): BookContent = MobiDoc.open(file).use { doc ->
+    fun parseContent(file: File, imagesDir: File): BookContent =
+        parseContent(file, imagesDir, ReaderResourceLimits.DEFAULT)
+
+    internal fun parseContent(
+        file: File,
+        imagesDir: File,
+        limits: ReaderResourceLimits,
+    ): BookContent = MobiDoc.open(file, limits).use { doc ->
         if (doc.kf8 != null) {
-            val kf8 = runCatching { parseKf8Content(doc.kf8, imagesDir) }
-            kf8.getOrNull()?.takeIf { it.chapters.isNotEmpty() }?.let { return@use it }
-            if (doc.kf8Only) {
-                throw kf8.exceptionOrNull() ?: IOException("Damaged AZW3: no chapters")
+            try {
+                parseKf8Content(doc.kf8, imagesDir)
+                    .takeIf { it.chapters.isNotEmpty() }
+                    ?.let { return@use it }
+                if (doc.kf8Only) throw IOException("Damaged AZW3: no chapters")
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                if (doc.kf8Only) throw error
+                // A combo publication can still use its independent MOBI6
+                // fallback; fatal Errors/cancellation are never swallowed.
             }
-            // Combo: the MOBI6 half below is a guaranteed fallback.
         }
         if (doc.mobi6.mobi == null) return@use parsePlainTextContent(doc.mobi6)
         parseMobi6Content(doc.mobi6, imagesDir)
@@ -106,6 +133,90 @@ object MobiParser {
     // ---------------------------------------------------------------- MOBI6
 
     private class Chunk(val startPos: Int, val bytes: ByteArray)
+
+    private class FlowCss(val text: String, val imports: List<Int>)
+
+    /** One bounded pre-filter budget shared by all stylesheets in a publication. */
+    private class KindleMediaFilterBudget(private val limits: ReaderResourceLimits) {
+        private var operations = 0
+
+        fun admit(nestingDepth: Int): Boolean {
+            if (nestingDepth > limits.maxKindleCssMediaDepth ||
+                operations >= limits.maxKindleCssMediaOperations
+            ) {
+                return false
+            }
+            operations++
+            return true
+        }
+    }
+
+    /** One CSS allocation/expansion budget shared by every KF8 part. */
+    private class Kf8CssBudget(val limits: ReaderResourceLimits) {
+        val cache = mutableMapOf<Int, FlowCss>()
+        val rejected = mutableSetOf<Int>()
+        val mediaFilter = KindleMediaFilterBudget(limits)
+        private var decodedBytes = 0L
+        private var expandedBytes = 0L
+        private var expandedSheets = 0
+        private var expansionOperations = 0
+        private val acceptedResolvers = mutableSetOf<String>()
+        private val rejectedResolvers = mutableSetOf<String>()
+
+        fun acceptFlow(flow: Int, bytes: Int): Boolean {
+            if (flow in cache) return true
+            if (flow in rejected) return false
+            if (bytes.toLong() > limits.maxKf8CssFlowBytes ||
+                decodedBytes > limits.maxKf8CssAggregateBytes - bytes
+            ) {
+                rejected += flow
+                return false
+            }
+            decodedBytes += bytes
+            return true
+        }
+
+        fun acceptResolver(
+            signature: String,
+            sheets: List<com.example.frogreader.data.parser.CssResolver.Sheet>,
+        ): Boolean {
+            if (signature in acceptedResolvers) return true
+            if (signature in rejectedResolvers) return false
+            var bytes = 0L
+            for (sheet in sheets) {
+                val next = sheet.text.length.toLong() * 2L
+                if (bytes > limits.maxKf8CssExpandedBytes - next) {
+                    rejectedResolvers += signature
+                    return false
+                }
+                bytes += next
+            }
+            if (expandedBytes > limits.maxKf8CssExpandedBytes - bytes) {
+                rejectedResolvers += signature
+                return false
+            }
+            expandedBytes += bytes
+            acceptedResolvers += signature
+            return true
+        }
+
+        fun enterSheet(): Boolean {
+            if (expandedSheets >= limits.maxKf8CssExpandedSheets ||
+                expansionOperations >= limits.maxKf8CssExpansionOperations
+            ) {
+                return false
+            }
+            expandedSheets++
+            expansionOperations++
+            return true
+        }
+
+        fun traverseImport(): Boolean {
+            if (expansionOperations >= limits.maxKf8CssExpansionOperations) return false
+            expansionOperations++
+            return true
+        }
+    }
 
     private fun parseMobi6Content(section: MobiSection, imagesDir: File): BookContent {
         val mobi = section.mobi ?: throw IOException("Damaged MOBI: no header")
@@ -140,12 +251,17 @@ object MobiParser {
         val anchorLocations = mutableMapOf<String, Pair<Int, Int>>()
         val linkTargets = mutableSetOf<String>()
         val noteTargets = mutableSetOf<String>()
+        val exactNoteDocuments = mutableMapOf<String, NoteDocument>()
         val resourceCache = mutableMapOf<Int, String?>()
+        val htmlExpansionBudget = HtmlExpansionBudget(
+            maxGeneratedRunChars = section.pdb.limits.maxHtmlGeneratedRunChars,
+            maxGeneratedTotalChars = section.pdb.limits.maxHtmlGeneratedTotalChars,
+        )
 
         // MOBI6 is one HTML stream. Its <head>/<style> normally appears only
         // in the first chunk after page-break splitting, so build one resolver
         // from the unsplit stream and reuse it for every chapter.
-        val resolver = mobi6Resolver(raw, latin1, mobi.charset)
+        val resolver = mobi6Resolver(raw, latin1, mobi.charset, section.pdb.limits)
 
         for (chunk in chunks) {
             val html = decodeText(chunk.bytes, mobi.charset)
@@ -158,8 +274,12 @@ object MobiParser {
                 },
                 resolveLink = { href -> href.takeIf { it.startsWith("#filepos") } },
                 css = resolver,
+                expansionBudget = htmlExpansionBudget,
             )
             val elements = mapper.map(document.body())
+            mapper.noteDocuments.forEach { (id, note) ->
+                exactNoteDocuments.putIfAbsent("#$id", note)
+            }
             resolver.clearCache()
             if (elements.isEmpty()) continue
 
@@ -179,7 +299,12 @@ object MobiParser {
 
         return BookContent(
             chapters = chapters,
-            notes = buildNotes(chapters, anchorLocations, noteTargets),
+            notes = buildNotes(
+                chapters,
+                anchorLocations,
+                noteTargets,
+                exactDocuments = exactNoteDocuments,
+            ),
             linkTargets = anchorLocations.filterKeys { it in linkTargets },
             language = LanguageTag.normalize(
                 section.exth.string(Exth.LANGUAGE, mobi.charset),
@@ -192,7 +317,9 @@ object MobiParser {
         raw: ByteArray,
         latin1: String,
         charset: Charset,
+        limits: ReaderResourceLimits,
     ): CssResolver {
+        val mediaFilter = KindleMediaFilterBudget(limits)
         val sheets = STYLE_BLOCK.findAll(latin1).mapNotNull { match ->
             val attributes = match.groups[1]?.value.orEmpty()
             val media = Jsoup.parseBodyFragment("<style$attributes></style>")
@@ -200,7 +327,7 @@ object MobiParser {
             if (!kindleMediaApplies(media, KindleCssTarget.MOBI)) return@mapNotNull null
             val range = match.groups[2]?.range ?: return@mapNotNull null
             val decoded = decodeText(raw.copyOfRange(range.first, range.last + 1), charset)
-            filterKindleMedia(decoded, KindleCssTarget.MOBI)
+            filterKindleMedia(decoded, KindleCssTarget.MOBI, mediaFilter)
                 .takeIf { it.isNotBlank() }
                 ?.let { CssResolver.Sheet(it) }
         }.toList()
@@ -335,14 +462,28 @@ object MobiParser {
         // Every kindle:pos target referenced anywhere in the book becomes
         // an <a id="kpos_fid_off"> marker at (fragment start + offset).
         val markersByPart = mutableMapOf<Int, MutableList<Pair<Int, String>>>()
+        data class MarkerKey(val part: Int, val position: Int, val id: String)
+        val uniqueMarkers = mutableSetOf<MarkerKey>()
+        var markerBytes = 0L
         for (part in book.parts) {
             val latin1 = String(part.bytes, Charsets.ISO_8859_1)
             for (match in KINDLE_POS.findAll(latin1)) {
                 val fid = Kf8Assembler.base32(match.groupValues[1]) ?: continue
                 val off = Kf8Assembler.base32(match.groupValues[2]) ?: continue
                 val (targetPart, fragOffset) = book.fragLocations.getOrNull(fid) ?: continue
+                val positionLong = fragOffset.toLong() + off
+                if (positionLong !in 0..Int.MAX_VALUE.toLong()) continue
+                val id = "kpos_${fid}_$off"
+                val key = MarkerKey(targetPart, positionLong.toInt(), id)
+                if (key in uniqueMarkers || uniqueMarkers.size >= section.pdb.limits.maxKf8Markers) {
+                    continue
+                }
+                val bytes = "<a id=\"$id\"></a>".toByteArray().size.toLong()
+                if (markerBytes > section.pdb.limits.maxKf8MarkerExpansionBytes - bytes) continue
+                uniqueMarkers += key
+                markerBytes += bytes
                 markersByPart.getOrPut(targetPart) { mutableListOf() } +=
-                    (fragOffset + off) to "kpos_${fid}_$off"
+                    key.position to id
             }
         }
 
@@ -352,17 +493,23 @@ object MobiParser {
         val anchorLocations = mutableMapOf<String, Pair<Int, Int>>()
         val linkTargets = mutableSetOf<String>()
         val noteTargets = mutableSetOf<String>()
+        val exactNoteDocuments = mutableMapOf<String, NoteDocument>()
         val resourceCache = mutableMapOf<Int, String?>()
-        val inlineSvgs = mutableMapOf<Int, String>()
+        val inlineSvgs = mutableMapOf<String, String>()
         val resolverCache = mutableMapOf<String, com.example.frogreader.data.parser.CssResolver>()
         val fonts = mutableMapOf<String, BookFont>()
+        val cssBudget = Kf8CssBudget(section.pdb.limits)
+        val htmlExpansionBudget = HtmlExpansionBudget(
+            maxGeneratedRunChars = section.pdb.limits.maxHtmlGeneratedRunChars,
+            maxGeneratedTotalChars = section.pdb.limits.maxHtmlGeneratedTotalChars,
+        )
 
         for (part in book.parts) {
             val bytes = insertMarkers(part.bytes, markersByPart[part.index].orEmpty())
             val document = com.example.frogreader.data.parser.parseChapterDocument(bytes)
                 ?: continue
             rewriteKf8Dom(document, book)
-            val resolver = kf8Resolver(document, book, mobi, resolverCache)
+            val resolver = kf8Resolver(document, book, mobi, resolverCache, cssBudget)
             if (resolver != null) extractKf8Fonts(section, resolver, imagesDir, fonts)
 
             val mapper = HtmlMapper(
@@ -375,9 +522,13 @@ object MobiParser {
                     com.example.frogreader.data.parser.EpubParser
                         .writeInlineSvg(markup, imagesDir, inlineSvgs)
                 },
+                expansionBudget = htmlExpansionBudget,
             )
             val body = document.selectFirst("body") ?: continue
             val elements = mapper.map(body)
+            mapper.noteDocuments.forEach { (id, note) ->
+                exactNoteDocuments.putIfAbsent("#$id", note)
+            }
             resolver?.clearCache()
             if (elements.isEmpty()) continue
 
@@ -400,7 +551,12 @@ object MobiParser {
 
         return BookContent(
             chapters = chapters,
-            notes = buildNotes(chapters, anchorLocations, noteTargets),
+            notes = buildNotes(
+                chapters,
+                anchorLocations,
+                noteTargets,
+                exactDocuments = exactNoteDocuments,
+            ),
             linkTargets = anchorLocations.filterKeys { it in linkTargets },
             fonts = fonts.values.toList(),
             language = LanguageTag.normalize(
@@ -446,28 +602,44 @@ object MobiParser {
         for (face in resolver.fontFaces) {
             val match = KINDLE_EMBED.find(face.src) ?: continue
             val n = Kf8Assembler.base32(match.groupValues[1]) ?: continue
-            val key = "$n|${face.bold}|${face.italic}"
+            val family = face.family.trim().lowercase()
+            val key = "$n:${family.length}:$family:${face.bold}:${face.italic}"
             if (key in out) continue
             val record = section.resourceRecord(n) ?: continue
-            var bytes = section.pdb.withRecord(record) { data, off, len ->
-                if (MobiFontRecord.isFontRecord(data, off, len)) {
-                    MobiFontRecord.decode(data, off, len)
-                } else {
-                    data.copyOfRange(off, off + len) // some AZW3s embed plain sfnt
-                }
+            val recordBytes = section.pdb.recordOptional(
+                record,
+                section.pdb.limits.maxFontBytes,
+                "KF8 font resource",
+            ) ?: continue
+            var bytes = if (MobiFontRecord.isFontRecord(recordBytes, 0, recordBytes.size)) {
+                MobiFontRecord.decode(
+                    recordBytes,
+                    0,
+                    recordBytes.size,
+                    section.pdb.limits.maxFontBytes.toInt(),
+                )
+            } else {
+                recordBytes // some AZW3s embed plain sfnt
             } ?: continue
             if (Woff2Decoder.isWoff2(bytes)) {
-                bytes = Woff2Decoder.decode(bytes) ?: continue
+                bytes = Woff2Decoder.decode(
+                    bytes,
+                    section.pdb.limits.maxFontBytes.toInt(),
+                ) ?: continue
             }
             if (WoffDecoder.isWoff(bytes)) {
-                bytes = WoffDecoder.decode(bytes) ?: continue
+                bytes = WoffDecoder.decode(
+                    bytes,
+                    section.pdb.limits.maxFontBytes.toInt(),
+                ) ?: continue
             }
+            if (bytes.size.toLong() > section.pdb.limits.maxFontBytes) continue
             if (!looksLikeFont(bytes)) continue
             imagesDir.mkdirs()
             val target = File(imagesDir, "mobi_font_$n.ttf")
-            runCatching { target.writeBytes(bytes) }.getOrNull() ?: continue
+            if (!writeGeneratedFile(target, bytes)) continue
             out[key] = BookFont(
-                family = face.family,
+                family = family,
                 path = target.absolutePath,
                 bold = face.bold,
                 italic = face.italic,
@@ -569,37 +741,185 @@ object MobiParser {
         book: Kf8Book,
         mobi: MobiHeader,
         cache: MutableMap<String, com.example.frogreader.data.parser.CssResolver>,
+        budget: Kf8CssBudget,
     ): com.example.frogreader.data.parser.CssResolver? {
         val sheets = mutableListOf<com.example.frogreader.data.parser.CssResolver.Sheet>()
-        val keys = mutableListOf<String>()
-        for (link in document.select("link[href]")) {
-            if (!kindleMediaApplies(link.attr("media"), KindleCssTarget.KF8)) continue
-            val match = KINDLE_FLOW.find(link.attr("href")) ?: continue
-            val flow = Kf8Assembler.base32(match.groupValues[1]) ?: continue
-            if (flow in 1 until book.flows.size && "flow$flow" !in keys) {
-                keys += "flow$flow"
-                sheets += com.example.frogreader.data.parser.CssResolver.Sheet(
-                    filterKindleMedia(
-                        decodeText(book.flows[flow], mobi.charset),
-                        KindleCssTarget.KF8,
-                    ),
-                )
+
+        /**
+         * Kindle compiles linked and imported stylesheets into separate FDST
+         * flows. CSS `@import` participates in the cascade before the sheet
+         * that contains it, so this is an iterative post-order DFS. An explicit
+         * stack accepts even the maximum legal FDST chain without risking the
+         * call stack. Only the active path is cycle-protected: importing the
+         * same flow again after its earlier branch has completed deliberately
+         * expands it again at that source-order position.
+         *
+         * Malicious graphs can otherwise expand repeated imports
+         * exponentially. The limits are shared by every linked/inline root in
+         * this document and bound occurrences/edges, not nesting depth, so a
+         * valid chain spanning all 4,095 non-skeleton FDST flows still fits.
+         */
+        data class FlowFrame(val flow: Int, val css: FlowCss, var nextImport: Int = 0)
+
+        fun flowCss(flow: Int): FlowCss? {
+            if (flow !in 1 until book.flows.size) return null
+            budget.cache[flow]?.let { return it }
+            if (flow in budget.rejected) return null
+            val bytes = book.flows[flow]
+            if (!budget.acceptFlow(flow, bytes.size)) return null
+            val text = filterKindleMedia(
+                decodeText(bytes, mobi.charset),
+                KindleCssTarget.KF8,
+                budget.mediaFilter,
+            )
+            val imports = kindleCssImports(text).mapNotNull { (href, media) ->
+                if (!kindleMediaApplies(media, KindleCssTarget.KF8)) return@mapNotNull null
+                KINDLE_FLOW.find(href)?.groupValues?.get(1)
+                    ?.let(Kf8Assembler::base32)
+            }
+            return FlowCss(text, imports).also { budget.cache[flow] = it }
+        }
+
+        fun appendFlow(rootFlow: Int) {
+            val activePath = mutableSetOf<Int>()
+            val stack = ArrayDeque<FlowFrame>()
+
+            fun push(flow: Int) {
+                if (flow in activePath) return
+                val css = flowCss(flow) ?: return
+                if (!budget.enterSheet()) return
+                activePath += flow
+                stack.addLast(FlowFrame(flow, css))
+            }
+
+            push(rootFlow)
+            while (stack.isNotEmpty()) {
+                val frame = stack.peekLast() ?: break
+                if (frame.nextImport < frame.css.imports.size &&
+                    budget.traverseImport()
+                ) {
+                    val imported = frame.css.imports[frame.nextImport++]
+                    push(imported)
+                    continue
+                }
+
+                // The operation/sheet cap stops only further descendants. Any
+                // already-entered parents are still emitted in correct order.
+                frame.nextImport = frame.css.imports.size
+                stack.removeLast()
+                activePath -= frame.flow
+                sheets += com.example.frogreader.data.parser.CssResolver.Sheet(frame.css.text)
             }
         }
-        for (style in document.select("style")) {
-            if (!kindleMediaApplies(style.attr("media"), KindleCssTarget.KF8)) continue
-            val text = style.data().ifEmpty { style.text() }
-            if (text.isNotBlank()) {
-                keys += "inline:${text.hashCode()}"
-                sheets += com.example.frogreader.data.parser.CssResolver.Sheet(
-                    filterKindleMedia(text, KindleCssTarget.KF8),
+
+        fun appendInlineImports(text: String) {
+            for ((href, media) in kindleCssImports(text)) {
+                if (!kindleMediaApplies(media, KindleCssTarget.KF8)) continue
+                val imported = KINDLE_FLOW.find(href)?.groupValues?.get(1)
+                    ?.let(Kf8Assembler::base32)
+                    ?: continue
+                appendFlow(imported)
+            }
+        }
+
+        data class Root(val flow: Int? = null, val inline: String? = null)
+        val roots = mutableListOf<Root>()
+        for (node in document.select("link[href], style")) {
+            if (!kindleMediaApplies(node.attr("media"), KindleCssTarget.KF8)) continue
+            if (node.normalName() == "link") {
+                val match = KINDLE_FLOW.find(node.attr("href")) ?: continue
+                val flow = Kf8Assembler.base32(match.groupValues[1]) ?: continue
+                roots += Root(flow = flow)
+            } else {
+                val text = node.data().ifEmpty { node.text() }
+                val filtered = filterKindleMedia(
+                    text,
+                    KindleCssTarget.KF8,
+                    budget.mediaFilter,
                 )
+                if (filtered.isNotBlank() &&
+                    filtered.length.toLong() * 2L <= budget.limits.maxKf8CssFlowBytes
+                ) {
+                    roots += Root(inline = filtered)
+                }
+            }
+        }
+        // Inline style= and legacy color/bgcolor survive KF8 even without a
+        // retained stylesheet flow, so they still need the shared resolver.
+        if (roots.isEmpty()) return com.example.frogreader.data.parser.CssResolver(emptyList())
+        val signature = roots.joinToString(separator = "") { root ->
+            root.flow?.let { "f$it;" }
+                ?: root.inline!!.let {
+                    "i${com.example.frogreader.data.parser.resourceDigest(it)};"
+                }
+        }
+        cache[signature]?.let { return it }
+        for (root in roots) {
+            root.flow?.let(::appendFlow) ?: root.inline?.let { text ->
+                appendInlineImports(text)
+                sheets += com.example.frogreader.data.parser.CssResolver.Sheet(text)
             }
         }
         if (sheets.isEmpty()) return null
-        return cache.getOrPut(keys.joinToString("|")) {
-            com.example.frogreader.data.parser.CssResolver(sheets)
+        if (!budget.acceptResolver(signature, sheets)) return null
+        return com.example.frogreader.data.parser.CssResolver(sheets)
+            .also { cache[signature] = it }
+    }
+
+    /**
+     * Top-level `@import` statements outside strings/comments. A regex alone
+     * sees examples in `content:` and commented-out publisher CSS as live
+     * imports, which changes the cascade and may load an unrelated flow.
+     */
+    private fun kindleCssImports(css: String): List<Pair<String, String>> {
+        val result = mutableListOf<Pair<String, String>>()
+        var i = 0
+        var quote = '\u0000'
+        var comment = false
+        var braceDepth = 0
+        while (i < css.length) {
+            if (comment) {
+                if (i + 1 < css.length && css[i] == '*' && css[i + 1] == '/') {
+                    comment = false
+                    i += 2
+                } else i++
+                continue
+            }
+            if (quote != '\u0000') {
+                if (css[i] == '\\') i = (i + 2).coerceAtMost(css.length)
+                else {
+                    if (css[i] == quote) quote = '\u0000'
+                    i++
+                }
+                continue
+            }
+            when {
+                i + 1 < css.length && css[i] == '/' && css[i + 1] == '*' -> {
+                    comment = true
+                    i += 2
+                }
+                css[i] == '\'' || css[i] == '"' -> quote = css[i++]
+                css[i] == '{' -> { braceDepth++; i++ }
+                css[i] == '}' -> { braceDepth = (braceDepth - 1).coerceAtLeast(0); i++ }
+                braceDepth == 0 && css[i] == '@' &&
+                    css.regionMatches(i + 1, "import", 0, 6, ignoreCase = true) -> {
+                    val match = CSS_IMPORT.find(css, i)
+                    if (match == null || match.range.first != i) {
+                        i++
+                        continue
+                    }
+                    val href = match.groups[1]?.value
+                        ?.takeIf { it.isNotBlank() }
+                        ?: match.groups[2]?.value?.takeIf { it.isNotBlank() }
+                    if (href != null) {
+                        result += href to match.groups[3]?.value.orEmpty().trim()
+                    }
+                    i = match.range.last + 1
+                }
+                else -> i++
+            }
         }
+        return result
     }
 
     /** Injects `<a id>` markers at tag-aligned positions, one linear pass. */
@@ -608,7 +928,17 @@ object MobiParser {
         val adjusted = markers
             .map { (pos, id) -> adjustToTagStart(raw, pos) to id }
             .sortedBy { it.first }
-        val out = ByteArrayOutputStream(raw.size + adjusted.size * 24)
+        val addedBytes = adjusted.sumOf { (_, id) ->
+            "<a id=\"$id\"></a>".toByteArray().size.toLong()
+        }
+        val totalBytes = raw.size.toLong() + addedBytes
+        if (totalBytes > Int.MAX_VALUE) {
+            throw ResourceLimitException(
+                ResourceLimitKind.ENTRY_SIZE,
+                "KF8 marker expansion exceeds addressable memory",
+            )
+        }
+        val out = ByteArrayOutputStream(totalBytes.toInt())
         var last = 0
         for ((pos, id) in adjusted) {
             if (pos > last) {
@@ -647,16 +977,56 @@ object MobiParser {
     ): String? {
         if (cache.containsKey(n)) return cache[n]
         val path = section.resourceRecord(n)?.let { record ->
-            val bytes = section.pdb.record(record)
+            val prefix = section.pdb.recordPrefix(
+                record,
+                2_048,
+                "MOBI resource signature",
+                optional = true,
+            ) ?: return@let null
             // Fonts are extracted separately; they never render as <img>.
-            if (MobiFontRecord.isFontRecord(bytes, 0, bytes.size)) return@let null
+            if (MobiFontRecord.isFontRecord(prefix, 0, prefix.size)) return@let null
             imagesDir.mkdirs()
-            val target = File(imagesDir, "mobi_res_$n." + MobiSection.resourceExtension(bytes))
-            runCatching { target.writeBytes(bytes) }.getOrNull()?.let { target.absolutePath }
-                ?: return@let null
+            val target = File(
+                imagesDir,
+                "mobi_res_$n." + MobiSection.resourceExtension(prefix),
+            )
+            if (target.exists()) {
+                return@let target.absolutePath.takeIf {
+                    target.length() in 1..section.pdb.limits.maxImageBytes
+                }
+            }
+            if (!section.pdb.copyRecordOptional(
+                    record,
+                    target,
+                    section.pdb.limits.maxImageBytes,
+                    "MOBI image resource",
+                )
+            ) {
+                return@let null
+            }
+            target.absolutePath
         }
         cache[n] = path
         return path
+    }
+
+    private fun writeGeneratedFile(target: File, bytes: ByteArray): Boolean {
+        if (target.length() == bytes.size.toLong() && target.length() > 0L) return true
+        target.parentFile?.mkdirs()
+        val partial = File(target.parentFile, target.name + ".tmp")
+        return runCatching {
+            partial.writeBytes(bytes)
+            if (target.exists() && !target.delete()) return@runCatching false
+            if (!partial.renameTo(target)) {
+                partial.delete()
+                false
+            } else {
+                true
+            }
+        }.getOrElse {
+            partial.delete()
+            false
+        }
     }
 
     private enum class KindleCssTarget(val mediaType: String) {
@@ -688,67 +1058,99 @@ object MobiParser {
      * shared CSS parser sees them. That parser intentionally treats generic
      * screen media as applicable, but cannot know whether this is MOBI or KF8.
      */
-    private fun filterKindleMedia(css: String, target: KindleCssTarget): String {
+    private fun filterKindleMedia(
+        css: String,
+        target: KindleCssTarget,
+        budget: KindleMediaFilterBudget,
+    ): String {
         val out = StringBuilder(css.length)
-        var cursor = 0
-        while (cursor < css.length) {
-            val media = findMediaRule(css, cursor)
-            if (media < 0) {
-                out.append(css, cursor, css.length)
-                break
-            }
-            out.append(css, cursor, media)
-            val open = findCssOpeningBrace(css, media + 6)
-            if (open < 0) break
-            val close = matchingCssBrace(css, open)
-            if (close < 0) break
-            val query = css.substring(media + 6, open).trim()
-            if (kindleMediaApplies(query, target)) {
-                out.append(filterKindleMedia(css.substring(open + 1, close), target))
-            }
-            cursor = close + 1
-        }
-        return out.toString()
-    }
-
-    /** Finds `@media` outside strings/comments. */
-    private fun findMediaRule(css: String, start: Int): Int {
-        var i = start
+        val activeMediaDepths = ArrayDeque<Int>()
+        var braceDepth = 0
+        var i = 0
         var quote = '\u0000'
         var comment = false
         while (i < css.length) {
             if (comment) {
                 if (i + 1 < css.length && css[i] == '*' && css[i + 1] == '/') {
+                    out.append("*/")
                     comment = false
                     i += 2
-                } else i++
+                } else {
+                    out.append(css[i++])
+                }
                 continue
             }
             if (quote != '\u0000') {
-                if (css[i] == '\\') i += 2
-                else {
-                    if (css[i] == quote) quote = '\u0000'
+                val c = css[i]
+                out.append(c)
+                if (c == '\\' && i + 1 < css.length) {
+                    out.append(css[i + 1])
+                    i += 2
+                } else {
+                    if (c == quote) quote = '\u0000'
                     i++
                 }
                 continue
             }
+
             if (i + 1 < css.length && css[i] == '/' && css[i + 1] == '*') {
+                out.append("/*")
                 comment = true
                 i += 2
                 continue
             }
             if (css[i] == '\'' || css[i] == '"') {
-                quote = css[i++]
+                quote = css[i]
+                out.append(css[i++])
                 continue
             }
-            if (css[i] == '@' && css.regionMatches(i + 1, "media", 0, 5, ignoreCase = true) &&
+
+            val isMedia = css[i] == '@' &&
+                css.regionMatches(i + 1, "media", 0, 5, ignoreCase = true) &&
                 (i + 6 >= css.length || !css[i + 6].isLetterOrDigit() && css[i + 6] != '-')
-            ) {
-                return i
+            if (isMedia) {
+                val open = findCssOpeningBrace(css, i + 6)
+                if (open < 0) {
+                    // Preserve malformed publisher CSS for the shared parser;
+                    // most importantly, always make forward progress.
+                    out.append(css[i++])
+                    continue
+                }
+                val query = css.substring(i + 6, open).trim()
+                val nesting = activeMediaDepths.size + 1
+                if (!budget.admit(nesting) || !kindleMediaApplies(query, target)) {
+                    // A rejected block is optional styling. Skip it in one
+                    // bounded scan, including every nested rule, rather than
+                    // allocating substrings or recursing through the tree.
+                    val close = matchingCssBrace(css, open)
+                    if (close < 0) break
+                    i = close + 1
+                    continue
+                }
+                braceDepth++
+                activeMediaDepths.addLast(braceDepth)
+                i = open + 1
+                continue
             }
-            i++
+
+            when (css[i]) {
+                '{' -> {
+                    braceDepth++
+                    out.append(css[i++])
+                }
+                '}' -> {
+                    if (activeMediaDepths.lastOrNull() == braceDepth) {
+                        activeMediaDepths.removeLast()
+                    } else {
+                        out.append('}')
+                    }
+                    braceDepth = (braceDepth - 1).coerceAtLeast(0)
+                    i++
+                }
+                else -> out.append(css[i++])
+            }
         }
-        return -1
+        return out.toString()
     }
 
     private fun findCssOpeningBrace(css: String, start: Int): Int {
@@ -854,4 +1256,8 @@ object MobiParser {
     private val KINDLE_POS = Regex("""kindle:pos:fid:([0-9A-Va-v]+):off:([0-9A-Va-v]+)""")
     private val KINDLE_EMBED = Regex("""kindle:embed:([0-9A-Va-v]+)""")
     private val KINDLE_FLOW = Regex("""kindle:flow:([0-9A-Va-v]+)""")
+    /** Bounds repeated-import graph expansion without truncating valid FDST depth. */
+    private val CSS_IMPORT = Regex(
+        """(?is)@import\s+(?:url\(\s*[\"']?([^\"'()\s]+)[\"']?\s*\)|[\"']([^\"']+)[\"'])\s*([^;]*);""",
+    )
 }

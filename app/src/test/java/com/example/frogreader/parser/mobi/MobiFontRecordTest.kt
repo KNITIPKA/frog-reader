@@ -54,6 +54,13 @@ class MobiFontRecordTest {
         // Truncated below the header.
         assertNull(MobiFontRecord.decode(record, 0, 12))
     }
+
+    @Test
+    fun `compressed FONT expansion respects caller limit before allocation`() {
+        val record = MobiBuilder.fontRecord(sfnt, compress = true)
+        assertNull(MobiFontRecord.decode(record, 0, record.size, maxDecodedBytes = 512))
+        assertArrayEquals(sfnt, MobiFontRecord.decode(record, 0, record.size, sfnt.size))
+    }
 }
 
 class ResourceSniffTest {

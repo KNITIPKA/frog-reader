@@ -17,6 +17,39 @@ class CssResolverTest {
     private fun doc(html: String): Document = Jsoup.parse(html)
 
     @Test
+    fun `foreground inherits background stays local and legacy attributes join cascade`() {
+        val r = resolver(
+            """
+            body { color: #123456; background-color: linen; }
+            div { background-color: aliceblue; }
+            #reset { color: initial; background-color: currentColor; }
+            #sheetWins { color: blue; }
+            """.trimIndent(),
+        )
+        val d = doc(
+            """
+            <body><div><p id="plain">plain <span id="reset">reset</span></p></div>
+            <font id="legacy" color="red" bgcolor="yellow">legacy</font>
+            <font id="sheetWins" color="red">winner</font></body>
+            """.trimIndent(),
+        )
+
+        val plain = r.computed(d.selectFirst("#plain")!!)
+        assertEquals(0xff123456.toInt(), plain.foregroundColorArgb)
+        assertNull(plain.backgroundColorArgb)
+        assertEquals(0xfff0f8ff.toInt(), r.visualBackground(d.selectFirst("#plain")!!))
+
+        val reset = r.computed(d.selectFirst("#reset")!!)
+        assertEquals(0xff000000.toInt(), reset.foregroundColorArgb)
+        assertEquals(0xff000000.toInt(), reset.backgroundColorArgb)
+
+        val legacy = r.computed(d.selectFirst("#legacy")!!)
+        assertEquals(0xffff0000.toInt(), legacy.foregroundColorArgb)
+        assertEquals(0xffffff00.toInt(), legacy.backgroundColorArgb)
+        assertEquals(0xff0000ff.toInt(), r.computed(d.selectFirst("#sheetWins")!!).foregroundColorArgb)
+    }
+
+    @Test
     fun `child combinator does not match grandchildren`() {
         val r = resolver("div > p { font-style: italic; }")
         val d = doc("<div><p id='direct'>a</p><section><p id='deep'>b</p></section></div>")
@@ -155,7 +188,7 @@ class CssResolverTest {
     fun `inline important beats sheet important`() {
         val r = resolver("p { text-align: center !important; }")
         val d = doc("<p id='p' style='text-align: right !important'>t</p>")
-        assertEquals("end", r.computed(d.selectFirst("#p")!!).textAlign)
+        assertEquals("right", r.computed(d.selectFirst("#p")!!).textAlign)
     }
 
     @Test
@@ -169,8 +202,9 @@ class CssResolverTest {
     fun `first-letter rules are captured separately and do not leak`() {
         val r = resolver(
             """
-            p.opener::first-letter { font-size: 3em; float: left; font-weight: bold; }
-            p.legacy:first-letter { font-size: 2em; }
+            p.opener::first-letter { font-size: 3em; float: left; font-weight: bold;
+                color: rebeccapurple; background-color: #ff08; }
+            p.legacy:first-letter { font-size: 2em; float: right; direction: rtl; }
             """.trimIndent(),
         )
         val d = doc("<p id='a' class='opener'>Мы</p><p id='b' class='legacy'>Он</p><p id='c'>x</p>")
@@ -184,11 +218,18 @@ class CssResolverTest {
         assertEquals(3f, cap!!.scale, 0.01f)
         assertTrue(cap.isDropCap)
         assertEquals(true, cap.bold)
+        assertEquals(0xff663399.toInt(), cap.foregroundColorArgb)
+        assertEquals(0x88ffff00.toInt(), cap.backgroundColorArgb)
 
         val legacy = r.firstLetter(d.selectFirst("#b")!!)
         assertNotNull(legacy)
         assertEquals(2f, legacy!!.scale, 0.01f)
         assertTrue(legacy.isDropCap)
+        assertEquals(false, legacy.leftSide)
+        assertEquals(
+            com.example.frogreader.data.model.BookTextDirection.RTL,
+            legacy.direction,
+        )
 
         assertNull(r.firstLetter(d.selectFirst("#c")!!))
     }

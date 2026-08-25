@@ -128,7 +128,7 @@ fun ReaderPanelsContent(
     chapterStartPages: List<Int>?,
     /** Lets the whole tab header drag the panel like the handle does. */
     dragModifier: Modifier = Modifier,
-    onChapterClick: (Int) -> Unit,
+    onChapterClick: (ReaderNavigationTarget) -> Unit,
     onBookmarkClick: (Int) -> Unit,
     onRemoveBookmark: (String) -> Unit,
     onCopyQuote: (String) -> Unit,
@@ -187,10 +187,14 @@ private fun ContentsTab(
     ready: ReaderState.Ready,
     currentChapter: Int,
     chapterStartPages: List<Int>?,
-    onChapterClick: (Int) -> Unit,
+    onChapterClick: (ReaderNavigationTarget) -> Unit,
 ) {
-    val depths = ready.chapterDepths
-    val count = ready.chapterTitles.size
+    val entries = ready.navigation
+    val depths = entries.map { it.depth }
+    val count = entries.size
+    val currentEntryIndex = entries.indexOfFirst { entry ->
+        (entry.target as? ReaderNavigationTarget.ReadingOrder)?.chapterIndex == currentChapter
+    }.takeIf { it >= 0 }
 
     // A chapter is a group when the next chapter is nested deeper.
     fun isGroup(index: Int): Boolean =
@@ -208,12 +212,14 @@ private fun ContentsTab(
     // Groups start collapsed, except the path to the current chapter.
     val collapsed = remember(ready, currentChapter) {
         val initiallyExpanded = buildSet {
-            var ancestor = parentOf(currentChapter)
-            while (ancestor >= 0) {
-                add(ancestor)
-                ancestor = parentOf(ancestor)
+            currentEntryIndex?.let { current ->
+                var ancestor = parentOf(current)
+                while (ancestor >= 0) {
+                    add(ancestor)
+                    ancestor = parentOf(ancestor)
+                }
+                if (isGroup(current)) add(current)
             }
-            if (isGroup(currentChapter)) add(currentChapter)
         }
         mutableStateMapOf<Int, Boolean>().apply {
             for (i in 0 until count) {
@@ -233,15 +239,16 @@ private fun ContentsTab(
 
     val haptics = LocalHapticFeedback.current
     LazyColumn(contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp)) {
-        itemsIndexed(ready.chapterTitles) { index, title ->
+        itemsIndexed(entries) { index, entry ->
             if (!visible(index)) return@itemsIndexed
-            val isCurrent = index == currentChapter
+            val isCurrent = (entry.target as? ReaderNavigationTarget.ReadingOrder)
+                ?.chapterIndex == currentChapter
             val group = isGroup(index)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onChapterClick(index) }
+                    .clickable { onChapterClick(entry.target) }
                     .padding(
                         start = 8.dp + 18.dp * depths[index].coerceAtMost(4),
                         end = 8.dp,
@@ -250,7 +257,7 @@ private fun ContentsTab(
                     ),
             ) {
                 Text(
-                    text = (title ?: stringResource(R.string.reader_chapter_n, index + 1))
+                    text = (entry.title ?: stringResource(R.string.reader_chapter_n, index + 1))
                         .replace('\n', ' '),
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
@@ -268,7 +275,9 @@ private fun ContentsTab(
                         tint = MaterialTheme.colorScheme.primary,
                     )
                 }
-                val page = chapterStartPages?.getOrNull(index)
+                val page = (entry.target as? ReaderNavigationTarget.ReadingOrder)
+                    ?.chapterIndex
+                    ?.let { chapterStartPages?.getOrNull(it) }
                 if (page != null) {
                     Spacer(Modifier.width(10.dp))
                     Text(

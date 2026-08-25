@@ -47,9 +47,17 @@ object BookParsers {
      * under a normalized name. Zipped FB2 files (`.fb2.zip`) are unpacked so the
      * stored file is always a plain `.fb2` or `.epub`.
      */
-    fun detectAndStore(source: File, targetDir: File, id: String): Pair<BookFormat, File> {
+    fun detectAndStore(source: File, targetDir: File, id: String): Pair<BookFormat, File> =
+        detectAndStore(source, targetDir, id, ReaderResourceLimits.DEFAULT)
+
+    internal fun detectAndStore(
+        source: File,
+        targetDir: File,
+        id: String,
+        limits: ReaderResourceLimits,
+    ): Pair<BookFormat, File> {
         targetDir.mkdirs()
-        val header = source.inputStream().use { it.readNBytes(68) }
+        val header = source.inputStream().use { readPrefix(it, 68) }
 
         // Mobipocket/Kindle PDB container (.mobi/.azw/.azw3/.prc).
         if (PdbFile.isPdbBook(header)) {
@@ -60,18 +68,25 @@ object BookParsers {
 
         if (header.size >= 2 && header[0] == 'P'.code.toByte() && header[1] == 'K'.code.toByte()) {
             ZipFile(source).use { zip ->
+                val budget = ArchiveResourceBudget(zip, limits)
                 if (zip.getEntry("META-INF/container.xml") != null) {
                     val target = File(targetDir, "$id.epub")
                     moveFile(source, target)
                     return BookFormat.EPUB to target
                 }
                 val fb2Entry = zip.entries().asSequence()
-                    .firstOrNull { !it.isDirectory && it.name.endsWith(".fb2", ignoreCase = true) }
+                    .firstOrNull {
+                        !it.isDirectory && isSafeArchivePath(it.name) &&
+                            it.name.endsWith(".fb2", ignoreCase = true)
+                    }
                 if (fb2Entry != null) {
                     val target = File(targetDir, "$id.fb2")
-                    zip.getInputStream(fb2Entry).use { input ->
-                        target.outputStream().use { input.copyTo(it) }
-                    }
+                    budget.copyRequired(
+                        fb2Entry,
+                        target,
+                        limits.maxFb2Bytes,
+                        "zipped FB2 document",
+                    )
                     source.delete()
                     return BookFormat.FB2 to target
                 }
@@ -79,11 +94,17 @@ object BookParsers {
             throw IOException("Unsupported zip archive: neither EPUB nor FB2")
         }
 
-        val head = source.inputStream().use { it.readNBytes(2048) }
+        val head = source.inputStream().use { readPrefix(it, 2048) }
         val headText = String(head, Charsets.ISO_8859_1)
         if (headText.contains("<FictionBook", ignoreCase = true) ||
             (headText.contains("<?xml") && headText.contains("FictionBook", ignoreCase = true))
         ) {
+            if (source.length() > limits.maxFb2Bytes) {
+                throw ResourceLimitException(
+                    ResourceLimitKind.ENTRY_SIZE,
+                    "FB2 document is larger than ${limits.maxFb2Bytes} bytes",
+                )
+            }
             val target = File(targetDir, "$id.fb2")
             moveFile(source, target)
             return BookFormat.FB2 to target
@@ -105,6 +126,33 @@ object BookParsers {
     }
 
     private fun streamOf(file: File): () -> InputStream = { file.inputStream().buffered() }
+
+    /**
+     * Reads at most [byteCount] bytes without `InputStream.readNBytes`, whose
+     * Android implementation only exists from API 33. Format sniffing runs on
+     * minSdk 26, and an input stream is allowed to return short (or even an
+     * occasional zero-length) reads before EOF.
+     */
+    internal fun readPrefix(input: InputStream, byteCount: Int): ByteArray {
+        require(byteCount >= 0)
+        if (byteCount == 0) return ByteArray(0)
+        val buffer = ByteArray(byteCount)
+        var offset = 0
+        while (offset < byteCount) {
+            val count = input.read(buffer, offset, byteCount - offset)
+            when {
+                count > 0 -> offset += count
+                count < 0 -> break
+                else -> {
+                    // Defensive progress for unusual filter/content streams.
+                    val value = input.read()
+                    if (value < 0) break
+                    buffer[offset++] = value.toByte()
+                }
+            }
+        }
+        return if (offset == byteCount) buffer else buffer.copyOf(offset)
+    }
 
     private fun moveFile(source: File, target: File) {
         if (!source.renameTo(target)) {

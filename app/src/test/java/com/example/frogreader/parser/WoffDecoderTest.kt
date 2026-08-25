@@ -108,6 +108,16 @@ class WoffDecoderTest {
         assertTrue(WoffDecoder.isWoff(valid))
     }
 
+    @Test
+    fun `decoded output budget rejects compressed expansion before table allocation`() {
+        val expanding = buildWoff(
+            byteArrayOf(1),
+            ByteArray(4_000) { (it and 3).toByte() },
+        )
+        assertNull(WoffDecoder.decode(expanding, maxDecodedBytes = 1_024))
+        assertTrue(WoffDecoder.decode(expanding, maxDecodedBytes = 8_192) != null)
+    }
+
     private fun readU16(bytes: ByteArray, at: Int): Int =
         ((bytes[at].toInt() and 0xFF) shl 8) or (bytes[at + 1].toInt() and 0xFF)
 

@@ -32,8 +32,15 @@ object SideBoxRules {
      * first grapheme cluster. Null when the paragraph doesn't open with a
      * letter (dialog dashes, digits, …) or is too short to shape.
      */
-    fun capPrefix(text: String): String? {
+    fun capPrefix(text: String, explicitLength: Int? = null): String? {
         if (text.length < MIN_REMAINDER_CHARS) return null
+        if (explicitLength != null) {
+            if (explicitLength !in 1..text.length) return null
+            if (text.length - explicitLength < MIN_REMAINDER_CHARS) return null
+            val prefix = text.substring(0, explicitLength)
+            if (prefix.codePoints().noneMatch(Character::isLetter)) return null
+            return prefix
+        }
         var i = 0
         while (i < text.length && i < 2 && text[i] in OPENING_PUNCTUATION) i++
         // Code-point aware: a supplementary-plane letter is two chars.
