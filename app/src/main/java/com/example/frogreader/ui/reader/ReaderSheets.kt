@@ -56,6 +56,7 @@ import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.material.icons.rounded.ViewColumn
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,6 +68,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -94,6 +96,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -122,6 +126,7 @@ import kotlin.math.roundToInt
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderPanelsContent(
+    colorScheme: ColorScheme,
     ready: ReaderState.Ready,
     book: Book?,
     currentChapter: Int,
@@ -140,37 +145,45 @@ fun ReaderPanelsContent(
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
 
-    Column(Modifier.fillMaxSize()) {
-        PrimaryTabRow(
-            selectedTabIndex = tab,
-            containerColor = androidx.compose.ui.graphics.Color.Transparent,
-            modifier = dragModifier,
-        ) {
-            Tab(
-                selected = tab == 0,
-                onClick = { tab = 0 },
-                text = { Text(stringResource(R.string.reader_contents)) },
-            )
-            Tab(
-                selected = tab == 1,
-                onClick = { tab = 1 },
-                text = { Text(stringResource(R.string.reader_bookmarks)) },
-            )
-            Tab(
-                selected = tab == 2,
-                onClick = { tab = 2 },
-                text = { Text(stringResource(R.string.reader_quotes)) },
-            )
-        }
-
-        Box(Modifier.weight(1f)) {
-            when (tab) {
-                0 -> ContentsTab(ready, currentChapter, chapterStartPages, onChapterClick)
-                1 -> BookmarksTab(
-                    ready, book, bookmarked, onToggleBookmark,
-                    onBookmarkClick, onRemoveBookmark,
+    // Match the reader surface even while the app-wide theme is transitioning.
+    MaterialTheme(colorScheme = colorScheme) {
+        Column(Modifier.fillMaxSize()) {
+            PrimaryTabRow(
+                selectedTabIndex = tab,
+                containerColor = colorScheme.surfaceContainerLow,
+                contentColor = colorScheme.primary,
+                divider = {},
+                modifier = dragModifier.clip(RoundedCornerShape(16.dp)),
+            ) {
+                Tab(
+                    selected = tab == 0,
+                    onClick = { tab = 0 },
+                    unselectedContentColor = colorScheme.onSurfaceVariant,
+                    text = { Text(stringResource(R.string.reader_contents)) },
                 )
-                else -> QuotesTab(ready, book, onCopyQuote, onQuoteClick, onRemoveQuote)
+                Tab(
+                    selected = tab == 1,
+                    onClick = { tab = 1 },
+                    unselectedContentColor = colorScheme.onSurfaceVariant,
+                    text = { Text(stringResource(R.string.reader_bookmarks)) },
+                )
+                Tab(
+                    selected = tab == 2,
+                    onClick = { tab = 2 },
+                    unselectedContentColor = colorScheme.onSurfaceVariant,
+                    text = { Text(stringResource(R.string.reader_quotes)) },
+                )
+            }
+
+            Box(Modifier.weight(1f)) {
+                when (tab) {
+                    0 -> ContentsTab(ready, currentChapter, chapterStartPages, onChapterClick)
+                    1 -> BookmarksTab(
+                        ready, book, bookmarked, onToggleBookmark,
+                        onBookmarkClick, onRemoveBookmark,
+                    )
+                    else -> QuotesTab(ready, book, onCopyQuote, onQuoteClick, onRemoveQuote)
+                }
             }
         }
     }
@@ -190,118 +203,109 @@ private fun ContentsTab(
     onChapterClick: (ReaderNavigationTarget) -> Unit,
 ) {
     val entries = ready.navigation
-    val depths = entries.map { it.depth }
-    val count = entries.size
-    val currentEntryIndex = entries.indexOfFirst { entry ->
-        (entry.target as? ReaderNavigationTarget.ReadingOrder)?.chapterIndex == currentChapter
-    }.takeIf { it >= 0 }
-
-    // A chapter is a group when the next chapter is nested deeper.
-    fun isGroup(index: Int): Boolean =
-        index + 1 < count && depths[index + 1] > depths[index]
-
-    /** Index of the nearest enclosing group of [index], or -1. */
-    fun parentOf(index: Int): Int {
-        val depth = depths[index]
-        for (i in index - 1 downTo 0) {
-            if (depths[i] < depth) return i
-        }
-        return -1
+    val tree = remember(entries) { ReaderContentsTree(entries.map { it.depth }) }
+    val currentEntryIndex = remember(entries, currentChapter) {
+        entries.indexOfFirst { entry ->
+            (entry.target as? ReaderNavigationTarget.ReadingOrder)?.chapterIndex == currentChapter
+        }.takeIf { it >= 0 }
     }
-
-    // Groups start collapsed, except the path to the current chapter.
-    val collapsed = remember(ready, currentChapter) {
-        val initiallyExpanded = buildSet {
-            currentEntryIndex?.let { current ->
-                var ancestor = parentOf(current)
-                while (ancestor >= 0) {
-                    add(ancestor)
-                    ancestor = parentOf(ancestor)
-                }
-                if (isGroup(current)) add(current)
-            }
-        }
+    val collapsed = remember(tree, currentEntryIndex) {
+        val expanded = currentEntryIndex?.let { tree.ancestorsOf(it) + it }.orEmpty().toSet()
         mutableStateMapOf<Int, Boolean>().apply {
-            for (i in 0 until count) {
-                if (isGroup(i)) put(i, i !in initiallyExpanded)
+            tree.isGroup.indices.forEach { index ->
+                if (tree.isGroup[index]) put(index, index !in expanded)
             }
         }
     }
-
-    fun visible(index: Int): Boolean {
-        var ancestor = parentOf(index)
-        while (ancestor >= 0) {
-            if (collapsed[ancestor] == true) return false
-            ancestor = parentOf(ancestor)
-        }
-        return true
+    val visibleIndices by remember(tree, collapsed) {
+        derivedStateOf { tree.visibleIndices { collapsed[it] == true } }
     }
-
     val haptics = LocalHapticFeedback.current
-    LazyColumn(contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp)) {
-        itemsIndexed(entries) { index, entry ->
-            if (!visible(index)) return@itemsIndexed
-            val isCurrent = (entry.target as? ReaderNavigationTarget.ReadingOrder)
-                ?.chapterIndex == currentChapter
-            val group = isGroup(index)
+    val scheme = MaterialTheme.colorScheme
+
+    LazyColumn(
+        contentPadding = PaddingValues(8.dp),
+        modifier = Modifier
+            .padding(top = 8.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(scheme.surfaceContainerLow),
+    ) {
+        itemsIndexed(
+            items = visibleIndices,
+            key = { _, index -> index },
+            contentType = { _, index -> if (tree.isGroup[index]) "group" else "chapter" },
+        ) { visibleIndex, index ->
+            val entry = entries[index]
+            val group = tree.isGroup[index]
+            val isCurrent = index == currentEntryIndex
+            val previous = visibleIndices.getOrNull(visibleIndex - 1)
+            val startsSection = group || previous != null && tree.parent[previous] != tree.parent[index]
+            val title = entry.title ?: stringResource(R.string.reader_chapter_n, index + 1)
+            val titleParts = remember(title, group) {
+                if (group) contentsGroupTitle(title) else null to title.replace('\n', ' ')
+            }
+            val rowBackground = contentsRowBackground(scheme, current = isCurrent, group = group)
+            // Spacing expresses hierarchy. A single rounded fill marks the
+            // current location; no duplicate stripe, check badge or row grid.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onChapterClick(entry.target) }
                     .padding(
-                        start = 8.dp + 18.dp * depths[index].coerceAtMost(4),
-                        end = 8.dp,
-                        top = 12.dp,
-                        bottom = 12.dp,
-                    ),
+                        start = 14.dp * tree.depth[index].coerceAtMost(4),
+                        top = if (startsSection && visibleIndex > 0) 10.dp else 2.dp,
+                        bottom = 2.dp,
+                    )
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(rowBackground)
+                    .semantics { selected = isCurrent }
+                    .clickable { onChapterClick(entry.target) }
+                    .heightIn(min = 48.dp)
+                    .padding(start = 14.dp, end = if (group) 2.dp else 14.dp),
             ) {
-                Text(
-                    text = (entry.title ?: stringResource(R.string.reader_chapter_n, index + 1))
-                        .replace('\n', ' '),
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isCurrent) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-                if (isCurrent) {
-                    Icon(
-                        Icons.Rounded.Check,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
+                Column(Modifier.weight(1f).padding(vertical = if (group) 14.dp else 12.dp)) {
+                    titleParts.first?.let { prefix ->
+                        Text(
+                            text = prefix,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = scheme.primary,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
+                    Text(
+                        text = titleParts.second,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (isCurrent || group) FontWeight.SemiBold else FontWeight.Normal,
+                        color = scheme.onSurface,
                     )
                 }
                 val page = (entry.target as? ReaderNavigationTarget.ReadingOrder)
-                    ?.chapterIndex
-                    ?.let { chapterStartPages?.getOrNull(it) }
+                    ?.chapterIndex?.let { chapterStartPages?.getOrNull(it) }
                 if (page != null) {
-                    Spacer(Modifier.width(10.dp))
+                    Spacer(Modifier.width(12.dp))
                     Text(
                         text = "${page + 1}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = scheme.onSurfaceVariant,
                     )
                 }
                 if (group) {
-                    Spacer(Modifier.width(6.dp))
                     val isCollapsed = collapsed[index] == true
-                    Icon(
-                        imageVector = Icons.Rounded.ExpandMore,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .clickable {
-                                haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                                collapsed[index] = !isCollapsed
-                            }
-                            .rotate(if (isCollapsed) 0f else 180f),
-                    )
+                    val rotation by animateFloatAsState(if (isCollapsed) 0f else 180f, label = "contentsChevron")
+                    IconButton(onClick = {
+                        haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                        collapsed[index] = !isCollapsed
+                    }) {
+                        Icon(
+                            Icons.Rounded.ExpandMore,
+                            contentDescription = stringResource(
+                                if (isCollapsed) R.string.reader_expand_section else R.string.reader_collapse_section,
+                            ),
+                            tint = scheme.primary,
+                            modifier = Modifier.rotate(rotation),
+                        )
+                    }
                 }
             }
         }

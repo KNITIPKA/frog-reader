@@ -141,8 +141,19 @@ object ReaderMetrics {
         return null
     }
 
-    /** Vertical padding above/below an element (top, bottom). */
-    fun verticalPaddings(element: ContentElement, fontSize: Float): Pair<Dp, Dp> {
+    /**
+     * Vertical padding above/below an element (top, bottom).
+     *
+     * With publisher formatting enabled, an authored CSS margin replaces the
+     * reader's semantic paragraph/heading gap on that edge. The authored
+     * numeric margin is deliberately not added here: PublisherBoxSpan owns it
+     * so a container range is measured and painted exactly once.
+     */
+    fun verticalPaddings(
+        element: ContentElement,
+        fontSize: Float,
+        bookStyles: Boolean = false,
+    ): Pair<Dp, Dp> {
         val base = when (element) {
             is ContentElement.Paragraph -> when (element.style) {
                 ParagraphStyle.NORMAL -> 3.dp
@@ -155,10 +166,17 @@ object ReaderMetrics {
             is ContentElement.Spacer -> 0.dp
             is ContentElement.Table -> 12.dp
         }
-        val block = blockOf(element) ?: return base to base
+        val block = blockOf(element)
+        val beforeSpecified = block?.spaceBeforeSpecified == true ||
+            (element as? ContentElement.Image)?.spaceBeforeSpecified == true
+        val afterSpecified = block?.spaceAfterSpecified == true ||
+            (element as? ContentElement.Image)?.spaceAfterSpecified == true
+        if (block == null && !beforeSpecified && !afterSpecified) return base to base
+        val baseTop = if (bookStyles && beforeSpecified) 0.dp else base
+        val baseBottom = if (bookStyles && afterSpecified) 0.dp else base
         // The book's own spacing wins when it asks for more than the default.
-        val top = maxOf(base, (fontSize * block.spaceBeforeEm).dp)
-        val bottom = maxOf(base, (fontSize * block.spaceAfterEm).dp)
+        val top = maxOf(baseTop, (fontSize * (block?.spaceBeforeEm ?: 0f)).dp)
+        val bottom = maxOf(baseBottom, (fontSize * (block?.spaceAfterEm ?: 0f)).dp)
         return top to bottom
     }
 

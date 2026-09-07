@@ -1,6 +1,8 @@
 package com.example.frogreader.reader
 
 import com.example.frogreader.ui.reader.ReaderNavigationPolicy
+import com.example.frogreader.ui.reader.BookPage
+import com.example.frogreader.ui.reader.ReaderReturnLocation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -8,6 +10,41 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReaderNavigationPolicyTest {
+
+    @Test
+    fun `return page distinguishes successive pages inside the same paragraph`() {
+        val pages = listOf(
+            BookPage(emptyList(), 0),
+            BookPage(emptyList(), 4, 0),
+            BookPage(emptyList(), 4, 120),
+            BookPage(emptyList(), 4, 240),
+            BookPage(emptyList(), 8),
+        )
+        fun pageNumber(item: Int, char: Int? = null) = ReaderNavigationPolicy.pageIndexForLocation(
+            pages, ReaderReturnLocation.Main(item, char),
+        )?.plus(1)
+
+        assertEquals(1, pageNumber(0))
+        assertEquals(2, pageNumber(4))
+        assertEquals(2, pageNumber(4, 119))
+        assertEquals(3, pageNumber(4, 120))
+        assertEquals(4, pageNumber(4, 250))
+        assertEquals(4, pageNumber(7))
+        assertEquals(5, pageNumber(8))
+    }
+
+    @Test
+    fun `return page follows new pagination while the source anchor stays unchanged`() {
+        val origin = ReaderReturnLocation.Main(4, 180)
+        val before = listOf(BookPage(emptyList(), 0), BookPage(emptyList(), 4, 120))
+        val after = listOf(
+            BookPage(emptyList(), 0), BookPage(emptyList(), 4, 60), BookPage(emptyList(), 4, 150),
+        )
+
+        assertEquals(1, ReaderNavigationPolicy.pageIndexForLocation(before, origin))
+        assertEquals(2, ReaderNavigationPolicy.pageIndexForLocation(after, origin))
+        assertNull(ReaderNavigationPolicy.pageIndexForLocation(emptyList(), origin))
+    }
 
     @Test
     fun `large scroll jump ignores ordinary steps and accepts long flings`() {

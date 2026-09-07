@@ -3,6 +3,10 @@ package com.example.frogreader.parser
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.LINK_TAG
 import com.example.frogreader.data.parser.EpubParser
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.LinkAnnotation
+import com.example.frogreader.ui.reader.FootnoteHandler
+import com.example.frogreader.ui.reader.withFootnoteLinks
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -28,6 +32,38 @@ class ContentsPageTest {
     }
 
     @Test
+    fun `real contents links preserve display identity across scrolling recompositions`() {
+        val file = book()
+        assumeTrue(file.exists() && file.canRead())
+        val content = EpubParser.parseContent(file, tempFolder.newFolder())
+        val chapter = content.chapters.first { ch ->
+            ch.elements.any { it is ContentElement.Heading && it.text.contains("CONTENTS", true) }
+        }
+        val texts = chapter.elements.filterIsInstance<ContentElement.Paragraph>().map { it.text }
+            .filter { it.getStringAnnotations(LINK_TAG, 0, it.length).isNotEmpty() }
+        val starts = content.chapters.runningFold(0) { start, ch -> start + ch.elements.size }
+        val targets = content.linkTargets.mapValues { (_, target) -> starts[target.first] + target.second }
+        var visited: Int? = null
+        val handler = FootnoteHandler(
+            notes = emptyMap(), onNote = { _, _ -> }, linkTargets = targets, onNavigate = { visited = it },
+        )
+        assertTrue(texts.size >= 20)
+        texts.forEach { raw ->
+            val display = raw.withFootnoteLinks(Color.Blue, handler)
+            assertEquals(raw.text, display.text)
+            repeat(10) {
+                assertEquals("unchanged link text must hit the layout cache", display,
+                    raw.withFootnoteLinks(Color.Blue, handler))
+            }
+            display.getLinkAnnotations(0, display.length).forEach { range ->
+                val link = range.item as LinkAnnotation.Clickable
+                link.linkInteractionListener!!.onClick(link)
+                assertEquals(targets.getValue(link.tag), visited)
+            }
+        }
+    }
+
+    @Test
     fun `contents entries are compact, linked, and the ornament stays small`() {
         val file = book()
         assumeTrue(file.exists() && file.canRead())
@@ -37,15 +73,23 @@ class ContentsPageTest {
             ch.elements.any { it is ContentElement.Heading && it.text.contains("CONTENTS", true) }
         }
 
-        // ".5em" bottom margins must parse as 0.5em, not 5em (the leading-dot
-        // number bug made every gap ten times too wide and clamped to 3em).
+        // The entry is font-size:.833em and margin-bottom:.5em. Element-local
+        // em must normalize to .4165 root-em (and the leading dot must not be
+        // misread as 5em, which once made every gap ten times too wide).
         val entry = chapter.elements.filterIsInstance<ContentElement.Paragraph>()
             .first { it.text.text.startsWith("Also by Adam Alter") }
-        assertEquals(0.5f, entry.block!!.spaceAfterEm, 0.001f)
+        val entryIndex = chapter.elements.indexOf(entry)
+        val entryBoxes = chapter.publisherBoxes.filter { box ->
+            entryIndex in box.startElement until box.endElementExclusive
+        }
+        assertTrue(entryBoxes.any {
+            kotlin.math.abs(it.style.marginBottomEm - 0.4165f) < 0.001f
+        })
         // The stylesheet uses physical `margin-left`, not logical
         // `margin-inline-start`; it must stay on the left in an RTL layout.
-        assertEquals(0.0f, entry.block!!.indentStartEm, 0.001f)
-        assertEquals(1.0f, entry.block!!.indentLeftEm, 0.001f)
+        assertTrue(entryBoxes.any {
+            kotlin.math.abs(it.style.marginLeftEm - 0.833f) < 0.001f
+        })
 
         // The ornament is `height: 1em` — it must not fill the column.
         val ornament = chapter.elements.filterIsInstance<ContentElement.Image>().first()

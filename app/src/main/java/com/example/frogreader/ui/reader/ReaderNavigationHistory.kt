@@ -42,6 +42,8 @@ internal class ReaderNavigationHistory(
     val canGoBack: Boolean get() = entries.isNotEmpty()
     val size: Int get() = entries.size
 
+    fun peek(): ReaderReturnLocation? = entries.lastOrNull()
+
     fun push(location: ReaderReturnLocation) {
         if (entries.lastOrNull() == location) return
         if (entries.size == maxEntries) entries.removeFirst()

@@ -1,6 +1,7 @@
 package com.example.frogreader.reader
 
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.graphics.Color
 import com.example.frogreader.data.model.BookContent
 import com.example.frogreader.data.model.Chapter
@@ -15,11 +16,37 @@ import com.example.frogreader.ui.reader.withFootnoteLinks
 import com.example.frogreader.ui.reader.withSearchHighlight
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class InternalLinkHandlerTest {
+
+    @Test
+    fun `redecorating contents keeps link identity and routes each destination`() {
+        val raw = AnnotatedString.Builder().apply {
+            append("Chapter one Chapter two")
+            addStringAnnotation(com.example.frogreader.data.model.LINK_TAG, "one", 0, 11)
+            addStringAnnotation(com.example.frogreader.data.model.LINK_TAG, "two", 12, 23)
+        }.toAnnotatedString()
+        val visited = mutableListOf<Int>()
+        val handler = FootnoteHandler(
+            notes = emptyMap(), onNote = { _, _ -> },
+            linkTargets = mapOf("one" to 10, "two" to 40), onNavigate = { visited += it },
+        )
+        val first = raw.withFootnoteLinks(Color.Blue, handler)
+        val repeated = raw.withFootnoteLinks(Color.Blue, handler)
+
+        assertEquals("scroll recomposition must not invalidate the text layout", first, repeated)
+        val links = first.getLinkAnnotations(0, first.length).map { it.item as LinkAnnotation.Clickable }
+        assertSame(links[0].linkInteractionListener, links[1].linkInteractionListener)
+        links.forEach { it.linkInteractionListener!!.onClick(it) }
+        assertEquals(listOf(10, 40), visited)
+        assertEquals("theme changes still recolor links", Color.Red,
+            (raw.withFootnoteLinks(Color.Red, handler).getLinkAnnotations(0, raw.length).first().item
+                as LinkAnnotation.Clickable).styles!!.style!!.color)
+    }
 
     private fun note(text: String) = NoteDocument(
         listOf(ContentElement.Paragraph(AnnotatedString(text))),

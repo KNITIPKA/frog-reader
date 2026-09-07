@@ -89,6 +89,86 @@ class ReaderMetricsTest {
     }
 
     @Test
+    fun `authored vertical margins replace native gaps only in publisher mode`() {
+        val paragraph = ContentElement.Paragraph(
+            androidx.compose.ui.text.AnnotatedString("Publisher spaced"),
+            block = BlockStyle(
+                spaceBeforeSpecified = true,
+                spaceAfterSpecified = true,
+            ),
+        )
+
+        val readerGaps = ReaderMetrics.verticalPaddings(
+            paragraph,
+            fontSize = 18f,
+            bookStyles = false,
+        )
+        val publisherGaps = ReaderMetrics.verticalPaddings(
+            paragraph,
+            fontSize = 18f,
+            bookStyles = true,
+        )
+
+        assertEquals(3f, readerGaps.first.value, 0.001f)
+        assertEquals(3f, readerGaps.second.value, 0.001f)
+        assertEquals(0f, publisherGaps.first.value, 0.001f)
+        assertEquals(0f, publisherGaps.second.value, 0.001f)
+    }
+
+    @Test
+    fun `authored margin presence is edge specific and legacy spacing remains intact`() {
+        val oneAuthoredEdge = ContentElement.Heading(
+            "One edge",
+            level = 2,
+            block = BlockStyle(spaceBeforeSpecified = true),
+        )
+        val authored = ReaderMetrics.verticalPaddings(
+            oneAuthoredEdge,
+            fontSize = 20f,
+            bookStyles = true,
+        )
+        assertEquals(0f, authored.first.value, 0.001f)
+        assertEquals(28f, authored.second.value, 0.001f)
+
+        val legacySemanticSpacing = ContentElement.Paragraph(
+            androidx.compose.ui.text.AnnotatedString("Legacy spacing"),
+            block = BlockStyle(spaceBeforeEm = 2f),
+        )
+        val legacy = ReaderMetrics.verticalPaddings(
+            legacySemanticSpacing,
+            fontSize = 20f,
+            bookStyles = true,
+        )
+        assertEquals(40f, legacy.first.value, 0.001f)
+        assertEquals(3f, legacy.second.value, 0.001f)
+    }
+
+    @Test
+    fun `standalone image authored margins replace native image gaps`() {
+        val image = ContentElement.Image(
+            path = "/nonexistent/image.png",
+            spaceBeforeSpecified = true,
+            spaceAfterSpecified = true,
+        )
+
+        val readerGaps = ReaderMetrics.verticalPaddings(
+            image,
+            fontSize = 18f,
+            bookStyles = false,
+        )
+        val publisherGaps = ReaderMetrics.verticalPaddings(
+            image,
+            fontSize = 18f,
+            bookStyles = true,
+        )
+
+        assertEquals(12f, readerGaps.first.value, 0.001f)
+        assertEquals(12f, readerGaps.second.value, 0.001f)
+        assertEquals(0f, publisherGaps.first.value, 0.001f)
+        assertEquals(0f, publisherGaps.second.value, 0.001f)
+    }
+
+    @Test
     fun `pagination and rendering inputs resolve the same heading metrics`() {
         val heading = ContentElement.Heading("Split heading", level = 5)
         // Pagination measures the whole element (paragraph start = true),

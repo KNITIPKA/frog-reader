@@ -6,6 +6,17 @@ import kotlin.math.roundToInt
 /** Pure policies shared by reader surfaces and covered without Compose UI. */
 internal object ReaderNavigationPolicy {
 
+    /** Shared by the return label and the actual seek, including split paragraphs. */
+    fun pageIndexForLocation(pages: List<BookPage>, location: ReaderReturnLocation.Main): Int? {
+        if (pages.isEmpty()) return null
+        val item = location.flatItemIndex
+        val char = location.charOffset ?: 0
+        return pages.indexOfLast { page ->
+            page.firstItemIndex < item ||
+                (page.firstItemIndex == item && page.firstCharOffset <= char)
+        }.coerceAtLeast(0)
+    }
+
     /** A contextual return is useful only after more than two screenfuls. */
     fun isLargeScrollJump(travelledPx: Float, viewportPx: Int): Boolean =
         travelledPx.isFinite() && viewportPx > 0 &&

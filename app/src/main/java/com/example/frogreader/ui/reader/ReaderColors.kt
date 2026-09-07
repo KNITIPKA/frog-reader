@@ -1,13 +1,15 @@
 package com.example.frogreader.ui.reader
 
 import androidx.compose.material3.ColorScheme
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import com.example.frogreader.data.AppTheme
 import com.example.frogreader.ui.theme.colorSchemeFor
 import com.example.frogreader.ui.theme.isDark
 
 /** Colors of the reading surface; chrome = the bars floating above the text. */
-class ReaderColors(
+@Immutable
+data class ReaderColors(
     val background: Color,
     val text: Color,
     val secondaryText: Color,

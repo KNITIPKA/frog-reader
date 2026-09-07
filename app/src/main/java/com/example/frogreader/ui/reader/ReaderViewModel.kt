@@ -44,6 +44,14 @@ import java.util.UUID
 class ReaderItem(
     val chapterIndex: Int,
     val element: ContentElement,
+    /** Nested publisher boxes, ordered outermost to innermost. */
+    val publisherBoxes: List<ReaderPublisherBox> = emptyList(),
+    /** Figure-like float rendered beside this paragraph. */
+    val publisherFloat: ReaderPublisherFloat? = null,
+    /** Source leaf retained for anchors/search but removed from normal flow. */
+    val suppressedByPublisherFloat: Boolean = false,
+    val publisherClearBefore: com.example.frogreader.data.model.PublisherClear =
+        com.example.frogreader.data.model.PublisherClear.NONE,
 )
 
 /** One transient document that is intentionally outside normal reading order. */
@@ -95,6 +103,8 @@ sealed interface ReaderState {
         val publisherStyle: com.example.frogreader.data.model.PublisherStyle? = null,
         /** Embedded font family name → loaded font (publisher's formatting). */
         val bookFonts: Map<String, androidx.compose.ui.text.font.FontFamily> = emptyMap(),
+        /** Stable family/style + file-content signature for pagination caches. */
+        val embeddedFontSignature: String = embeddedFontSignature(emptyList()),
         /** The book's language tag ("ru", "uk", …) — drives hyphenation. */
         val language: String? = null,
         /** Resolved logical page order; never DEFAULT inside the active reader. */
@@ -170,55 +180,25 @@ class ReaderViewModel(
     var currentScrollOffset: Int = 0
         private set
 
+    // Bounded, session-only history. Chrome visibility owns presentation;
+    // timers must not remove the return action while someone is using it.
     private val navigationHistory = ReaderNavigationHistory()
-    private val _navigationBackAvailable = MutableStateFlow(false)
-    private val _navigationReturnVisible = MutableStateFlow(false)
-    private var navigationPromptJob: Job? = null
-    private var navigationExpiryJob: Job? = null
-    /** Whether an in-book jump has an exact origin the reader can return to. */
-    val navigationBackAvailable: StateFlow<Boolean> = _navigationBackAvailable.asStateFlow()
-    /** Short-lived visual affordance; history itself outlives the chip. */
-    val navigationReturnVisible: StateFlow<Boolean> = _navigationReturnVisible.asStateFlow()
+    private val _navigationReturnLocation = MutableStateFlow<ReaderReturnLocation?>(null)
+    /** The next return destination, also used to label the return control. */
+    val navigationReturnLocation = _navigationReturnLocation.asStateFlow()
 
     fun rememberNavigationOrigin(location: ReaderReturnLocation) {
         navigationHistory.push(location)
-        _navigationBackAvailable.value = navigationHistory.canGoBack
-        revealNavigationReturn()
-        navigationExpiryJob?.cancel()
-        navigationExpiryJob = viewModelScope.launch {
-            delay(NAVIGATION_HISTORY_TTL_MS)
-            clearNavigationHistory()
-        }
+        _navigationReturnLocation.value = navigationHistory.peek()
     }
 
     fun takeNavigationOrigin(): ReaderReturnLocation? = navigationHistory.pop().also {
-        _navigationBackAvailable.value = navigationHistory.canGoBack
-        if (navigationHistory.canGoBack) revealNavigationReturn() else hideNavigationReturn()
-    }
-
-    /** Re-show the chip when the user deliberately opens the reader chrome. */
-    fun revealNavigationReturn() {
-        if (!navigationHistory.canGoBack) return
-        navigationPromptJob?.cancel()
-        _navigationReturnVisible.value = true
-        navigationPromptJob = viewModelScope.launch {
-            delay(NAVIGATION_PROMPT_MS)
-            _navigationReturnVisible.value = false
-        }
-    }
-
-    private fun hideNavigationReturn() {
-        navigationPromptJob?.cancel()
-        navigationPromptJob = null
-        _navigationReturnVisible.value = false
+        _navigationReturnLocation.value = navigationHistory.peek()
     }
 
     fun clearNavigationHistory() {
         navigationHistory.clear()
-        navigationExpiryJob?.cancel()
-        navigationExpiryJob = null
-        _navigationBackAvailable.value = false
-        hideNavigationReturn()
+        _navigationReturnLocation.value = null
     }
 
     /** Updates the exact transient position without scheduling a disk write. */
@@ -393,6 +373,9 @@ class ReaderViewModel(
                                 align = cell.align,
                                 header = cell.header,
                                 block = cell.block,
+                                publisherBox = cell.publisherBox,
+                                publisherPaddingSpecified = cell.publisherPaddingSpecified,
+                                publisherBorderSpecified = cell.publisherBorderSpecified,
                             )
                         },
                         isHeader = row.isHeader,
@@ -405,16 +388,63 @@ class ReaderViewModel(
             chapterStarts += items.size
             chapterTitles += chapter.title
             chapterDepths += chapter.depth
-            chapter.elements.forEach { element ->
-                items += ReaderItem(index, adjusted(element))
+            val adjustedElements = chapter.elements.map(::adjusted)
+            val plan = planPublisherChapter(adjustedElements, chapter.publisherBoxes)
+            val itemOffset = items.size
+            adjustedElements.forEachIndexed { elementIndex, element ->
+                val plannedFloat = plan.floatByTarget[elementIndex]
+                items += ReaderItem(
+                    chapterIndex = index,
+                    element = element,
+                    publisherBoxes = plan.boxesByElement[elementIndex],
+                    publisherFloat = plannedFloat?.let { float ->
+                        ReaderPublisherFloat(
+                            side = float.side,
+                            style = float.style,
+                            contents = float.contents.map { content ->
+                                ReaderPublisherFloatContent(
+                                    sourceItemIndex = itemOffset + content.sourceElementIndex,
+                                    element = content.element,
+                                    publisherBoxes = content.publisherBoxes,
+                                )
+                            },
+                        )
+                    },
+                    suppressedByPublisherFloat = elementIndex in plan.suppressedElements,
+                    publisherClearBefore = plan.clearBefore[elementIndex],
+                )
             }
         }
 
         val linkedDocuments = content.linkedDocuments.mapValues { (_, document) ->
+            val adjustedElements = document.elements.map(::adjusted)
+            val plan = planPublisherChapter(adjustedElements, document.publisherBoxes)
             ReaderLinkedDocument(
                 id = document.id,
                 title = document.title,
-                items = document.elements.map { ReaderItem(0, adjusted(it)) },
+                items = adjustedElements.mapIndexed { elementIndex, element ->
+                    val plannedFloat = plan.floatByTarget[elementIndex]
+                    ReaderItem(
+                        chapterIndex = 0,
+                        element = element,
+                        publisherBoxes = plan.boxesByElement[elementIndex],
+                        publisherFloat = plannedFloat?.let { float ->
+                            ReaderPublisherFloat(
+                                side = float.side,
+                                style = float.style,
+                                contents = float.contents.map { content ->
+                                    ReaderPublisherFloatContent(
+                                        sourceItemIndex = content.sourceElementIndex,
+                                        element = content.element,
+                                        publisherBoxes = content.publisherBoxes,
+                                    )
+                                },
+                            )
+                        },
+                        suppressedByPublisherFloat = elementIndex in plan.suppressedElements,
+                        publisherClearBefore = plan.clearBefore[elementIndex],
+                    )
+                },
             )
         }
         val navigation = content.navigation.mapNotNull { entry ->
@@ -467,7 +497,10 @@ class ReaderViewModel(
                     emptyMap()
                 } else {
                     content.notes.mapValues { (_, note) ->
-                        NoteDocument(note.elements.map(::adjusted))
+                        NoteDocument(
+                            elements = note.elements.map(::adjusted),
+                            publisherBoxes = note.publisherBoxes,
+                        )
                     }
                 },
                 // (chapter, element) → flat index the readers actually seek to.
@@ -484,6 +517,7 @@ class ReaderViewModel(
                 },
                 navigation = navigation,
                 bookFonts = loadBookFonts(content),
+                embeddedFontSignature = embeddedFontSignature(content.fonts),
                 language = content.language,
                 pageProgression = ReaderProgression.resolve(
                     content.pageProgression,
@@ -709,9 +743,6 @@ class ReaderViewModel(
     }
 
     companion object {
-        private const val NAVIGATION_PROMPT_MS = 12_000L
-        private const val NAVIGATION_HISTORY_TTL_MS = 5 * 60_000L
-
         fun factory(bookId: String) = viewModelFactory {
             initializer {
                 val app = this[APPLICATION_KEY] as FrogReaderApp

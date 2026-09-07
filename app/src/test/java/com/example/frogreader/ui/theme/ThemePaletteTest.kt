@@ -5,11 +5,39 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import com.example.frogreader.data.AppTheme
 import com.example.frogreader.ui.reader.readerColors
+import com.example.frogreader.ui.reader.contentsRowBackground
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import androidx.compose.ui.graphics.luminance
 import org.junit.Test
 
 class ThemePaletteTest {
+
+    @Test
+    fun `reader colors compare by value to preserve decorated text caches`() {
+        AppTheme.entries.forEach { theme ->
+            assertEquals(readerColors(theme), readerColors(theme))
+        }
+    }
+
+    @Test
+    fun `contents title foregrounds contrast against all three reader palettes`() {
+        fun contrast(a: Color, b: Color): Float {
+            val x = a.luminance()
+            val y = b.luminance()
+            return (maxOf(x, y) + 0.05f) / (minOf(x, y) + 0.05f)
+        }
+        AppTheme.entries.forEach { theme ->
+            val scheme = colorSchemeFor(theme)
+            assertTrue("$theme chapter", contrast(scheme.onSurface, scheme.surfaceContainerLow) >= 4.5f)
+            val group = contentsRowBackground(scheme, current = false, group = true)
+            val current = contentsRowBackground(scheme, current = true, group = false)
+            assertTrue("$theme group", contrast(scheme.onSurface, group) >= 4.5f)
+            assertTrue("$theme current", contrast(scheme.onSurface, current) >= 4.5f)
+            assertTrue("$theme section label", contrast(scheme.primary, group) >= 4.5f)
+        }
+    }
 
     private val systemBlueScheme = lightColorScheme(
         primary = Color(0xFF315DA8),

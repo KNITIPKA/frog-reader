@@ -7,10 +7,14 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -37,6 +41,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -61,6 +67,7 @@ import androidx.compose.foundation.text.TextAutoSize
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -97,6 +104,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -124,6 +132,12 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.draw.dropShadow
+import androidx.compose.ui.graphics.shadow.Shadow
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.LinkInteractionListener
@@ -137,6 +151,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
@@ -256,6 +271,7 @@ fun ReaderScreen(
             appSettings = appSettings,
             chromeVisible = chromeVisible,
             onToggleChrome = { chromeVisible = !chromeVisible },
+            onShowChrome = { chromeVisible = true },
             onBack = onBack,
         )
     }
@@ -280,18 +296,16 @@ private fun ReaderContent(
     appSettings: AppSettings,
     chromeVisible: Boolean,
     onToggleChrome: () -> Unit,
+    onShowChrome: () -> Unit,
     onBack: () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
     val clipboard = LocalClipboardManager.current
 
-    val colors = readerColors(
-        theme = appSettings.theme,
-        // Resolve against the page's light/dark character, not the current
-        // system mode: a Beige page still needs a light Material You accent
-        // even when the surrounding app is following dark mode.
-        chromeScheme = appColorSchemeFor(appSettings.theme, appSettings.dynamicColor),
-    )
+    val chromeScheme = appColorSchemeFor(appSettings.theme, appSettings.dynamicColor)
+    val colors = remember(appSettings.theme, chromeScheme) {
+        readerColors(theme = appSettings.theme, chromeScheme = chromeScheme)
+    }
     val liveBook by viewModel.book.collectAsStateWithLifecycle()
 
     // How far the settings drawer is pulled up (0 closed → 1 half-open and
@@ -468,8 +482,22 @@ private fun ReaderContent(
     LaunchedEffect(settings.readingMode) { selection.clear() }
     // Tappable footnote references ([53] → bottom sheet with the note).
     var noteToShow by remember { mutableStateOf<VisibleNote?>(null) }
-    val navigationBackAvailable by viewModel.navigationBackAvailable.collectAsStateWithLifecycle()
-    val navigationReturnVisible by viewModel.navigationReturnVisible.collectAsStateWithLifecycle()
+    val navigationReturnLocation by viewModel.navigationReturnLocation.collectAsStateWithLifecycle()
+    val navigationBackAvailable = navigationReturnLocation != null
+    val pagination by viewModel.pagination.collectAsStateWithLifecycle()
+    val returnPageNumber = if (settings.readingMode == ReadingMode.PAGES) {
+        val origin = navigationReturnLocation as? ReaderReturnLocation.Main
+        val pages = pagination?.takeIf { !it.partial }?.pages
+        if (origin != null && pages != null) {
+            ReaderNavigationPolicy.pageIndexForLocation(pages, origin)?.plus(1)
+        } else null
+    } else null
+    val currentReturnLabel = returnPageNumber?.let { stringResource(R.string.reader_return_page, it) }
+        ?: stringResource(R.string.reader_return)
+    // The final pop clears the destination before AnimatedVisibility finishes
+    // its exit. Keep the last real label until that button leaves the screen.
+    var returnLabel by remember { mutableStateOf(currentReturnLabel) }
+    if (navigationBackAvailable) returnLabel = currentReturnLabel
     val readerDensity = LocalDensity.current
     val readingTopReferencePx = with(readerDensity) {
         (WindowInsets.systemBarsIgnoringVisibility.asPaddingValues()
@@ -568,16 +596,20 @@ private fun ReaderContent(
         if (origin == target) return
         viewModel.rememberNavigationOrigin(origin)
         restoreReturnLocation(target)
+        if (target is ReaderReturnLocation.Main) onShowChrome()
     }
 
     fun navigateBackInBook() {
         val target = viewModel.takeNavigationOrigin() ?: return
         haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
         restoreReturnLocation(target)
+        if (target is ReaderReturnLocation.Main) onShowChrome()
     }
 
     BackHandler(enabled = selection.active) { selection.clear() }
-    BackHandler(enabled = !selection.active && (linkedDocumentId != null || navigationBackAvailable)) {
+    // History belongs to the explicit return control. Android Back in the
+    // main text must reach the app navigator, even after many in-book jumps.
+    BackHandler(enabled = !selection.active && linkedDocumentId != null) {
         if (navigationBackAvailable) {
             navigateBackInBook()
         } else {
@@ -681,7 +713,6 @@ private fun ReaderContent(
                     seekPosition = seekPosition,
                     onSeekPositionConsumed = { seekPosition = null },
                     onToggleChrome = {
-                        if (!chromeVisible) viewModel.revealNavigationReturn()
                         onToggleChrome()
                         searchHighlight = null
                     },
@@ -710,7 +741,6 @@ private fun ReaderContent(
                     seekPosition = seekPosition,
                     onSeekPositionConsumed = { seekPosition = null },
                     onToggleChrome = {
-                        if (!chromeVisible) viewModel.revealNavigationReturn()
                         onToggleChrome()
                         searchHighlight = null
                     },
@@ -786,7 +816,6 @@ private fun ReaderContent(
             it.flatIndex in displayedIndex.intValue..(displayedIndex.intValue + viewModel.bookmarkWindow)
         } == true
 
-        val pagination by viewModel.pagination.collectAsStateWithLifecycle()
         val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
         val fullPages = pagination?.takeIf { !it.partial }?.pages
         // The last complete pagination: keeps the "go to page" card in place
@@ -906,9 +935,12 @@ private fun ReaderContent(
             return true
         }
 
-        var bottomBarHeightPx by remember { mutableIntStateOf(0) }
         ReaderBottomBar(
             visible = chromeVisible,
+            showReturnButton = navigationBackAvailable && linkedDocumentId == null &&
+                noteToShow == null && !searchVisible && !selection.active,
+            returnLabel = returnLabel,
+            onReturn = ::navigateBackInBook,
             // The pull-up panel is physically above the selection toolbar.
             // Its later-composed BackHandler must therefore close the panel
             // first; a second Back can clear the still-valid selection.
@@ -998,7 +1030,6 @@ private fun ReaderContent(
                     }
                 }
             },
-            onExitFinished = { bottomBarHeightPx = 0 },
             settings = settings,
             appSettings = appSettings,
             brightness = brightness,
@@ -1047,48 +1078,11 @@ private fun ReaderContent(
                 )
                 viewModel.toggleBookmarkAt(displayedIndex.intValue)
             },
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .onSizeChanged { bottomBarHeightPx = it.height },
+            modifier = Modifier.align(Alignment.BottomCenter),
         )
-
-        // Keep using the measured bar height for its entire exit animation.
-        // Switching to the navigation inset as soon as chromeVisible becomes
-        // false would let the button jump down through the still-visible bar.
-        val returnBottomPadding = if (bottomBarHeightPx > 0) {
-            with(LocalDensity.current) { bottomBarHeightPx.toDp() } + 10.dp
-        } else {
-            WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 18.dp
-        }
-        val returnRightPadding = WindowInsets.navigationBars.asPaddingValues()
-            .calculateRightPadding(LayoutDirection.Ltr) + 16.dp
-
-        AnimatedVisibility(
-            visible = navigationReturnVisible && navigationBackAvailable && linkedDocumentId == null &&
-                noteToShow == null && !searchVisible && !selection.active &&
-                panelFraction.floatValue < 0.05f &&
-                (!chromeVisible || bottomBarHeightPx > 0),
-            modifier = Modifier
-                // This control is intentionally physical-right, not logical
-                // "end": it remains under a right thumb even when the app or
-                // the current book uses an RTL layout direction.
-                .align(AbsoluteAlignment.BottomRight)
-                .absolutePadding(
-                    right = returnRightPadding,
-                    bottom = returnBottomPadding,
-                ),
-            enter = fadeIn() + slideInVertically { it / 2 },
-            exit = fadeOut() + slideOutVertically { it / 2 },
-        ) {
-            ReaderReturnButton(
-                colors = colors,
-                onClick = ::navigateBackInBook,
-            )
-        }
     }
 
-    val paginationHolder by viewModel.pagination.collectAsStateWithLifecycle()
-    if (settings.readingMode == ReadingMode.PAGES && paginationHolder == null) {
+    if (settings.readingMode == ReadingMode.PAGES && pagination == null) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -1115,7 +1109,8 @@ private fun ReaderContent(
                     bookFonts = ready.bookFonts,
                     language = ready.language,
                     footnotes = footnotes,
-                    showReturnButton = navigationReturnVisible && navigationBackAvailable,
+                    showReturnButton = navigationBackAvailable,
+                    returnLabel = returnLabel,
                     onReturn = ::navigateBackInBook,
                     onBack = {
                         if (navigationBackAvailable) {
@@ -1154,8 +1149,8 @@ private fun ReaderContent(
             language = ready.language,
             footnotes = footnotes,
             systemBackReturnsToPreviousNote = returnToPreviousNote,
-            showReturnButton = note.contextualReturn &&
-                navigationReturnVisible && navigationBackAvailable,
+            showReturnButton = note.contextualReturn && navigationBackAvailable,
+            returnLabel = returnLabel,
             onReturn = ::navigateBackInBook,
             onPositionChanged = { item, offset ->
                 noteToShow = noteToShow?.let { current ->
@@ -1181,36 +1176,83 @@ internal fun shouldReturnToPreviousNote(
     navigationBackAvailable: Boolean,
 ): Boolean = contextualReturn && navigationBackAvailable
 
-/** Thumb-reachable, contextual return affordance after an in-book jump. */
+/** Explicit in-book return; visually distinct from the reader's exit arrow. */
+@Composable
+private fun ReaderReturnAffordance(
+    visible: Boolean,
+    colors: ReaderColors,
+    onClick: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    val transition = remember { MutableTransitionState(false) }
+    transition.targetState = visible
+    AnimatedVisibility(
+        visibleState = transition,
+        modifier = modifier,
+        enter = scaleIn(
+            initialScale = 0.9f,
+            animationSpec = keyframes {
+                durationMillis = 180
+                0.9f at 0
+                1.025f at 100
+                1f at 180
+            },
+        ) + fadeIn(tween(70)),
+        exit = scaleOut(targetScale = 0.94f, animationSpec = tween(100)) + fadeOut(tween(100)),
+    ) {
+        // The explicit blur extends 6dp plus a 2dp offset; 12dp of space keeps
+        // it entirely inside the animated layer instead of cutting off a
+        // platform elevation shadow whose extent depends on screen position.
+        Box(Modifier.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.padding(12.dp)) {
+            ReaderReturnButton(colors = colors, onClick = onClick, label = label, enabled = visible)
+        }
+    }
+}
+
 @Composable
 private fun ReaderReturnButton(
     colors: ReaderColors,
     onClick: () -> Unit,
+    label: String,
+    enabled: Boolean,
 ) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(24.dp),
-        color = colors.chrome,
-        contentColor = colors.onChrome,
-        shadowElevation = 6.dp,
+    val shape = RoundedCornerShape(24.dp)
+    // Even a non-clickable Material Surface installs a pointer-input barrier.
+    // Use a drawing-only Box so the exit animation cannot intercept bar taps.
+    Box(
+        modifier = Modifier
+            .dropShadow(
+                shape,
+                Shadow(radius = 6.dp, offset = DpOffset(0.dp, 2.dp), color = Color.Black.copy(alpha = 0.16f)),
+            )
+            .background(colors.chrome, shape)
+            .clip(shape)
+            .then(
+                if (enabled) Modifier.clickable(role = Role.Button, onClick = onClick)
+                else Modifier.clearAndSetSemantics {},
+            ),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .height(48.dp)
+                .heightIn(min = 48.dp)
                 .padding(horizontal = 16.dp),
         ) {
             Icon(
-                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                imageVector = Icons.AutoMirrored.Rounded.Undo,
                 contentDescription = null,
                 tint = colors.accent,
                 modifier = Modifier.size(20.dp),
             )
             Spacer(Modifier.width(8.dp))
             Text(
-                text = stringResource(R.string.reader_return),
+                text = label,
+                color = colors.onChrome,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -1233,6 +1275,7 @@ private fun NoteSheet(
     footnotes: FootnoteHandler?,
     systemBackReturnsToPreviousNote: Boolean,
     showReturnButton: Boolean,
+    returnLabel: String,
     onReturn: () -> Unit,
     onPositionChanged: (itemIndex: Int, scrollOffset: Int) -> Unit,
     onDismiss: () -> Unit,
@@ -1254,6 +1297,9 @@ private fun NoteSheet(
         // own list state. Re-keying the whole sheet would make nested notes
         // disappear and slide in again instead of replacing their content.
         key(noteKey) {
+            val notePlan = remember(note) {
+                planPublisherChapter(note.elements, note.publisherBoxes)
+            }
             // Lazy index 0 is the synthetic title; note elements occupy 1..N.
             // The saved position is already a LazyColumn index, so N is valid.
             val initialIndex = noteInitialLazyIndex(initialItem, note.elements.size)
@@ -1295,6 +1341,10 @@ private fun NoteSheet(
                         )
                     }
                     items(note.elements.size, key = { it }) { index ->
+                        if (index in notePlan.suppressedElements && settings.bookStyles) {
+                            return@items
+                        }
+                        val plannedFloat = notePlan.floatByTarget[index]
                         RenderPart(
                             element = note.elements[index],
                             textOverride = null,
@@ -1308,19 +1358,32 @@ private fun NoteSheet(
                             bookFonts = bookFonts,
                             language = language,
                             footnotes = footnotes,
+                            publisherBoxes = notePlan.boxesByElement[index],
+                            publisherFloat = plannedFloat?.let { float ->
+                                ReaderPublisherFloat(
+                                    side = float.side,
+                                    style = float.style,
+                                    contents = float.contents.map { content ->
+                                        ReaderPublisherFloatContent(
+                                            sourceItemIndex = content.sourceElementIndex,
+                                            element = content.element,
+                                            publisherBoxes = content.publisherBoxes,
+                                        )
+                                    },
+                                )
+                            },
                         )
                     }
                 }
-                androidx.compose.animation.AnimatedVisibility(
+                ReaderReturnAffordance(
                     visible = showReturnButton,
+                    colors = colors,
+                    onClick = onReturn,
+                    label = returnLabel,
                     modifier = Modifier
                         .align(AbsoluteAlignment.BottomRight)
                         .absolutePadding(right = returnRightPadding, bottom = 12.dp),
-                    enter = fadeIn() + slideInVertically { it / 2 },
-                    exit = fadeOut() + slideOutVertically { it / 2 },
-                ) {
-                    ReaderReturnButton(colors = colors, onClick = onReturn)
-                }
+                )
             }
         }
     }
@@ -1349,6 +1412,7 @@ private fun LinkedDocumentOverlay(
     language: String?,
     footnotes: FootnoteHandler?,
     showReturnButton: Boolean,
+    returnLabel: String,
     onReturn: () -> Unit,
     onBack: () -> Unit,
     onPositionChanged: (itemIndex: Int, scrollOffset: Int) -> Unit,
@@ -1356,7 +1420,7 @@ private fun LinkedDocumentOverlay(
     val initialIndex = if (document.items.isEmpty()) {
         0
     } else {
-        initialItem.coerceIn(document.items.indices)
+        resolvePublisherFloatTarget(document.items, initialItem)
     }
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialIndex,
@@ -1366,7 +1430,7 @@ private fun LinkedDocumentOverlay(
         val target = seek
         if (target != null && target.documentId == document.id && document.items.isNotEmpty()) {
             listState.scrollToItem(
-                target.itemIndex.coerceIn(document.items.indices),
+                resolvePublisherFloatTarget(document.items, target.itemIndex),
                 target.scrollOffset.coerceAtLeast(0),
             )
             onSeekConsumed()
@@ -1395,8 +1459,12 @@ private fun LinkedDocumentOverlay(
             ),
         ) {
             items(document.items.size, key = { it }) { index ->
+                val readerItem = document.items[index]
+                if (readerItem.suppressedByPublisherFloat && settings.bookStyles) {
+                    return@items
+                }
                 RenderPart(
-                    element = document.items[index].element,
+                    element = readerItem.element,
                     textOverride = null,
                     isParagraphStart = true,
                     imageHeightPx = null,
@@ -1408,6 +1476,8 @@ private fun LinkedDocumentOverlay(
                     bookFonts = bookFonts,
                     language = language,
                     footnotes = footnotes,
+                    publisherBoxes = readerItem.publisherBoxes,
+                    publisherFloat = readerItem.publisherFloat,
                 )
             }
         }
@@ -1443,19 +1513,18 @@ private fun LinkedDocumentOverlay(
             }
         }
 
-        AnimatedVisibility(
+        ReaderReturnAffordance(
             visible = showReturnButton,
+            colors = colors,
+            onClick = onReturn,
+            label = returnLabel,
             modifier = Modifier
                 .align(AbsoluteAlignment.BottomRight)
                 .absolutePadding(
                     right = returnRightPadding,
                     bottom = stableInsets.calculateBottomPadding() + 18.dp,
                 ),
-            enter = fadeIn() + slideInVertically { it / 2 },
-            exit = fadeOut() + slideOutVertically { it / 2 },
-        ) {
-            ReaderReturnButton(colors = colors, onClick = onReturn)
-        }
+        )
     }
 }
 
@@ -1472,6 +1541,13 @@ class FootnoteHandler(
     val linkedDocumentTargets: Map<String, LinkedDocumentTarget> = emptyMap(),
     val onNavigateLinked: (LinkedDocumentTarget) -> Unit = {},
 ) {
+    // One listener per book, shared by all links and recompositions. New
+    // lambdas per reference make otherwise identical AnnotatedStrings unequal
+    // and force Compose to rebuild link layout during scrolling.
+    internal val linkInteractionListener = LinkInteractionListener { link ->
+        (link as? LinkAnnotation.Clickable)?.let { open(it.tag) }
+    }
+
     /** True when tapping [key] does something. */
     fun handles(key: String): Boolean =
         key in notes || key in linkTargets || key in linkedDocumentTargets
@@ -1525,9 +1601,9 @@ internal fun AnnotatedString.withFootnoteLinks(
     for (ref in internalRefs) {
         builder.addLink(
             LinkAnnotation.Clickable(
-                tag = FOOTNOTE_TAG,
+                tag = ref.item,
                 styles = styles,
-                linkInteractionListener = LinkInteractionListener { handler?.open(ref.item) },
+                linkInteractionListener = handler?.linkInteractionListener,
             ),
             ref.start,
             ref.end,
@@ -1593,10 +1669,13 @@ private fun ScrollReader(
 ) {
     val scope = rememberCoroutineScope()
     val liveBook by viewModel.book.collectAsStateWithLifecycle()
-    val initialIndex = viewModel.currentFlatIndex.coerceIn(0, ready.items.size - 1)
+    val rawInitialIndex = viewModel.currentFlatIndex.coerceIn(0, ready.items.size - 1)
+    val initialIndex = resolvePublisherFloatTarget(ready.items, rawInitialIndex)
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialIndex,
-        initialFirstVisibleItemScrollOffset = if (initialIndex == ready.book.progress.elementIndex) {
+        initialFirstVisibleItemScrollOffset = if (initialIndex == rawInitialIndex &&
+            rawInitialIndex == ready.book.progress.elementIndex
+        ) {
             ready.book.progress.scrollOffset
         } else {
             0
@@ -1697,9 +1776,10 @@ private fun ScrollReader(
     }
     LaunchedEffect(seekTarget) {
         val target = seekTarget ?: return@LaunchedEffect
-        val item = target.coerceIn(0, ready.items.size - 1)
-        livePosition.value = item.toFloat()
-        listState.scrollToItem(item)
+        val sourceItem = target.coerceIn(0, ready.items.size - 1)
+        val visibleItem = resolvePublisherFloatTarget(ready.items, sourceItem)
+        livePosition.value = sourceItem.toFloat()
+        listState.scrollToItem(visibleItem)
         onSeekConsumed()
     }
     LaunchedEffect(seekFraction) {
@@ -1707,26 +1787,27 @@ private fun ScrollReader(
         val item = (fraction * (ready.items.size - 1)).roundToInt()
             .coerceIn(0, ready.items.size - 1)
         livePosition.value = item.toFloat()
-        listState.scrollToItem(item)
+        listState.scrollToItem(resolvePublisherFloatTarget(ready.items, item))
         onSeekFractionConsumed()
     }
     LaunchedEffect(seekPosition) {
         val position = seekPosition ?: return@LaunchedEffect
-        val target = position.flatItemIndex.coerceIn(0, ready.items.size - 1)
-        livePosition.value = target.toFloat()
+        val sourceTarget = position.flatItemIndex.coerceIn(0, ready.items.size - 1)
+        val visibleTarget = resolvePublisherFloatTarget(ready.items, sourceTarget)
+        livePosition.value = sourceTarget.toFloat()
         val charOffset = position.charOffset
         if (charOffset == null) {
-            listState.scrollToItem(target, position.scrollOffset.coerceAtLeast(0))
+            listState.scrollToItem(visibleTarget, position.scrollOffset.coerceAtLeast(0))
         } else {
             // Source characters survive font, width, orientation and mode
             // changes; a stored pixel offset does not. Compose the item first,
             // then place the bidi-aware source caret back at the same safe-top
             // reference line. Pixel offset remains the non-text fallback.
-            listState.scrollToItem(target)
+            listState.scrollToItem(visibleTarget)
             var restored = false
             repeat(3) {
                 withFrameNanos { }
-                val caret = selection.caretAt(BookAnchor(target, charOffset))
+                val caret = selection.caretAt(BookAnchor(sourceTarget, charOffset))
                 if (caret != null) {
                     val correction = caret.top - readingTopReferencePx
                     if (abs(correction) > 0.5f) listState.scrollBy(correction)
@@ -1734,7 +1815,10 @@ private fun ScrollReader(
                 }
             }
             if (!restored) {
-                listState.scrollToItem(target, position.scrollOffset.coerceAtLeast(0))
+                listState.scrollToItem(
+                    visibleTarget,
+                    position.scrollOffset.coerceAtLeast(0),
+                )
             }
         }
         onSeekPositionConsumed()
@@ -1817,8 +1901,12 @@ private fun ScrollReader(
             ),
         ) {
             items(ready.items.size, key = { it }) { index ->
+                val readerItem = ready.items[index]
+                if (readerItem.suppressedByPublisherFloat && settings.bookStyles) {
+                    return@items
+                }
                 RenderPart(
-                    element = ready.items[index].element,
+                    element = readerItem.element,
                     textOverride = null,
                     isParagraphStart = true,
                     imageHeightPx = null,
@@ -1833,6 +1921,8 @@ private fun ScrollReader(
                     searchHighlight = searchHighlight,
                     highlights = highlights,
                     itemIndex = index,
+                    publisherBoxes = readerItem.publisherBoxes,
+                    publisherFloat = readerItem.publisherFloat,
                 )
             }
             item(key = "completion") {
@@ -1903,10 +1993,18 @@ private fun PagedReader(
             (maxHeight - topPadding - bottomPadding).roundToPx()
         }
 
-        val spec = remember(contentWidthPx, contentHeightPx, settings, ready) {
+        val spec = remember(
+            contentWidthPx,
+            contentHeightPx,
+            density.density,
+            density.fontScale,
+            settings,
+            ready,
+        ) {
             PaginationSpec(
                 contentWidthPx, contentHeightPx, density, settings, settings.fontSizeSp,
                 bookFonts = ready.bookFonts,
+                embeddedFontSignature = ready.embeddedFontSignature,
                 language = ready.language,
             )
         }
@@ -2089,7 +2187,6 @@ private fun PagedReader(
             LaunchedEffect(seekPosition) {
                 val position = seekPosition ?: return@LaunchedEffect
                 val item = position.flatItemIndex
-                val char = position.charOffset ?: 0
                 if (current.partial) {
                     // The quick holder contains only the chapter that was on
                     // screen when re-pagination began. Keep the typed target
@@ -2105,10 +2202,8 @@ private fun PagedReader(
                         return@LaunchedEffect
                     }
                 }
-                val page = pages.indexOfLast { p ->
-                    p.firstItemIndex < item ||
-                        (p.firstItemIndex == item && p.firstCharOffset <= char)
-                }.coerceAtLeast(0)
+                val page = ReaderNavigationPolicy.pageIndexForLocation(pages, position)
+                    ?: return@LaunchedEffect
                 livePagePosition.value = page.toFloat()
                 pagerState.scrollToPage(page)
                 onSeekPositionConsumed()
@@ -2269,15 +2364,24 @@ private fun PageView(
     searchHighlight: String?,
     highlights: ReaderHighlights,
 ) {
+    val allowsVerticalScroll = page.parts.any(PagePart::allowsVerticalScroll)
+    val overflowScroll = rememberScrollState()
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(top = topPadding, bottom = bottomPadding)
-            // While a settings change is repaginating in the background, the
-            // old page splits render with the new text style and can run past
-            // the page bottom — clip at the real page boundary so the final
-            // layout lands without a visible jump.
-            .clipToBounds(),
+            .then(
+                if (allowsVerticalScroll) {
+                    // A single table row may be taller than the viewport and
+                    // cannot be split without corrupting rowspan semantics.
+                    // Keep every cell reachable instead of clipping it away.
+                    Modifier.verticalScroll(overflowScroll)
+                } else {
+                    // While settings repaginate, old splits can briefly draw
+                    // with new metrics; contain them to the page boundary.
+                    Modifier.clipToBounds()
+                },
+            ),
     ) {
         page.parts.forEach { part ->
             RenderPart(
@@ -2305,6 +2409,9 @@ private fun PageView(
                 // charStart is only a character offset for text parts — a
                 // table part stores its row range in the very same fields.
                 charStart = if (part.text != null) part.charStart.coerceAtLeast(0) else 0,
+                publisherBoxes = part.publisherBoxes,
+                publisherStartsElement = part.publisherStartsElement,
+                publisherEndsElement = part.publisherEndsElement,
             )
         }
     }
@@ -2476,14 +2583,55 @@ private fun RenderPart(
     tableHeaderRepeated: Boolean = false,
     sideBox: SideBoxSpec? = null,
     floatImagePath: String? = null,
+    publisherBoxes: List<ReaderPublisherBox> = emptyList(),
+    publisherFloat: ReaderPublisherFloat? = null,
+    publisherStartsElement: Boolean = true,
+    publisherEndsElement: Boolean = true,
 ) {
-    val (vTop, vBottom) = ReaderMetrics.verticalPaddings(element, fontSize)
+    val (vTop, vBottom) = ReaderMetrics.verticalPaddings(
+        element,
+        fontSize,
+        settings.bookStyles,
+    )
+    val density = LocalDensity.current
+    val columnWidthPx = with(density) { contentWidth.roundToPx() }
+    val fontSizePx = with(density) { fontSize.sp.toPx() }
+    val boxGeometry = remember(
+        publisherBoxes,
+        columnWidthPx,
+        fontSizePx,
+        publisherStartsElement,
+        publisherEndsElement,
+        settings.bookStyles,
+    ) {
+        publisherBoxGeometry(
+            boxes = publisherBoxes,
+            columnWidthPx = columnWidthPx,
+            fontSizePx = fontSizePx,
+            partStartsElement = publisherStartsElement,
+            partEndsElement = publisherEndsElement,
+            enabled = settings.bookStyles,
+        )
+    }
+    val boxContentWidth = with(density) { boxGeometry.contentWidthPx.toDp() }
     val (startInset, endInset) =
-        ReaderMetrics.horizontalInsets(element, contentWidth, fontSize)
+        ReaderMetrics.horizontalInsets(element, boxContentWidth, fontSize)
     val (leftInset, _) =
-        ReaderMetrics.physicalHorizontalInsets(element, contentWidth, fontSize)
+        ReaderMetrics.physicalHorizontalInsets(element, boxContentWidth, fontSize)
     val basePadding = ReaderMetrics.horizontalPadding(settings.pageMargins)
-    val leftPadding = basePadding + leftInset
+    val publisherLeftInset = with(density) { boxGeometry.contentLeftPx.toDp() }
+    val publisherTopInset = with(density) { boxGeometry.topInsetPx.toDp() }
+    val publisherBottomInset = with(density) { boxGeometry.bottomInsetPx.toDp() }
+    val leftPadding = basePadding + publisherLeftInset + leftInset
+    val effectiveVTop = vTop + publisherTopInset
+    val effectiveVBottom = vBottom + publisherBottomInset
+    val publisherOwnsBackground = settings.bookStyles &&
+        hasPublisherBoxBackground(publisherBoxes)
+    val surroundingBackground = if (settings.bookStyles) {
+        publisherBoxEffectiveBackground(publisherBoxes, colors.background)
+    } else {
+        colors.background
+    }
 
     val actuallyInvert = appSettings.autoInvertImages && appSettings.theme == AppTheme.OLED
 
@@ -2491,8 +2639,8 @@ private fun RenderPart(
     // it with fillMaxWidth + paddings rounds every inset separately and can
     // end up 1px narrower — a word then wraps to an extra line only on
     // screen and the page bottom gets clipped.
-    val exactTextWidth = with(LocalDensity.current) {
-        (contentWidth.roundToPx() - startInset.roundToPx() - endInset.roundToPx())
+    val exactTextWidth = with(density) {
+        (boxGeometry.contentWidthPx - startInset.roundToPx() - endInset.roundToPx())
             .coerceAtLeast(1)
             .toDp()
     }
@@ -2502,7 +2650,12 @@ private fun RenderPart(
     // so an ambient RTL LazyColumn cannot cross-axis-align a narrow paragraph
     // to the opposite edge; paragraph TextDirection still comes from the book.
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-        Box(Modifier.fillMaxWidth()) {
+        val columnLeftPx = with(density) { basePadding.toPx() }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .drawPublisherBoxes(boxGeometry, columnLeftPx, fontSizePx),
+        ) {
             when (element) {
         is ContentElement.Paragraph -> {
             // A float rendered as a plain block image above its paragraph
@@ -2534,7 +2687,8 @@ private fun RenderPart(
                 element.block,
                 settings.bookStyles,
                 defaultTextColor,
-                colors.background,
+                surroundingBackground,
+                backgroundAlreadyApplied = publisherOwnsBackground,
             )
             val linkColor = readableReaderForeground(colors.accent, colorPair.effectiveBackground)
             fun decorated(raw: androidx.compose.ui.text.AnnotatedString) =
@@ -2557,14 +2711,23 @@ private fun RenderPart(
                     bookFonts = bookFonts,
                     language = language,
                     colors = colors,
+                    surroundingBackground = surroundingBackground,
+                    publisherBackgroundAlreadyApplied = publisherOwnsBackground,
                     totalWidthPx = with(LocalDensity.current) { exactTextWidth.roundToPx() },
                     invertImages = actuallyInvert,
                     highlights = highlights,
                     itemIndex = itemIndex,
+                    footnotes = footnotes,
+                    searchHighlight = searchHighlight,
                     modifier = Modifier.absolutePadding(
-                        left = leftPadding, top = vTop, bottom = vBottom,
+                        left = leftPadding,
+                        top = effectiveVTop,
+                        bottom = effectiveVBottom,
                     ).then(
-                        colorPair.background?.let { Modifier.background(it) } ?: Modifier,
+                        colorPair.background
+                            ?.takeUnless { publisherOwnsBackground }
+                            ?.let { Modifier.background(it) }
+                            ?: Modifier,
                     ),
                 )
                 return@Box
@@ -2577,10 +2740,21 @@ private fun RenderPart(
                 val scrollMeasurer = rememberTextMeasurer(cacheSize = 0)
                 val density = LocalDensity.current
                 val widthPx = with(density) { exactTextWidth.roundToPx() }
-                val plan = remember(element, widthPx, settings, fontSize, language, bookFonts) {
+                val plan = remember(
+                    element,
+                    publisherFloat,
+                    widthPx,
+                    density.density,
+                    density.fontScale,
+                    settings,
+                    fontSize,
+                    language,
+                    bookFonts,
+                ) {
                     planSideBox(
                         element, scrollMeasurer, density, settings, fontSize,
                         bookFonts, language, widthPx,
+                        publisherFloat = publisherFloat,
                     )
                 }
                 val floatBlock = element.block?.floatImage
@@ -2588,10 +2762,16 @@ private fun RenderPart(
                 if (plan != null || floatBlock != null) {
                     Column(
                         Modifier
-                            .absolutePadding(left = leftPadding, top = vTop, bottom = vBottom)
+                            .absolutePadding(
+                                left = leftPadding,
+                                top = effectiveVTop,
+                                bottom = effectiveVBottom,
+                            )
                             .width(exactTextWidth)
                             .then(
-                                colorPair.background?.let { Modifier.background(it) }
+                                colorPair.background
+                                    ?.takeUnless { publisherOwnsBackground }
+                                    ?.let { Modifier.background(it) }
                                     ?: Modifier,
                             ),
                     ) {
@@ -2624,10 +2804,14 @@ private fun RenderPart(
                                 bookFonts = bookFonts,
                                 language = language,
                                 colors = colors,
+                                surroundingBackground = surroundingBackground,
+                                publisherBackgroundAlreadyApplied = publisherOwnsBackground,
                                 totalWidthPx = widthPx,
                                 invertImages = actuallyInvert,
                                 highlights = highlights,
                                 itemIndex = itemIndex,
+                                footnotes = footnotes,
+                                searchHighlight = searchHighlight,
                             )
                             if (plan.besideEndChar < element.text.length) {
                                 val remainder = remember(
@@ -2724,10 +2908,17 @@ private fun RenderPart(
                     .copy(color = colorPair.foreground),
                 onTextLayout = { fragment?.layout = it },
                 modifier = Modifier
-                    .absolutePadding(left = leftPadding, top = vTop, bottom = vBottom)
+                    .absolutePadding(
+                        left = leftPadding,
+                        top = effectiveVTop,
+                        bottom = effectiveVBottom,
+                    )
                     .width(exactTextWidth)
                     .then(
-                        colorPair.background?.let { Modifier.background(it) } ?: Modifier,
+                        colorPair.background
+                            ?.takeUnless { publisherOwnsBackground }
+                            ?.let { Modifier.background(it) }
+                            ?: Modifier,
                     )
                     .readerHighlights(fragment, highlights),
                 inlineContent = inlineImageContent(display, actuallyInvert),
@@ -2740,12 +2931,17 @@ private fun RenderPart(
                 element.block,
                 settings.bookStyles,
                 colors.text,
-                colors.background,
+                surroundingBackground,
+                backgroundAlreadyApplied = publisherOwnsBackground,
             )
             val linkColor = readableReaderForeground(colors.accent, colorPair.effectiveBackground)
-            val decoratedDisplay = raw.withPublisherColors(settings.bookStyles, colorPair)
-                .withFootnoteLinks(linkColor, footnotes)
-                .withSearchHighlight(searchHighlight, colors.accent.copy(alpha = 0.3f))
+            val decoratedDisplay = remember(
+                raw, settings.bookStyles, colorPair, linkColor, footnotes, searchHighlight, colors.accent,
+            ) {
+                raw.withPublisherColors(settings.bookStyles, colorPair)
+                    .withFootnoteLinks(linkColor, footnotes)
+                    .withSearchHighlight(searchHighlight, colors.accent.copy(alpha = 0.3f))
+            }
             val bidiDisplay = remember(decoratedDisplay) {
                 BidiLayoutText.of(decoratedDisplay)
             }
@@ -2760,10 +2956,17 @@ private fun RenderPart(
                     .copy(color = colorPair.foreground),
                 onTextLayout = { fragment?.layout = it },
                 modifier = Modifier
-                    .absolutePadding(left = leftPadding, top = vTop, bottom = vBottom)
+                    .absolutePadding(
+                        left = leftPadding,
+                        top = effectiveVTop,
+                        bottom = effectiveVBottom,
+                    )
                     .width(exactTextWidth)
                     .then(
-                        colorPair.background?.let { Modifier.background(it) } ?: Modifier,
+                        colorPair.background
+                            ?.takeUnless { publisherOwnsBackground }
+                            ?.let { Modifier.background(it) }
+                            ?: Modifier,
                     )
                     .readerHighlights(fragment, highlights),
                 inlineContent = inlineImageContent(display, actuallyInvert),
@@ -2771,35 +2974,55 @@ private fun RenderPart(
         }
 
         is ContentElement.Image -> {
-            val heightModifier = when {
-                imageHeightPx != null ->
-                    with(LocalDensity.current) { Modifier.height(imageHeightPx.toDp()) }
-
-                // Scroll mode has no measured height: honor the book's own
-                // CSS size the same way pagination does.
-                element.heightEm != null ->
-                    Modifier.height((element.heightEm * fontSize).dp)
-
-                else -> Modifier.heightIn(max = ReaderMetrics.maxImageHeight)
-            }
-            // No corner rounding: an illustration or a map is the book's own
-            // artwork and must reach the reader exactly as it was drawn.
-            AsyncImage(
-                model = File(element.path),
-                contentDescription = element.altText,
-                contentScale = ContentScale.Fit,
-                colorFilter = imageColorFilter(actuallyInvert),
-                modifier = Modifier
-                    .fillMaxWidth(element.widthFrac ?: 1f)
-                    .padding(horizontal = basePadding, vertical = vTop)
-                    .then(heightModifier),
+            val availableImageWidthPx = with(density) { exactTextWidth.roundToPx() }
+            val publisherOwnsImageWidth = publisherBoxesOwnImageWidth(
+                publisherBoxes,
+                settings.bookStyles,
             )
+            val displayImageWidthPx = imageWidthPx(
+                element = element,
+                contentWidthPx = availableImageWidthPx,
+                fontSizePx = fontSizePx,
+                publisherOwnsWidth = publisherOwnsImageWidth,
+            )
+            val displayImageHeightPx = imageHeightPx ?:
+                com.example.frogreader.ui.reader.imageHeightPx(
+                element = element,
+                contentWidthPx = availableImageWidthPx,
+                fontSizePx = fontSizePx,
+                maxHeightPx = with(density) { ReaderMetrics.maxImageHeight.roundToPx() },
+                publisherOwnsWidth = publisherOwnsImageWidth,
+                )
+            // Percentage-width block images are centered in their containing
+            // publisher box. Full-width artwork is unchanged.
+            Box(
+                contentAlignment = Alignment.TopCenter,
+                modifier = Modifier
+                    .absolutePadding(
+                        left = leftPadding,
+                        top = effectiveVTop,
+                        bottom = effectiveVBottom,
+                    )
+                    .width(exactTextWidth),
+            ) {
+                // No corner rounding: an illustration or a map is the book's
+                // own artwork and must arrive exactly as authored.
+                AsyncImage(
+                    model = File(element.path),
+                    contentDescription = element.altText,
+                    contentScale = ContentScale.Fit,
+                    colorFilter = imageColorFilter(actuallyInvert),
+                    modifier = Modifier
+                        .width(with(density) { displayImageWidthPx.toDp() })
+                        .height(with(density) { displayImageHeightPx.coerceAtLeast(1).toDp() }),
+                )
+            }
         }
 
         ContentElement.Divider -> Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = vTop),
+                .padding(top = effectiveVTop, bottom = effectiveVBottom),
             contentAlignment = Alignment.Center,
         ) {
             HorizontalDivider(
@@ -2809,7 +3032,10 @@ private fun RenderPart(
         }
 
         is ContentElement.Spacer -> Spacer(
-            Modifier.height(ReaderMetrics.spacerHeight(element, fontSize)),
+            Modifier.height(
+                ReaderMetrics.spacerHeight(element, fontSize) +
+                    effectiveVTop + effectiveVBottom,
+            ),
         )
 
         is ContentElement.Table -> {
@@ -2817,9 +3043,16 @@ private fun RenderPart(
             // mode measures once locally (no page-fit contract there).
             val scrollMeasurer = rememberTextMeasurer(cacheSize = 0)
             val density = LocalDensity.current
-            val widthPx = with(density) { contentWidth.roundToPx() }
+            val widthPx = boxGeometry.contentWidthPx
             val layout = tableLayout ?: remember(
-                element, widthPx, settings, fontSize, language, bookFonts,
+                element,
+                widthPx,
+                density.density,
+                density.fontScale,
+                settings,
+                fontSize,
+                language,
+                bookFonts,
             ) {
                 measureTableLayout(
                     element, scrollMeasurer, density, settings,
@@ -2840,19 +3073,25 @@ private fun RenderPart(
                 footnotes = footnotes,
                 searchHighlight = searchHighlight,
                 colors = colors,
+                surroundingBackground = surroundingBackground,
+                publisherBackgroundAlreadyApplied = publisherOwnsBackground,
                 highlights = highlights,
                 itemIndex = itemIndex,
                 modifier = Modifier.absolutePadding(
-                    left = basePadding,
-                    top = vTop,
-                    bottom = vBottom,
+                    left = basePadding + publisherLeftInset,
+                    top = effectiveVTop,
+                    bottom = effectiveVBottom,
                 ).then(
                     publisherColorPair(
                         element.block,
                         settings.bookStyles,
                         colors.text,
-                        colors.background,
-                    ).background?.let { Modifier.background(it) } ?: Modifier,
+                        surroundingBackground,
+                        backgroundAlreadyApplied = publisherOwnsBackground,
+                    ).background
+                        ?.takeUnless { publisherOwnsBackground }
+                        ?.let { Modifier.background(it) }
+                        ?: Modifier,
                 ),
             )
             }
@@ -3115,9 +3354,13 @@ private fun splitChapterTitle(title: String): Pair<String, String?> {
 /** What the pull-up panel of the bottom bar is currently showing. */
 private enum class BarPanel { SETTINGS, CONTENTS }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReaderBottomBar(
     visible: Boolean,
+    showReturnButton: Boolean,
+    returnLabel: String,
+    onReturn: () -> Unit,
     allowBackDismiss: Boolean,
     colors: ReaderColors,
     panelFraction: androidx.compose.runtime.MutableFloatState,
@@ -3137,8 +3380,6 @@ private fun ReaderBottomBar(
     /** Returns true only when the committed value changes the discrete destination. */
     onSeekChapter: (Float) -> Boolean,
     onSeekBook: (Float) -> Boolean,
-    /** Called only after the bar's slide/fade exit has actually disposed its content. */
-    onExitFinished: () -> Unit,
     settings: ReaderSettings,
     appSettings: AppSettings,
     brightness: Float?,
@@ -3173,29 +3414,29 @@ private fun ReaderBottomBar(
     }
     val windowHeightPx = LocalWindowInfo.current.containerSize.height.toFloat()
     val statusTopPx = with(density) {
-        WindowInsets.statusBars.asPaddingValues().calculateTopPadding().toPx()
+        WindowInsets.systemBarsIgnoringVisibility.asPaddingValues().calculateTopPadding().toPx()
     }
     val navBottomPx = with(density) {
-        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding().toPx()
+        WindowInsets.systemBarsIgnoringVisibility.asPaddingValues().calculateBottomPadding().toPx()
     }
     var barChromePx by remember { mutableFloatStateOf(with(density) { 190.dp.toPx() }) }
     val fullPx = (
         windowHeightPx - statusTopPx - navBottomPx -
             with(density) { 16.dp.toPx() } - barChromePx
         ).coerceAtLeast(halfPx)
-    val panelHeight = remember { Animatable(0f) }
-    val panelOpen = panelHeight.value > halfPx / 2
+    val panelMotion = remember(scope) { ReaderPanelMotion(scope) }
+    val panelHeight = panelMotion.height
+    val panelOpen = panelMotion.isOpen
     var panelContent by remember { mutableStateOf(BarPanel.SETTINGS) }
 
-    fun settlePanel(targetPx: Float) {
-        scope.launch { panelHeight.animateTo(targetPx) }
-    }
+    fun settlePanel(targetPx: Float) = panelMotion.animateTo(targetPx)
 
     // This panel is visually above the book, so Android Back must dismiss it
-    // before the reader consumes an in-book navigation-history entry. The
-    // handler is composed inside ReaderBottomBar (after the reader-level
-    // handler), which gives the topmost surface the expected priority.
-    BackHandler(enabled = allowBackDismiss && visible && panelHeight.value > 0.5f) {
+    // before leaving the reader. Its handler follows the reader-level
+    // handler, which gives the topmost surface the expected priority.
+    BackHandler(enabled = allowBackDismiss && visible &&
+        (panelOpen || panelHeight.value > 0.5f)
+    ) {
         settlePanel(0f)
     }
 
@@ -3217,10 +3458,9 @@ private fun ReaderBottomBar(
     // One draggable shared by the handle and the chapter-title header.
     val panelDrag = Modifier.draggable(
         orientation = Orientation.Vertical,
+        onDragStarted = { panelMotion.startDrag() },
         state = rememberDraggableState { delta ->
-            scope.launch {
-                panelHeight.snapTo((panelHeight.value - delta).coerceIn(0f, fullPx))
-            }
+            panelMotion.snapTo((panelHeight.value - delta).coerceIn(0f, fullPx))
         },
         onDragStopped = { velocity -> settleWithVelocity(velocity) },
     )
@@ -3239,7 +3479,7 @@ private fun ReaderBottomBar(
                 if (dy > 0f && panelHeight.value > 0f) {
                     val target = (panelHeight.value - dy).coerceAtLeast(0f)
                     val used = panelHeight.value - target
-                    scope.launch { panelHeight.snapTo(target) }
+                    panelMotion.snapTo(target)
                     return Offset(0f, used)
                 }
                 return Offset.Zero
@@ -3260,7 +3500,7 @@ private fun ReaderBottomBar(
     fun togglePanel(content: BarPanel) {
         haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
         when {
-            !panelOpen -> {
+            !panelMotion.isOpen -> {
                 panelContent = content
                 settlePanel(halfPx)
             }
@@ -3271,7 +3511,11 @@ private fun ReaderBottomBar(
     }
 
     // Hiding the chrome (center tap) also puts the panel away.
-    LaunchedEffect(visible) { if (!visible) panelHeight.snapTo(0f) }
+    LaunchedEffect(visible) {
+        if (!visible) {
+            panelMotion.snapTo(0f)
+        }
+    }
 
     // Share the pull progress with the rest of the chrome (top bar).
     LaunchedEffect(halfPx) {
@@ -3285,219 +3529,232 @@ private fun ReaderBottomBar(
         enter = slideInVertically { it } + fadeIn(),
         exit = slideOutVertically { it } + fadeOut(),
     ) {
-        // onSizeChanged does not emit zero when AnimatedVisibility disposes
-        // its child. Reset the externally remembered footprint exactly here,
-        // after the exit animation, so the return chip never overlaps the bar
-        // and does not remain stranded at the old bar height afterwards.
-        val latestOnExitFinished by rememberUpdatedState(onExitFinished)
-        DisposableEffect(Unit) {
-            onDispose { latestOnExitFinished() }
-        }
-        Surface(
-            color = colors.chrome,
-            contentColor = colors.onChrome,
-            shape = RoundedCornerShape(30.dp),
-            shadowElevation = 4.dp,
+        Column(
             modifier = Modifier
-                .padding(WindowInsets.navigationBars.asPaddingValues())
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .fillMaxWidth()
-                .onSizeChanged { size -> barChromePx = size.height - panelHeight.value },
+                .padding(
+                    WindowInsets.systemBarsIgnoringVisibility.only(
+                        WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+                    ).asPaddingValues(),
+                )
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
-                // Drag handle: pull up to stretch the bar into the panel
-                // (half screen, then all the way up), pull down or tap to
-                // collapse it back into the bar.
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(22.dp)
-                        .then(panelDrag)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                        ) {
-                            haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                            settlePanel(if (panelOpen) 0f else halfPx)
-                        },
-                ) {
+            // Share chrome motion, but cancel the panel's upward growth for
+            // the exiting button. It fades at its original position while
+            // settings open immediately underneath it.
+            ReaderReturnAffordance(
+                // Reveal as soon as the panel clears the button, without
+                // waiting for the spring's almost invisible settling tail.
+                visible = showReturnButton && !panelOpen &&
+                    panelHeight.value <= with(density) { 12.dp.toPx() },
+                colors = colors,
+                onClick = onReturn,
+                label = returnLabel,
+                modifier = Modifier
+                    .align(AbsoluteAlignment.Right)
+                    // Align the button face with the bar; the extra drawing
+                    // space belongs to its shadow, not to its visible inset.
+                    .absoluteOffset(x = 12.dp)
+                    .zIndex(1f)
+                    .graphicsLayer { translationY = panelHeight.value },
+            )
+            Surface(
+                color = colors.chrome,
+                contentColor = colors.onChrome,
+                shape = RoundedCornerShape(30.dp),
+                shadowElevation = 4.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { size -> barChromePx = size.height - panelHeight.value },
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                    // Drag handle: pull up to stretch the bar into the panel
+                    // (half screen, then all the way up), pull down or tap to
+                    // collapse it back into the bar.
                     Box(
-                        Modifier
-                            .size(width = 36.dp, height = 4.dp)
-                            .clip(CircleShape)
-                            .background(colors.onChrome.copy(alpha = 0.35f)),
-                    )
-                }
-
-                // Panel revealed by the pull: settings or contents/bookmarks/
-                // quotes, depending on which button summoned it.
-                val panelDp = with(density) { panelHeight.value.toDp() }
-                if (panelDp > 0.dp) {
-                    Box(
-                        Modifier
-                            .height(panelDp)
-                            .nestedScroll(panelNestedScroll),
-                    ) {
-                        when (panelContent) {
-                            BarPanel.SETTINGS -> Column(
-                                modifier = Modifier.verticalScroll(rememberScrollState()),
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(22.dp)
+                            .then(panelDrag)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
                             ) {
-                                ReaderSettingsControls(
-                                    settings = settings,
-                                    appSettings = appSettings,
-                                    colors = colors,
-                                    publisherStyle = ready.publisherStyle,
-                                    brightness = brightness,
-                                    onUpdate = onUpdate,
-                                    onUpdateApp = onUpdateApp,
-                                    onBrightnessChange = onBrightnessChange,
-                                    onPeekHeight = { measured ->
-                                        val target = measured +
-                                            with(density) { 10.dp.toPx() }
-                                        if (abs(target - halfPx) > 2f) {
-                                            halfPx = target
-                                            // Opening or parked at the old
-                                            // half: glide to the exact height.
-                                            if (panelHeight.value > 0f &&
-                                                panelHeight.value < fullPx * 0.75f
-                                            ) {
-                                                settlePanel(target)
+                                haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                                settlePanel(if (panelMotion.isOpen) 0f else halfPx)
+                            },
+                    ) {
+                        Box(
+                            Modifier
+                                .size(width = 36.dp, height = 4.dp)
+                                .clip(CircleShape)
+                                .background(colors.onChrome.copy(alpha = 0.35f)),
+                        )
+                    }
+
+                    // Panel revealed by the pull: settings or contents/bookmarks/
+                    // quotes, depending on which button summoned it.
+                    val panelDp = with(density) { panelHeight.value.toDp() }
+                    if (panelDp > 0.dp) {
+                        Box(
+                            Modifier
+                                .height(panelDp)
+                                .nestedScroll(panelNestedScroll),
+                        ) {
+                            when (panelContent) {
+                                BarPanel.SETTINGS -> Column(
+                                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                                ) {
+                                    ReaderSettingsControls(
+                                        settings = settings,
+                                        appSettings = appSettings,
+                                        colors = colors,
+                                        publisherStyle = ready.publisherStyle,
+                                        brightness = brightness,
+                                        onUpdate = onUpdate,
+                                        onUpdateApp = onUpdateApp,
+                                        onBrightnessChange = onBrightnessChange,
+                                        onPeekHeight = { measured ->
+                                            val target = measured +
+                                                with(density) { 10.dp.toPx() }
+                                            if (abs(target - halfPx) > 2f) {
+                                                val previous = halfPx
+                                                halfPx = target
+                                                panelMotion.updatePeek(previous, target)
                                             }
-                                        }
+                                        },
+                                    )
+                                }
+
+                                BarPanel.CONTENTS -> ReaderPanelsContent(
+                                    colorScheme = appColorSchemeFor(appSettings.theme, appSettings.dynamicColor),
+                                    ready = ready,
+                                    book = book,
+                                    currentChapter = currentChapter,
+                                    chapterStartPages = chapterStartPages,
+                                    dragModifier = panelDrag,
+                                    onChapterClick = { index ->
+                                        settlePanel(0f)
+                                        onChapterClick(index)
                                     },
+                                    onBookmarkClick = { flatIndex ->
+                                        settlePanel(0f)
+                                        onBookmarkClick(flatIndex)
+                                    },
+                                    onRemoveBookmark = onRemoveBookmark,
+                                    onCopyQuote = onCopyQuote,
+                                    onQuoteClick = { quote ->
+                                        settlePanel(0f)
+                                        onQuoteClick(quote)
+                                    },
+                                    onRemoveQuote = onRemoveQuote,
+                                    bookmarked = bookmarked,
+                                    onToggleBookmark = onToggleBookmark,
                                 )
                             }
-
-                            BarPanel.CONTENTS -> ReaderPanelsContent(
-                                ready = ready,
-                                book = book,
-                                currentChapter = currentChapter,
-                                chapterStartPages = chapterStartPages,
-                                dragModifier = panelDrag,
-                                onChapterClick = { index ->
-                                    settlePanel(0f)
-                                    onChapterClick(index)
-                                },
-                                onBookmarkClick = { flatIndex ->
-                                    settlePanel(0f)
-                                    onBookmarkClick(flatIndex)
-                                },
-                                onRemoveBookmark = onRemoveBookmark,
-                                onCopyQuote = onCopyQuote,
-                                onQuoteClick = { quote ->
-                                    settlePanel(0f)
-                                    onQuoteClick(quote)
-                                },
-                                onRemoveQuote = onRemoveQuote,
-                                bookmarked = bookmarked,
-                                onToggleBookmark = onToggleBookmark,
-                            )
                         }
                     }
-                }
 
-                // Header: list button — chapter title over its name — gear.
-                // Also draggable, so the pull can start from here too.
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = panelDrag,
-                ) {
-                    TonalBarButton(
-                        icon = Icons.AutoMirrored.Rounded.FormatListBulleted,
-                        contentDescription = stringResource(R.string.reader_contents),
-                        colors = colors,
-                        onClick = { togglePanel(BarPanel.CONTENTS) },
-                        tint = if (panelOpen && panelContent == BarPanel.CONTENTS) {
-                            colors.accent
-                        } else {
-                            colors.onChrome
-                        },
-                    )
-                    // Two-part chapter titles ("Розділ 14" + its name) split
-                    // across the two header lines; single-part ones get one.
-                    val titleLines = remember(chapterLabel) { splitChapterTitle(chapterLabel) }
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp),
-                    ) {
-                        Text(
-                            text = titleLines.first,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                    // The title drags the panel; the two buttons have no
+                    // draggable ancestor that could consume their first tap.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TonalBarButton(
+                            icon = Icons.AutoMirrored.Rounded.FormatListBulleted,
+                            contentDescription = stringResource(R.string.reader_contents),
+                            colors = colors,
+                            onClick = { togglePanel(BarPanel.CONTENTS) },
+                            tint = if (panelOpen && panelContent == BarPanel.CONTENTS) {
+                                colors.accent
+                            } else {
+                                colors.onChrome
+                            },
                         )
-                        titleLines.second?.let { secondLine ->
-                            // Long names shrink (down to 7sp) to stay on one
-                            // line; only extreme ones still ellipsize.
+                        // Two-part chapter titles ("Розділ 14" + its name) split
+                        // across the two header lines; single-part ones get one.
+                        val titleLines = remember(chapterLabel) { splitChapterTitle(chapterLabel) }
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .weight(1f)
+                                .then(panelDrag)
+                                .padding(horizontal = 8.dp),
+                        ) {
                             Text(
-                                text = secondLine.uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = colors.secondaryText,
-                                letterSpacing = 1.2.sp,
+                                text = titleLines.first,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                autoSize = TextAutoSize.StepBased(
-                                    minFontSize = 7.sp,
-                                    maxFontSize = MaterialTheme.typography.labelSmall.fontSize,
-                                    stepSize = 0.5.sp,
-                                ),
                             )
+                            titleLines.second?.let { secondLine ->
+                                // Long names shrink (down to 7sp) to stay on one
+                                // line; only extreme ones still ellipsize.
+                                Text(
+                                    text = secondLine.uppercase(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = colors.secondaryText,
+                                    letterSpacing = 1.2.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    autoSize = TextAutoSize.StepBased(
+                                        minFontSize = 7.sp,
+                                        maxFontSize = MaterialTheme.typography.labelSmall.fontSize,
+                                        stepSize = 0.5.sp,
+                                    ),
+                                )
+                            }
                         }
+                        TonalBarButton(
+                            icon = Icons.Rounded.Settings,
+                            contentDescription = stringResource(R.string.reader_settings),
+                            colors = colors,
+                            onClick = { togglePanel(BarPanel.SETTINGS) },
+                            tint = if (panelOpen && panelContent == BarPanel.SETTINGS) {
+                                colors.accent
+                            } else {
+                                colors.onChrome
+                            },
+                        )
                     }
-                    TonalBarButton(
-                        icon = Icons.Rounded.Settings,
-                        contentDescription = stringResource(R.string.reader_settings),
+
+                    Spacer(Modifier.height(10.dp))
+
+                    // Progress in the current chapter, then in the whole book
+                    // (the book track is segmented by chapters). In paged mode
+                    // the right edge counts PAGES left; scrolling falls back to
+                    // percent (there are no pages to count).
+                    val chapterSpan = if (chapterStartPages != null && totalPages != null) {
+                        val startPage = chapterStartPages.getOrNull(currentChapter) ?: 0
+                        val endPage = chapterStartPages.getOrNull(currentChapter + 1)?.minus(1)
+                            ?: (totalPages - 1)
+                        (endPage - startPage).coerceAtLeast(0)
+                    } else {
+                        null
+                    }
+                    ProgressRow(
+                        label = stringResource(R.string.reader_track_chapter).uppercase(),
+                        fraction = chapterFraction,
+                        onSeek = onSeekChapter,
                         colors = colors,
-                        onClick = { togglePanel(BarPanel.SETTINGS) },
-                        tint = if (panelOpen && panelContent == BarPanel.SETTINGS) {
-                            colors.accent
-                        } else {
-                            colors.onChrome
+                        pagesLeftOf = chapterSpan?.let { span ->
+                            { f -> ((1f - f) * span).roundToInt() }
                         },
+                        showValue = progressValuesReady,
                     )
+                    Spacer(Modifier.height(6.dp))
+                    ProgressRow(
+                        label = stringResource(R.string.reader_track_book).uppercase(),
+                        fraction = bookFraction,
+                        onSeek = onSeekBook,
+                        colors = colors,
+                        segments = bookSegments,
+                        pagesLeftOf = totalPages?.let { total ->
+                            { f -> ((1f - f) * (total - 1).coerceAtLeast(0)).roundToInt() }
+                        },
+                        showValue = progressValuesReady,
+                    )
+                    Spacer(Modifier.height(4.dp))
                 }
-
-                Spacer(Modifier.height(10.dp))
-
-                // Progress in the current chapter, then in the whole book
-                // (the book track is segmented by chapters). In paged mode
-                // the right edge counts PAGES left; scrolling falls back to
-                // percent (there are no pages to count).
-                val chapterSpan = if (chapterStartPages != null && totalPages != null) {
-                    val startPage = chapterStartPages.getOrNull(currentChapter) ?: 0
-                    val endPage = chapterStartPages.getOrNull(currentChapter + 1)?.minus(1)
-                        ?: (totalPages - 1)
-                    (endPage - startPage).coerceAtLeast(0)
-                } else {
-                    null
-                }
-                ProgressRow(
-                    label = stringResource(R.string.reader_track_chapter).uppercase(),
-                    fraction = chapterFraction,
-                    onSeek = onSeekChapter,
-                    colors = colors,
-                    pagesLeftOf = chapterSpan?.let { span ->
-                        { f -> ((1f - f) * span).roundToInt() }
-                    },
-                    showValue = progressValuesReady,
-                )
-                Spacer(Modifier.height(6.dp))
-                ProgressRow(
-                    label = stringResource(R.string.reader_track_book).uppercase(),
-                    fraction = bookFraction,
-                    onSeek = onSeekBook,
-                    colors = colors,
-                    segments = bookSegments,
-                    pagesLeftOf = totalPages?.let { total ->
-                        { f -> ((1f - f) * (total - 1).coerceAtLeast(0)).roundToInt() }
-                    },
-                    showValue = progressValuesReady,
-                )
-                Spacer(Modifier.height(4.dp))
             }
         }
     }

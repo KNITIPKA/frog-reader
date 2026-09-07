@@ -11,6 +11,23 @@ import org.junit.Test
 class ReaderNavigationHistoryTest {
 
     @Test
+    fun `reading the return label does not consume history and tracks the next destination`() {
+        val history = ReaderNavigationHistory()
+        val first = ReaderReturnLocation.Main(2, 50)
+        val second = ReaderReturnLocation.Main(18, 125)
+        history.push(first)
+        history.push(second)
+
+        assertEquals(second, history.peek())
+        assertEquals(second, history.peek())
+        assertEquals(2, history.size)
+        assertEquals(second, history.pop())
+        assertEquals(first, history.peek())
+        history.clear()
+        assertNull(history.peek())
+    }
+
+    @Test
     fun `history restores exact main and linked locations in reverse jump order`() {
         val history = ReaderNavigationHistory()
         val main = ReaderReturnLocation.Main(42, charOffset = 17, scrollOffset = 93)
