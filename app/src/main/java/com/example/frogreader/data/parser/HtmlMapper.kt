@@ -24,8 +24,13 @@ import com.example.frogreader.data.model.LINK_TAG
 import com.example.frogreader.data.model.InlineBidiMode
 import com.example.frogreader.data.model.NoteDocument
 import com.example.frogreader.data.model.ParagraphStyle
+import com.example.frogreader.data.model.PublisherBoxSpan
+import com.example.frogreader.data.model.PublisherBoxStyle
+import com.example.frogreader.data.model.PublisherClear
+import com.example.frogreader.data.model.PublisherFloatSide
 import com.example.frogreader.data.model.TableCell
 import com.example.frogreader.data.model.TableRow
+import com.example.frogreader.data.model.slicePublisherBoxSpans
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
@@ -58,6 +63,8 @@ class HtmlMapper(
     private val maxStructureDepth: Int = DEFAULT_HTML_STRUCTURE_DEPTH,
     /** Shared expansion budget for CSS-generated model text. */
     private val expansionBudget: HtmlExpansionBudget = HtmlExpansionBudget(),
+    /** Stable per-source namespace; EPUB can merge ranges from several files. */
+    private val publisherBoxIdPrefix: String = "document",
 ) {
 
     init {
@@ -74,6 +81,22 @@ class HtmlMapper(
 
     private val out = mutableListOf<ContentElement>()
     private var pendingInline: MutableList<Node> = mutableListOf()
+    private var pendingInlineOwner: Element? = null
+
+    /** Publisher box ranges use the same flat leaf coordinates as [out]. */
+    val publisherBoxes = mutableListOf<PublisherBoxSpan>()
+
+    private data class OpenPublisherBox(
+        val id: String,
+        val parentId: String?,
+        val startElement: Int,
+        val style: PublisherBoxStyle,
+        val floatSide: PublisherFloatSide?,
+        val clear: PublisherClear,
+    )
+
+    private val publisherBoxStack = mutableListOf<String>()
+    private var publisherBoxSequence = 0
 
     /** Non-null while walking the children of a title-classed block. */
     private var headingLevel: Int? = null
@@ -114,11 +137,16 @@ class HtmlMapper(
     val noteDocuments = mutableMapOf<String, NoteDocument>()
 
     fun map(body: Element): List<ContentElement> {
-        if (css == null && body.selectFirst("[style]") != null) {
+        if (css == null && (body.hasAttr("style") || body.selectFirst("[style]") != null)) {
             css = CssResolver(emptyList())
         }
-        walk(body, quote = false)
-        flushPending(quote = false)
+        val bodyBox = beginPublisherBox(body, allowRoot = true)
+        try {
+            walk(body, quote = false)
+            flushPending(quote = false)
+        } finally {
+            endPublisherBox(bodyBox)
+        }
         return out.toList()
     }
 
@@ -133,12 +161,12 @@ class HtmlMapper(
             container.childNodes()
                 .filterIsInstance<TextNode>()
                 .filterNot(TextNode::isBlank)
-                .forEach(pendingInline::add)
+                .forEach { queuePending(it, container) }
             return
         }
         for (node in container.childNodes()) {
             when (node) {
-                is TextNode -> if (!node.isBlank) pendingInline.add(node)
+                is TextNode -> if (!node.isBlank) queuePending(node, container)
 
                 is Element -> {
                     // EPUB 3/Daisy and many Kindle books wrap a complete note
@@ -153,7 +181,14 @@ class HtmlMapper(
                     if (richNoteContainer) {
                         flushPending(quote)
                         if (out.size > noteStart) {
-                            val document = NoteDocument(out.subList(noteStart, out.size).toList())
+                            val document = NoteDocument(
+                                elements = out.subList(noteStart, out.size).toList(),
+                                publisherBoxes = slicePublisherBoxSpans(
+                                    spans = publisherBoxes,
+                                    startElement = noteStart,
+                                    endElementExclusive = out.size,
+                                ),
+                            )
                             buildList {
                                 node.attr("id").takeIf(String::isNotEmpty)?.let(::add)
                                 node.select("[id]").forEach { descendant ->
@@ -205,6 +240,22 @@ class HtmlMapper(
         token in NOTE_CONTAINER_TOKENS || token in NOTE_COLLECTION_TOKENS
 
     private fun walkElement(node: Element, quote: Boolean, depth: Int) {
+        // Raster image boxes are opened by emitImage as images discovered
+        // inside p/h wrappers do not pass through this dispatcher.
+        val opensFlowBox = node.normalName() !in IMAGE_TAGS &&
+            isPublisherBoxElement(node, allowRoot = false)
+        // Pending loose inline text belongs to the preceding flow context,
+        // never to the next sibling's retained CSS box.
+        if (opensFlowBox) flushPending(quote)
+        val openBox = if (opensFlowBox) beginPublisherBox(node) else null
+        try {
+            walkElementContent(node, quote, depth)
+        } finally {
+            endPublisherBox(openBox)
+        }
+    }
+
+    private fun walkElementContent(node: Element, quote: Boolean, depth: Int) {
         // display:none — skip the element entirely, but keep its anchors
         // (already registered) pointing at the next visible element.
         if (css?.computed(node)?.hidden == true) return
@@ -218,7 +269,7 @@ class HtmlMapper(
                 flushPending(quote)
                 emitMathBlock(node, quote)
             } else {
-                pendingInline.add(node)
+                queuePending(node, node.parent())
             }
             return
         }
@@ -371,7 +422,7 @@ class HtmlMapper(
                 emitParagraph(node, quote, depth)
             }
 
-            "br" -> pendingInline.add(node)
+            "br" -> queuePending(node, node.parent())
 
             "style", "script", "head", "title", "link", "meta", "source", "track" -> Unit
 
@@ -383,7 +434,7 @@ class HtmlMapper(
                     walk(node, quote, depth)
                     flushPending(quote)
                 } else {
-                    pendingInline.add(node)
+                    queuePending(node, node.parent())
                 }
             }
         }
@@ -391,20 +442,152 @@ class HtmlMapper(
 
     // -------------------------------------------------------------- blocks
 
+    private fun queuePending(node: Node, owner: Element?) {
+        if (pendingInline.isEmpty()) pendingInlineOwner = owner
+        pendingInline += node
+    }
+
+    /**
+     * Opens a retained CSS box without adding a semantic leaf. Only elements
+     * that the mapper itself treats as block/structural participate; ordinary
+     * inline spans continue to live solely inside AnnotatedString ranges.
+     */
+    private fun beginPublisherBox(
+        element: Element,
+        allowRoot: Boolean = false,
+    ): OpenPublisherBox? {
+        if (!isPublisherBoxElement(element, allowRoot)) return null
+        val resolver = css ?: return null
+        val computed = resolver.computed(element)
+        if (computed.hidden) return null
+        val style = resolver.publisherBoxStyle(element) ?: PublisherBoxStyle.DEFAULT
+        val floatSide = when (computed.floatSide) {
+            "left" -> PublisherFloatSide.LEFT
+            "right" -> PublisherFloatSide.RIGHT
+            else -> null
+        }
+        val clear = when (computed.clear) {
+            "left" -> PublisherClear.LEFT
+            "right" -> PublisherClear.RIGHT
+            "both" -> PublisherClear.BOTH
+            else -> PublisherClear.NONE
+        }
+        if (style.isDefault && floatSide == null && clear == PublisherClear.NONE) return null
+
+        val prefix = publisherBoxIdPrefix.ifBlank { "document" }
+        val open = OpenPublisherBox(
+            id = "$prefix:publisher-box-${publisherBoxSequence++}",
+            parentId = publisherBoxStack.lastOrNull(),
+            startElement = out.size,
+            style = style,
+            floatSide = floatSide,
+            clear = clear,
+        )
+        publisherBoxStack += open.id
+        return open
+    }
+
+    private fun endPublisherBox(open: OpenPublisherBox?) {
+        if (open == null) return
+        check(publisherBoxStack.removeAt(publisherBoxStack.lastIndex) == open.id) {
+            "Publisher box stack is not properly nested"
+        }
+        val end = out.size
+        if (end == open.startElement) {
+            // A decoration/float has no surface without a leaf. Clear is the
+            // sole meaningful zero-length flow event and has a dedicated
+            // model invariant.
+            if (open.clear != PublisherClear.NONE) {
+                publisherBoxes += PublisherBoxSpan(
+                    id = open.id,
+                    parentId = open.parentId,
+                    startElement = end,
+                    endElementExclusive = end,
+                    clear = open.clear,
+                )
+            } else {
+                // Descendant clear markers may survive even when a decorated
+                // wrapper has no semantic leaf of its own. Do not leave their
+                // parentId pointing at a span that was deliberately omitted.
+                for (index in publisherBoxes.indices) {
+                    val span = publisherBoxes[index]
+                    if (span.parentId == open.id) {
+                        publisherBoxes[index] = span.copy(parentId = open.parentId)
+                    }
+                }
+            }
+            return
+        }
+        publisherBoxes += PublisherBoxSpan(
+            id = open.id,
+            parentId = open.parentId,
+            startElement = open.startElement,
+            endElementExclusive = end,
+            style = open.style,
+            floatSide = open.floatSide,
+            clear = open.clear,
+        )
+    }
+
+    private fun isPublisherBoxElement(element: Element, allowRoot: Boolean): Boolean {
+        val tag = element.normalName()
+        if ((!allowRoot && tag in ROOT_TAGS) ||
+            (tag in NON_BLOCK_TAGS && tag !in IMAGE_TAGS)
+        ) {
+            return false
+        }
+        return (allowRoot && tag in ROOT_TAGS) ||
+            tag in PUBLISHER_BOX_TAGS ||
+            (isMathElement(element) && isDisplayMath(element)) ||
+            element.selectFirst(BLOCK_PROBE) != null
+    }
+
     /** Emits loose inline nodes collected between block elements. */
     private fun flushPending(quote: Boolean) {
         if (pendingInline.isEmpty()) return
         val nodes = pendingInline
+        val owner = pendingInlineOwner
         pendingInline = mutableListOf()
+        pendingInlineOwner = null
         val builder = InlineTextBuilder()
         nodes.forEach { appendInline(it, builder) }
         val hasText = !builder.isBlank
         if (hasText) {
-            out += ContentElement.Paragraph(
-                builder.build(),
-                if (quote) ParagraphStyle.QUOTE else ParagraphStyle.NORMAL,
-            )
+            val level = headingLevel ?: owner?.let(::titleClassLevel)
+            if (level != null) {
+                out += ContentElement.Heading(
+                    styledText = builder.build().trimmed(),
+                    level = level.coerceIn(1, 6),
+                    block = looseBlockTextStyle(owner),
+                )
+            } else {
+                out += ContentElement.Paragraph(
+                    builder.build(),
+                    if (quote) ParagraphStyle.QUOTE else ParagraphStyle.NORMAL,
+                    looseBlockTextStyle(owner, withFirstLetter = true),
+                )
+            }
         }
+    }
+
+    /**
+     * Direct text inside a structural element forms an anonymous CSS block,
+     * not an HTML paragraph. It therefore has neither a browser-default first
+     * line indent nor paragraph margins. Preserve an explicit/inherited
+     * `text-indent`, but do not inject the reader's prose defaults into labels,
+     * rules, generated callouts, or other direct container text.
+     */
+    private fun looseBlockTextStyle(
+        owner: Element?,
+        withFirstLetter: Boolean = false,
+    ): BlockStyle {
+        val authored = owner?.let { blockStyleFor(it, withFirstLetter) }
+        val base = authored ?: BlockStyle()
+        return base.copy(
+            firstLineIndent = base.firstLineIndent ?: false,
+            spaceBeforeSpecified = true,
+            spaceAfterSpecified = true,
+        )
     }
 
     private fun emitParagraph(element: Element, quote: Boolean, depth: Int) {
@@ -675,21 +858,7 @@ class HtmlMapper(
         table.select("[id]").forEach { registerAnchor(it.attr("id")) }
         val tableBlock = blockStyleFor(table)
         // The caption reads like a small centered title above the grid.
-        table.selectFirst("caption")?.let { caption ->
-            val builder = InlineTextBuilder()
-            appendChildrenInline(caption, builder)
-            if (!builder.isBlank) {
-                out += ContentElement.Paragraph(
-                    builder.build(),
-                    ParagraphStyle.NORMAL,
-                    (blockStyleFor(caption) ?: BlockStyle.DEFAULT).copy(
-                        align = BlockAlign.CENTER,
-                        italic = true,
-                        firstLineIndent = false,
-                    ),
-                )
-            }
-        }
+        table.selectFirst("caption")?.let(::emitTableCaption)
 
         // Only this table's own rows; a nested table flattens into its cell.
         val ownRows = table.select("tr").filter { row ->
@@ -711,6 +880,12 @@ class HtmlMapper(
                 val builder = InlineTextBuilder()
                 appendCellContent(cellElement, builder)
                 val header = cellElement.normalName() == "th"
+                val cellComputed = css?.computed(cellElement)
+                val cellPublisherBox = css?.publisherBoxStyle(cellElement)
+                    ?: PublisherBoxStyle.DEFAULT.takeIf {
+                        cellComputed?.paddingSpecified == true ||
+                            cellComputed?.borderSpecified == true
+                    }
                 TableCell(
                     text = builder.build(),
                     colSpan = cellElement.attr("colspan").toIntOrNull()?.coerceIn(1, 10) ?: 1,
@@ -718,6 +893,9 @@ class HtmlMapper(
                     align = cellAlign(cellElement, header),
                     header = header,
                     block = tableCellBlockStyle(cellElement, table),
+                    publisherBox = cellPublisherBox,
+                    publisherPaddingSpecified = cellComputed?.paddingSpecified == true,
+                    publisherBorderSpecified = cellComputed?.borderSpecified == true,
                 )
             }
             rows += TableRow(cells, isHeader = inHead || cells.all { it.header })
@@ -755,6 +933,27 @@ class HtmlMapper(
             }
 
             else -> out += ContentElement.Table(rows, tableBlock)
+        }
+    }
+
+    private fun emitTableCaption(caption: Element) {
+        val openBox = beginPublisherBox(caption)
+        try {
+            val builder = InlineTextBuilder()
+            appendChildrenInline(caption, builder)
+            if (!builder.isBlank) {
+                out += ContentElement.Paragraph(
+                    builder.build(),
+                    ParagraphStyle.NORMAL,
+                    (blockStyleFor(caption) ?: BlockStyle.DEFAULT).copy(
+                        align = BlockAlign.CENTER,
+                        italic = true,
+                        firstLineIndent = false,
+                    ),
+                )
+            }
+        } finally {
+            endPublisherBox(openBox)
         }
     }
 
@@ -930,6 +1129,15 @@ class HtmlMapper(
     }
 
     private fun emitImage(src: String, node: Element? = null) {
+        val openBox = node?.let { beginPublisherBox(it) }
+        try {
+            emitImageContent(src, node)
+        } finally {
+            endPublisherBox(openBox)
+        }
+    }
+
+    private fun emitImageContent(src: String, node: Element?) {
         val alt = node?.let(::imageAlt)
         if (src.isEmpty()) {
             emitMissingImageAlt(alt)
@@ -945,10 +1153,12 @@ class HtmlMapper(
         val computed = node?.let { css?.computed(it) }
         out += ContentElement.Image(
             path = path,
-            widthFrac = computed?.widthFrac
-                ?: computed?.widthEm?.let { (it / 30f).coerceIn(0.02f, 1f) },
+            widthFrac = computed?.widthFrac,
+            widthEm = computed?.widthEm,
             heightEm = computed?.heightEm,
             altText = alt,
+            spaceBeforeSpecified = computed?.marginTopSpecified == true,
+            spaceAfterSpecified = computed?.marginBottomSpecified == true,
         )
     }
 
@@ -1036,11 +1246,14 @@ class HtmlMapper(
      */
     private fun emitSvg(source: Element) {
         resolveSvg(source)?.let {
+            val computed = css?.computed(source)
             out += ContentElement.Image(
                 path = it,
                 altText = source.attr("aria-label").ifBlank {
                     source.selectFirst("title")?.text().orEmpty()
                 }.trim().takeIf(String::isNotEmpty),
+                spaceBeforeSpecified = computed?.marginTopSpecified == true,
+                spaceAfterSpecified = computed?.marginBottomSpecified == true,
             )
         }
     }
@@ -1080,9 +1293,9 @@ class HtmlMapper(
     // -------------------------------------------------------------- styles
 
     /**
-     * Block style of an element: its computed CSS plus the box indents and
-     * spacing of the block ancestors it opens/closes (an epigraph div's
-     * margin-left must indent every paragraph inside it).
+     * Text/paragraph presentation of one semantic leaf. CSS box geometry is
+     * retained separately in [publisherBoxes], otherwise wrapper margins,
+     * padding and backgrounds would be repeated on every flattened child.
      */
     private fun blockStyleFor(element: Element, withFirstLetter: Boolean = false): BlockStyle? {
         val resolver = css
@@ -1092,47 +1305,26 @@ class HtmlMapper(
                 language = languageFor(element),
                 direction = attributeDirection(element),
                 foregroundColorArgb = legacyForeground(element),
+                // Without a resolver there are no PublisherBoxSpans, so keep
+                // legacy bgcolor wrapper propagation as the compatibility
+                // fallback for old HTML/MOBI sources.
                 backgroundColorArgb = legacyVisualBackground(element),
             )
             return if (style.isDefault) null else style
         }
         val computed = resolver.computed(element)
 
-        var startEm = computed.marginInlineStartEm
-        var startFrac = computed.marginInlineStartFrac
-        var endEm = computed.marginInlineEndEm
-        var endFrac = computed.marginInlineEndFrac
-        var leftEm = computed.marginStartEm
-        var leftFrac = computed.marginStartFrac
-        var rightEm = computed.marginEndEm
-        var rightFrac = computed.marginEndFrac
-        var beforeEm = computed.marginTopEm
-        var afterEm = computed.marginBottomEm
-        var centered = computed.centeredBox
         var pageBreak = computed.pageBreakBefore
 
-        // Walk up through wrapper blocks, adding their horizontal indents;
-        // vertical margins only apply at the wrapper's first/last block.
+        // A wrapper's forced break still belongs to its first semantic leaf;
+        // unlike box geometry, it cannot be painted from a leaf range alone.
         var child: Element = element
         var ancestor = element.parent()
         while (ancestor != null && ancestor.normalName() !in ROOT_TAGS) {
             val box = resolver.computed(ancestor)
-            startEm += box.marginInlineStartEm
-            startFrac += box.marginInlineStartFrac
-            endEm += box.marginInlineEndEm
-            endFrac += box.marginInlineEndFrac
-            leftEm += box.marginStartEm
-            leftFrac += box.marginStartFrac
-            rightEm += box.marginEndEm
-            rightFrac += box.marginEndFrac
-            centered = centered || box.centeredBox
             if (firstBlockChild(ancestor) === child) {
-                beforeEm += box.marginTopEm
-                // A chapter <div> with page-break-before must break before
-                // its first block.
                 pageBreak = pageBreak || box.pageBreakBefore
             }
-            if (lastBlockChild(ancestor) === child) afterEm += box.marginBottomEm
             child = ancestor
             ancestor = ancestor.parent()
         }
@@ -1141,7 +1333,7 @@ class HtmlMapper(
         // actually wins over the user's setting is decided at render time
         // (the "publisher's formatting" toggle).
         val align = when {
-            computed.textAlign == "center" || centered -> BlockAlign.CENTER
+            computed.textAlign == "center" -> BlockAlign.CENTER
             computed.textAlign == "end" -> BlockAlign.END
             computed.textAlign == "start" -> BlockAlign.START
             computed.textAlign == "right" -> BlockAlign.RIGHT
@@ -1161,21 +1353,15 @@ class HtmlMapper(
             fontScale = computedFontScale.takeIf {
                 it !in 0.999f..1.001f || element.normalName() in HEADING_TAGS
             },
-            indentStartFrac = startFrac.coerceIn(0f, 0.45f),
-            indentStartEm = startEm.coerceIn(0f, 6f),
-            indentEndFrac = endFrac.coerceIn(0f, 0.45f),
-            indentEndEm = endEm.coerceIn(0f, 4f),
-            indentLeftFrac = leftFrac.coerceIn(0f, 0.45f),
-            indentLeftEm = leftEm.coerceIn(0f, 6f),
-            indentRightFrac = rightFrac.coerceIn(0f, 0.45f),
-            indentRightEm = rightEm.coerceIn(0f, 4f),
             firstLineIndent = computed.textIndentEm?.let { it > 0.05f },
             firstLineIndentEm = computed.textIndentEm,
-            spaceBeforeEm = beforeEm.coerceIn(0f, 3f),
-            spaceAfterEm = afterEm.coerceIn(0f, 3f),
             fontFamily = computed.fontFamilyName,
             lineHeightMult = computed.lineHeightMult,
             hyphens = computed.hyphensAuto,
+            // The values themselves stay on PublisherBoxSpan. These bits let
+            // ReaderMetrics replace, rather than add to, native block gaps.
+            spaceBeforeSpecified = computed.marginTopSpecified,
+            spaceAfterSpecified = computed.marginBottomSpecified,
             pageBreakBefore = pageBreak,
             firstLetter = if (withFirstLetter) resolver.firstLetter(element) else null,
             language = languageFor(element),
@@ -1186,7 +1372,10 @@ class HtmlMapper(
                 else -> attributeDirection(element)
             },
             foregroundColorArgb = computed.foregroundColorArgb,
-            backgroundColorArgb = resolver.visualBackground(element),
+            // Ancestor backgrounds are painted once by PublisherBoxSpan.
+            // Copying them into every flattened child produced the striped
+            // green/grey boxes seen in complex textbooks.
+            backgroundColorArgb = computed.backgroundColorArgb,
         )
         return if (style.isDefault) null else style
     }
@@ -1249,9 +1438,6 @@ class HtmlMapper(
 
     private fun firstBlockChild(container: Element): Element? =
         container.children().firstOrNull { it.normalName() !in NON_BLOCK_TAGS }
-
-    private fun lastBlockChild(container: Element): Element? =
-        container.children().lastOrNull { it.normalName() !in NON_BLOCK_TAGS }
 
     /** Heading level for `title`/`titleN` CSS classes, or null. */
     private fun titleClassLevel(element: Element): Int? {
@@ -1821,6 +2007,22 @@ class HtmlMapper(
         val NON_BLOCK_TAGS = setOf(
             "span", "a", "em", "i", "b", "strong", "u", "s", "sup", "sub",
             "small", "big", "code", "br", "img", "ruby", "rt", "rp", "rb",
+        )
+        val IMAGE_TAGS = setOf("img", "image")
+        val PUBLISHER_BOX_TAGS = setOf(
+            "p", "li", "dt", "dd", "pre",
+            "h1", "h2", "h3", "h4", "h5", "h6",
+            "levelhd", "hd", "bridgehead", "doctitle", "covertitle",
+            "blockquote", "cite", "poem", "epigraph",
+            "ul", "ol", "list", "figcaption", "caption", "summary",
+            "audio", "video",
+            "div", "section", "article", "aside", "main", "header", "footer",
+            "dl", "figure", "center", "nav", "details",
+            "dtbook", "book", "frontmatter", "bodymatter", "rearmatter",
+            "level", "level1", "level2", "level3", "level4", "level5", "level6",
+            "sidebar", "note", "prodnote", "annotation", "linegroup", "imggroup",
+            "svg", "hr", "table", "line", "byline", "dateline", "docauthor",
+            "address", "img", "image",
         )
         val TITLE_CLASS = Regex("""(?i)title(\d*)""")
         val NESTED_LIST_TAGS = setOf("ul", "ol", "list")

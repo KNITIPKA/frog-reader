@@ -280,7 +280,7 @@ class EpubAdvancedPackageTest {
             """<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" version="3.0"><metadata><dc:title>Fragments</dc:title></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ch" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="ch"/></spine></package>""",
             mapOf(
                 "nav.xhtml" to """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="chapter.xhtml#one">Part one</a><ol><li><a href="chapter.xhtml#%D0%B4%D0%B2%D0%B0">Part two</a></li></ol></li></ol></nav></body></html>""",
-                "chapter.xhtml" to """<html xmlns="http://www.w3.org/1999/xhtml"><body><h1 id="one">Heading one</h1><p><a href="#%D0%B4%D0%B2%D0%B0">Go two</a></p><p>First body.</p><h2 id="два">Heading two</h2><p>Second body.</p></body></html>""",
+                "chapter.xhtml" to """<html xmlns="http://www.w3.org/1999/xhtml"><body><section style="background-color:#d2e6c5;border:2px solid #37b34a;padding:1em;break-inside:avoid"><h1 id="one">Heading one</h1><p><a href="#%D0%B4%D0%B2%D0%B0">Go two</a></p><p>First body.</p><h2 id="два">Heading two</h2><p>Second body.</p></section></body></html>""",
             ),
         )
 
@@ -290,6 +290,26 @@ class EpubAdvancedPackageTest {
         assertTrue(content.chapters[0].elements.any { it.visibleText() == "First body." })
         assertTrue(content.chapters[0].elements.none { it.visibleText() == "Second body." })
         assertTrue(content.chapters[1].elements.any { it.visibleText() == "Second body." })
+
+        val firstBox = content.chapters[0].publisherBoxes.single {
+            it.style.backgroundColorArgb != null
+        }
+        val secondBox = content.chapters[1].publisherBoxes.single {
+            it.style.backgroundColorArgb != null
+        }
+        assertEquals(0, firstBox.startElement)
+        assertEquals(content.chapters[0].elements.size, firstBox.endElementExclusive)
+        assertTrue(firstBox.drawStart)
+        assertTrue(!firstBox.drawEnd)
+        assertEquals(0, secondBox.startElement)
+        assertEquals(content.chapters[1].elements.size, secondBox.endElementExclusive)
+        assertTrue(!secondBox.drawStart)
+        assertTrue(secondBox.drawEnd)
+        assertEquals(firstBox.id, secondBox.id)
+        val childParagraph = content.chapters[0].elements
+            .filterIsInstance<ContentElement.Paragraph>()
+            .first()
+        assertEquals(null, childParagraph.block?.backgroundColorArgb)
 
         val target = content.linkTargets.getValue("OEBPS/chapter.xhtml#два")
         assertEquals(1, target.first)
@@ -338,6 +358,31 @@ class EpubAdvancedPackageTest {
     }
 
     @Test
+    fun `unlisted xhtml merge offsets its publisher boxes into previous chapter`() {
+        val file = epub(
+            "merged-boxes.epub",
+            """<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" version="3.0"><metadata><dc:title>Merged boxes</dc:title></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="main" href="main.xhtml" media-type="application/xhtml+xml"/><item id="continuation" href="continuation.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="main"/><itemref idref="continuation"/></spine></package>""",
+            mapOf(
+                "nav.xhtml" to """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="main.xhtml">Main</a></li></ol></nav></body></html>""",
+                "main.xhtml" to """<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Main leaf.</p></body></html>""",
+                "continuation.xhtml" to """<html xmlns="http://www.w3.org/1999/xhtml"><body><section style="padding:0.5em;background:#eef5ff"><p>Continued one.</p><p>Continued two.</p></section></body></html>""",
+            ),
+        )
+
+        val content = EpubParser.parseContent(file, tempFolder.newFolder())
+
+        val chapter = content.chapters.single()
+        assertEquals(
+            listOf("Main leaf.", "Continued one.", "Continued two."),
+            chapter.elements.mapNotNull { it.visibleText() },
+        )
+        val box = chapter.publisherBoxes.single()
+        assertEquals(1, box.startElement)
+        assertEquals(3, box.endElementExclusive)
+        assertTrue(box.id.startsWith("OEBPS/continuation.xhtml@"))
+    }
+
+    @Test
     fun `linear no document stays outside reading order but remains a rich link target`() {
         val file = epub(
             "non-linear-link.epub",
@@ -345,7 +390,7 @@ class EpubAdvancedPackageTest {
             mapOf(
                 "nav.xhtml" to """<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="main.xhtml#main">Main</a></li><li><a href="extra.xhtml#details">Details</a></li></ol></nav></body></html>""",
                 "main.xhtml" to """<html xmlns="http://www.w3.org/1999/xhtml"><body><h1 id="main">Main chapter</h1><p><a href="extra.xhtml#details">Open details</a></p></body></html>""",
-                "extra.xhtml" to """<html xmlns="http://www.w3.org/1999/xhtml"><head><style>#details { text-align: right; font-style: italic; }</style></head><body><p><a href="main.xhtml#main">Back to main</a></p><p id="details">Linked details</p></body></html>""",
+                "extra.xhtml" to """<html xmlns="http://www.w3.org/1999/xhtml"><head><style>#details { text-align: right; font-style: italic; padding: 0.5em; border: 1px solid #445566; }</style></head><body><p><a href="main.xhtml#main">Back to main</a></p><p id="details">Linked details</p></body></html>""",
             ),
         )
 
@@ -364,6 +409,10 @@ class EpubAdvancedPackageTest {
         // CSS `right` is physical; logical `end` remains distinct for RTL.
         assertEquals(BlockAlign.RIGHT, block.align)
         assertEquals(true, block.italic)
+        val linkedBox = document.publisherBoxes.single()
+        assertEquals(target.elementIndex, linkedBox.startElement)
+        assertEquals(target.elementIndex + 1, linkedBox.endElementExclusive)
+        assertEquals(0.5f, linkedBox.style.paddingTopEm, 0.001f)
 
         val source = content.chapters.single().elements
             .filterIsInstance<ContentElement.Paragraph>().single()

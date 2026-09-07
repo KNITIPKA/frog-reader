@@ -90,11 +90,19 @@ class RealBooksTest {
         val epigraph = chapter.elements.drop(headingIndex).filterIsInstance<ContentElement.Paragraph>()
             .first { it.text.text.startsWith("Мы перестали искать монстров") }
         assertEquals(true, epigraph.block?.italic)
-        assertEquals(0.30f, epigraph.block?.indentLeftFrac ?: 0f, 0.02f)
+        val epigraphIndex = chapter.elements.indexOf(epigraph)
+        assertTrue(chapter.publisherBoxes.any { box ->
+            epigraphIndex in box.startElement until box.endElementExclusive &&
+                kotlin.math.abs(box.style.marginLeftFrac - 0.30f) < 0.02f
+        })
 
         val author = chapter.elements.drop(headingIndex).filterIsInstance<ContentElement.Paragraph>()
             .first { it.text.text == "Чарльз Дарвин" }
-        assertTrue((author.block?.indentLeftEm ?: 0f) >= 2.9f)
+        val authorIndex = chapter.elements.indexOf(author)
+        assertTrue(chapter.publisherBoxes.any { box ->
+            authorIndex in box.startElement until box.endElementExclusive &&
+                box.style.marginLeftEm >= 2.9f
+        })
     }
 
     @Test

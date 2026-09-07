@@ -22,7 +22,7 @@ import java.security.MessageDigest
 object PaginationCache {
 
     /** Bump when the CachedPart/CachedPage shape changes. */
-    private const val FORMAT_VERSION = 4
+    private const val FORMAT_VERSION = 6
 
     @Serializable
     private class CachedPart(
@@ -49,8 +49,13 @@ object PaginationCache {
         val sbCompH: Int = 0,
         val sbCapSp: Float = 0f,
         val sbCapTop: Int = 0,
+        val sbFloatHeights: List<Int>? = null,
+        val sbStacked: Boolean = false,
         // A float drawn as a plain block image (publisher formatting off).
         val fImg: String? = null,
+        val pbStart: Boolean = true,
+        val pbEnd: Boolean = true,
+        val vScroll: Boolean = false,
     )
 
     @Serializable
@@ -87,6 +92,20 @@ object PaginationCache {
         hash.int(items.size)
         for (item in items) {
             hash.int(item.chapterIndex)
+            hash.boolean(item.suppressedByPublisherFloat)
+            hash.string(item.publisherClearBefore.name)
+            hash.int(item.publisherBoxes.size)
+            item.publisherBoxes.forEach { hash.string(it.toString()) }
+            item.publisherFloat?.let { float ->
+                hash.string(float.side.name)
+                hash.string(float.style.toString())
+                hash.int(float.contents.size)
+                float.contents.forEach { content ->
+                    hash.int(content.sourceItemIndex)
+                    hash.int(content.publisherBoxes.size)
+                    content.publisherBoxes.forEach { hash.string(it.toString()) }
+                }
+            } ?: hash.int(-1)
             when (val element = item.element) {
                 is ContentElement.Paragraph -> {
                     hash.string("paragraph")
@@ -106,8 +125,11 @@ object PaginationCache {
                     hash.string("image")
                     hash.file(element.path)
                     hash.float(element.widthFrac)
+                    hash.float(element.widthEm)
                     hash.float(element.heightEm)
                     hash.string(element.altText)
+                    hash.boolean(element.spaceBeforeSpecified)
+                    hash.boolean(element.spaceAfterSpecified)
                 }
 
                 ContentElement.Divider -> hash.string("divider")
@@ -131,6 +153,9 @@ object PaginationCache {
                             hash.string(cell.align?.name)
                             hash.boolean(cell.header)
                             hash.block(cell.block)
+                            hash.string(cell.publisherBox?.toString())
+                            hash.boolean(cell.publisherPaddingSpecified)
+                            hash.boolean(cell.publisherBorderSpecified)
                         }
                     }
                 }
@@ -175,6 +200,10 @@ object PaginationCache {
                                 headerRepeated = part.hdr,
                                 charStart = part.rowS,
                                 charEnd = part.rowE,
+                                publisherBoxes = items[part.item].publisherBoxes,
+                                publisherStartsElement = part.pbStart,
+                                publisherEndsElement = part.pbEnd,
+                                allowsVerticalScroll = part.vScroll,
                             )
                         }
                         val text = if (part.start >= 0) {
@@ -200,6 +229,9 @@ object PaginationCache {
                                 compositeHeightPx = part.sbCompH,
                                 capFontSizeSp = part.sbCapSp,
                                 capTopPx = part.sbCapTop,
+                                publisherFloat = items[part.item].publisherFloat,
+                                publisherFloatItemHeightsPx = part.sbFloatHeights.orEmpty(),
+                                publisherStacked = part.sbStacked,
                             )
                         } else {
                             null
@@ -214,6 +246,10 @@ object PaginationCache {
                             charEnd = part.end,
                             sideBox = sideBox,
                             floatImagePath = part.fImg,
+                            publisherBoxes = items[part.item].publisherBoxes,
+                            publisherStartsElement = part.pbStart,
+                            publisherEndsElement = part.pbEnd,
+                            allowsVerticalScroll = part.vScroll,
                         )
                     },
                     firstItemIndex = page.first,
@@ -257,7 +293,14 @@ object PaginationCache {
                                 sbCompH = part.sideBox?.compositeHeightPx ?: 0,
                                 sbCapSp = part.sideBox?.capFontSizeSp ?: 0f,
                                 sbCapTop = part.sideBox?.capTopPx ?: 0,
+                                sbFloatHeights = part.sideBox
+                                    ?.publisherFloatItemHeightsPx
+                                    ?.takeIf(List<Int>::isNotEmpty),
+                                sbStacked = part.sideBox?.publisherStacked == true,
                                 fImg = part.floatImagePath,
+                                pbStart = part.publisherStartsElement,
+                                pbEnd = part.publisherEndsElement,
+                                vScroll = part.allowsVerticalScroll,
                             )
                         },
                     )

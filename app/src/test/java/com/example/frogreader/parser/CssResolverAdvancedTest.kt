@@ -119,7 +119,9 @@ class CssResolverAdvancedTest {
         )
         val d = doc("<div id='d'><h1 id='h'>t</h1><p id='p'>a</p></div>")
         assertEquals(1.5f, r.computed(d.selectFirst("#p")!!).marginTopEm, 0.001f)
-        assertEquals(1.5f, r.computed(d.selectFirst("#h")!!).marginTopEm, 0.001f)
+        // h1's semantic computed size is 1.5 root-em, so its own 1.5em
+        // margin normalizes to 2.25 root-em for the native box renderer.
+        assertEquals(2.25f, r.computed(d.selectFirst("#h")!!).marginTopEm, 0.001f)
         // em × em has no meaning: declaration ignored.
         assertEquals(0f, r.computed(d.selectFirst("#d")!!).marginTopEm, 0.001f)
     }
@@ -538,7 +540,8 @@ class CssResolverAdvancedTest {
         assertEquals(1f, r.computed(d.selectFirst("#p")!!).marginTopEm, 0.001f)
         assertEquals(3f, r.computed(d.selectFirst("#h1")!!).marginTopEm, 0.001f)
         assertEquals(2.3622f, r.computed(d.selectFirst("#h2")!!).marginTopEm, 0.01f)
-        assertEquals(2f, r.computed(d.selectFirst("#h3")!!).textIndentEm!!, 0.001f)
+        // 4ch = 2 local-em, and h3's semantic computed size is 1.18 root-em.
+        assertEquals(2.36f, r.computed(d.selectFirst("#h3")!!).textIndentEm!!, 0.001f)
     }
 
     @Test

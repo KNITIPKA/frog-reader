@@ -351,13 +351,23 @@ class GenerateTestBooksTest {
             bookFormatOf(Fmt.EPUB),
             tempFolder.newFolder("bidi-logical-margins-epub"),
         )
-        val logicalMargins = epubContent.chapters
-            .flatMap { it.elements }
+        val logicalChapter = epubContent.chapters.single { chapter ->
+            chapter.elements.any { element ->
+                element is ContentElement.Paragraph &&
+                    element.text.text == "LOGICAL MARGINS — هامش البداية أكبر"
+            }
+        }
+        val logicalMargins = logicalChapter.elements
             .filterIsInstance<ContentElement.Paragraph>()
             .single { it.text.text == "LOGICAL MARGINS — هامش البداية أكبر" }
         assertEquals(BookTextDirection.RTL, logicalMargins.block?.direction)
-        assertEquals(3f, logicalMargins.block?.indentStartEm ?: 0f, 0.001f)
-        assertEquals(0.5f, logicalMargins.block?.indentEndEm ?: 0f, 0.001f)
+        val logicalIndex = logicalChapter.elements.indexOf(logicalMargins)
+        val logicalBox = logicalChapter.publisherBoxes.single { box ->
+            box.startElement == logicalIndex && box.endElementExclusive == logicalIndex + 1
+        }
+        // Logical inline sides are resolved to physical axes before rendering.
+        assertEquals(0.5f, logicalBox.style.marginLeftEm, 0.001f)
+        assertEquals(3f, logicalBox.style.marginRightEm, 0.001f)
     }
 
     @Test

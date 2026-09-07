@@ -29,12 +29,14 @@ internal fun publisherColorPair(
     enabled: Boolean,
     defaultForeground: Color,
     surroundingBackground: Color,
+    backgroundAlreadyApplied: Boolean = false,
 ): PublisherColorPair = publisherColorPair(
     foregroundArgb = block?.foregroundColorArgb,
     backgroundArgb = block?.backgroundColorArgb,
     enabled = enabled,
     defaultForeground = defaultForeground,
     surroundingBackground = surroundingBackground,
+    backgroundAlreadyApplied = backgroundAlreadyApplied,
 )
 
 internal fun publisherColorPair(
@@ -43,22 +45,28 @@ internal fun publisherColorPair(
     enabled: Boolean,
     defaultForeground: Color,
     surroundingBackground: Color,
+    backgroundAlreadyApplied: Boolean = false,
 ): PublisherColorPair {
     if (!enabled) {
         return PublisherColorPair(defaultForeground, null, surroundingBackground)
     }
     val authorForeground = foregroundArgb?.let(::Color)
     val authorBackground = backgroundArgb?.let(::Color)?.takeIf { it.alpha > 0f }
-    val effectiveBackground = authorBackground
-        ?.let { compositeOver(it, surroundingBackground) }
-        ?: surroundingBackground
+    val effectiveBackground = when {
+        authorBackground == null || backgroundAlreadyApplied -> surroundingBackground
+        else -> compositePublisherColorOver(authorBackground, surroundingBackground)
+    }
     val foreground = when {
         authorForeground != null && authorBackground != null -> authorForeground
         authorForeground != null -> readableForeground(authorForeground, effectiveBackground)
         authorBackground != null -> readableForeground(defaultForeground, effectiveBackground)
         else -> defaultForeground
     }
-    return PublisherColorPair(foreground, authorBackground, effectiveBackground)
+    return PublisherColorPair(
+        foreground = foreground,
+        background = authorBackground?.takeUnless { backgroundAlreadyApplied },
+        effectiveBackground = effectiveBackground,
+    )
 }
 
 /**
@@ -142,7 +150,7 @@ internal fun AnnotatedString.withPublisherColors(
             ).takeIf { it != authorForeground }
             authorBackground != null -> readableForeground(
                 base.foreground,
-                compositeOver(authorBackground, base.effectiveBackground),
+                compositePublisherColorOver(authorBackground, base.effectiveBackground),
             ).takeIf { it != base.foreground }
             else -> null
         }
@@ -162,7 +170,7 @@ internal fun AnnotatedString.withPublisherColors(
 }
 
 internal fun contrastRatio(foreground: Color, background: Color): Float {
-    val visibleForeground = compositeOver(foreground, background)
+    val visibleForeground = compositePublisherColorOver(foreground, background)
     val lighter = max(relativeLuminance(visibleForeground), relativeLuminance(background))
     val darker = min(relativeLuminance(visibleForeground), relativeLuminance(background))
     return ((lighter + 0.05) / (darker + 0.05)).toFloat()
@@ -202,7 +210,8 @@ private fun lerp(start: Color, end: Color, fraction: Float): Color = Color(
     alpha = start.alpha + (end.alpha - start.alpha) * fraction,
 )
 
-private fun compositeOver(foreground: Color, background: Color): Color {
+/** Alpha-composite one authored layer over the already resolved surface. */
+internal fun compositePublisherColorOver(foreground: Color, background: Color): Color {
     val outAlpha = foreground.alpha + background.alpha * (1f - foreground.alpha)
     if (outAlpha <= 0f) return Color.Transparent
     fun channel(foregroundChannel: Float, backgroundChannel: Float): Float =

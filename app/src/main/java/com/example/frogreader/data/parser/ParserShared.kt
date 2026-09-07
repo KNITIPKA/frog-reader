@@ -3,6 +3,7 @@ package com.example.frogreader.data.parser
 import com.example.frogreader.data.model.Chapter
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.NoteDocument
+import com.example.frogreader.data.model.slicePublisherBoxSpans
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.parser.Parser
@@ -82,14 +83,22 @@ internal fun buildNotes(
     for (key in linkTargets) {
         if (key in notes) continue
         val (chapterIndex, elementIndex) = anchorLocations[key] ?: continue
-        val elements = chapters.getOrNull(chapterIndex)?.elements ?: continue
+        val chapter = chapters.getOrNull(chapterIndex) ?: continue
+        val elements = chapter.elements
         if (elementIndex !in elements.indices) continue
         val end = anchoredStartsByChapter[chapterIndex]
             .orEmpty()
             .firstOrNull { it > elementIndex }
             ?: elements.size
         if (end > elementIndex) {
-            notes[key] = NoteDocument(elements.subList(elementIndex, end).toList())
+            notes[key] = NoteDocument(
+                elements = elements.subList(elementIndex, end).toList(),
+                publisherBoxes = slicePublisherBoxSpans(
+                    spans = chapter.publisherBoxes,
+                    startElement = elementIndex,
+                    endElementExclusive = end,
+                ),
+            )
         }
     }
     return notes

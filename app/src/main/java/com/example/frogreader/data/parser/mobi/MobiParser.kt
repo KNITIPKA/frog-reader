@@ -275,6 +275,7 @@ object MobiParser {
                 resolveLink = { href -> href.takeIf { it.startsWith("#filepos") } },
                 css = resolver,
                 expansionBudget = htmlExpansionBudget,
+                publisherBoxIdPrefix = "mobi6:${chunk.startPos}",
             )
             val elements = mapper.map(document.body())
             mapper.noteDocuments.forEach { (id, note) ->
@@ -288,7 +289,12 @@ object MobiParser {
                 ?: elements.firstOrNull { it is ContentElement.Heading }
                     ?.let { (it as ContentElement.Heading).text }
             val chapterIndex = chapters.size
-            chapters += Chapter(title, elements, depth = ncxEntry?.second ?: 0)
+            chapters += Chapter(
+                title = title,
+                elements = elements,
+                depth = ncxEntry?.second ?: 0,
+                publisherBoxes = mapper.publisherBoxes.toList(),
+            )
             mapper.anchors.forEach { (id, index) ->
                 anchorLocations.putIfAbsent("#$id", chapterIndex to index)
             }
@@ -523,6 +529,7 @@ object MobiParser {
                         .writeInlineSvg(markup, imagesDir, inlineSvgs)
                 },
                 expansionBudget = htmlExpansionBudget,
+                publisherBoxIdPrefix = "kf8:${part.index}",
             )
             val body = document.selectFirst("body") ?: continue
             val elements = mapper.map(body)
@@ -540,6 +547,7 @@ object MobiParser {
                         ?.let { (it as ContentElement.Heading).text },
                 elements = elements,
                 depth = tocEntry?.depth ?: 0,
+                publisherBoxes = mapper.publisherBoxes.toList(),
             )
             mapper.anchors.forEach { (id, index) ->
                 anchorLocations.putIfAbsent("#$id", chapterIndex to index)

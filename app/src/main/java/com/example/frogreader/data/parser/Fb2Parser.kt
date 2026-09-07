@@ -697,6 +697,11 @@ object Fb2Parser {
                                             align = cell.align,
                                             header = cell.header,
                                             block = cell.block,
+                                            publisherBox = cell.publisherBox,
+                                            publisherPaddingSpecified =
+                                                cell.publisherPaddingSpecified,
+                                            publisherBorderSpecified =
+                                                cell.publisherBorderSpecified,
                                         )
                                     },
                                     isHeader = row.isHeader,

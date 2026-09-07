@@ -122,6 +122,8 @@ class BookContent(
  */
 data class NoteDocument(
     val elements: List<ContentElement>,
+    /** Publisher boxes over [elements]; they never consume note coordinates. */
+    val publisherBoxes: List<PublisherBoxSpan> = emptyList(),
 ) {
     /** Plain representation for diagnostics, format-parity tests and a11y. */
     val text: String
@@ -143,6 +145,8 @@ class LinkedDocument(
     val id: String,
     val title: String?,
     val elements: List<ContentElement>,
+    /** Publisher boxes over [elements], outside sequential reading progress. */
+    val publisherBoxes: List<PublisherBoxSpan> = emptyList(),
 )
 
 /** Destination of a hyperlink into a non-linear [LinkedDocument]. */
@@ -189,6 +193,8 @@ class Chapter(
      * depth 1, 2, … — the TOC renders them as a collapsible tree.
      */
     val depth: Int = 0,
+    /** Publisher boxes over [elements]; boxes do not consume element indices. */
+    val publisherBoxes: List<PublisherBoxSpan> = emptyList(),
 )
 
 sealed interface ContentElement {
@@ -218,7 +224,7 @@ sealed interface ContentElement {
     /**
      * Absolute path of an image file extracted into app storage.
      *
-     * [widthFrac] and [heightEm] carry the size the book's CSS asks for —
+     * [widthFrac], [widthEm] and [heightEm] carry the size the book's CSS asks for —
      * ornaments and inline marks are often set to `height: 1em`, and
      * blowing those up to the full column width wastes half a page.
      * Both null = the reader's default (fit the column width).
@@ -226,9 +232,14 @@ sealed interface ContentElement {
     data class Image(
         val path: String,
         val widthFrac: Float? = null,
+        /** Absolute CSS width normalized to root em; percentage uses [widthFrac]. */
+        val widthEm: Float? = null,
         val heightEm: Float? = null,
         /** Author-provided alternative text for accessibility/fallbacks. */
         val altText: String? = null,
+        /** Own CSS vertical margins, including explicit zero (publisher mode). */
+        val spaceBeforeSpecified: Boolean = false,
+        val spaceAfterSpecified: Boolean = false,
     ) : ContentElement
 
     data object Divider : ContentElement
@@ -289,6 +300,12 @@ class TableCell(
      * font families can only be resolved by the renderer, after parsing.
      */
     val block: BlockStyle? = null,
+    /** Authored cell padding/background/borders/width (publisher mode). */
+    val publisherBox: PublisherBoxStyle? = null,
+    /** Distinguishes CSS `padding: 0` from no authored padding declaration. */
+    val publisherPaddingSpecified: Boolean = false,
+    /** Distinguishes CSS `border: none` from an unstylized reader grid. */
+    val publisherBorderSpecified: Boolean = false,
 )
 
 enum class ParagraphStyle { NORMAL, QUOTE, POEM }
@@ -365,6 +382,16 @@ data class BlockStyle(
     /** Extra vertical spacing (em) above/below the block. */
     val spaceBeforeEm: Float = 0f,
     val spaceAfterEm: Float = 0f,
+    /**
+     * The semantic leaf owns an authored CSS margin on this edge.
+     *
+     * Its numeric value is painted once by PublisherBoxSpan; these presence
+     * bits only suppress the reader's native paragraph/heading spacing while
+     * publisher formatting is enabled. Keeping value and presence separate
+     * preserves an explicit `margin: 0` without double-counting non-zero CSS.
+     */
+    val spaceBeforeSpecified: Boolean = false,
+    val spaceAfterSpecified: Boolean = false,
     /** The book's font family for this block (normalized CSS name). */
     val fontFamily: String? = null,
     /** The book's line height as a multiplier of the font size. */

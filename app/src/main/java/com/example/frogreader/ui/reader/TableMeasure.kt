@@ -20,6 +20,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.ContentElement
@@ -27,6 +29,46 @@ import com.example.frogreader.ui.reader.selection.ReaderHighlights
 import com.example.frogreader.ui.reader.selection.SelectionText
 import com.example.frogreader.ui.reader.selection.readerHighlights
 import com.example.frogreader.ui.reader.selection.rememberTextFragment
+import kotlin.math.roundToInt
+
+private data class TableCellPaddingPx(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int,
+)
+
+private fun tableCellPaddingPx(
+    cell: com.example.frogreader.data.model.TableCell,
+    settings: ReaderSettings,
+    fontSizePx: Float,
+    referenceWidthPx: Int,
+    defaultPx: Int,
+): TableCellPaddingPx {
+    if (!settings.bookStyles) {
+        return TableCellPaddingPx(defaultPx, defaultPx, defaultPx, defaultPx)
+    }
+    val box = cell.publisherBox ?: com.example.frogreader.data.model.PublisherBoxStyle.DEFAULT
+    val hasVisibleAuthoredPadding = box != null && (
+        box.paddingLeftEm > 0f || box.paddingLeftFrac > 0f ||
+            box.paddingRightEm > 0f || box.paddingRightFrac > 0f ||
+            box.paddingTopEm > 0f || box.paddingBottomEm > 0f
+        )
+    if (!cell.publisherPaddingSpecified && !hasVisibleAuthoredPadding) {
+        return TableCellPaddingPx(defaultPx, defaultPx, defaultPx, defaultPx)
+    }
+    fun horizontal(em: Float, fraction: Float): Int =
+        (em.coerceAtLeast(0f) * fontSizePx +
+            fraction.coerceIn(0f, 0.45f) * referenceWidthPx)
+            .roundToInt()
+            .coerceAtLeast(0)
+    return TableCellPaddingPx(
+        left = horizontal(box.paddingLeftEm, box.paddingLeftFrac),
+        top = (box.paddingTopEm.coerceAtLeast(0f) * fontSizePx).roundToInt(),
+        right = horizontal(box.paddingRightEm, box.paddingRightFrac),
+        bottom = (box.paddingBottomEm.coerceAtLeast(0f) * fontSizePx).roundToInt(),
+    )
+}
 
 /**
  * Table measurement and drawing. The layout (column widths, row heights,
@@ -63,7 +105,8 @@ fun measureTableLayout(
 ): TableLayout = with(density) {
     val grid = TableGrid.build(table.rows)
     val columnCount = grid.columnCount.coerceAtLeast(1)
-    val cellPadPx = ReaderMetrics.tableCellPadding.roundToPx()
+    val defaultCellPadPx = ReaderMetrics.tableCellPadding.roundToPx()
+    val fontSizePx = fontSize.sp.toPx()
     val availablePx = contentWidthPx.coerceAtLeast(1)
 
     class SpanIntrinsic(val col: Int, val span: Int, val minPx: Int, val maxPx: Int)
@@ -79,6 +122,13 @@ fun measureTableLayout(
             for ((ci, cell) in row.cells.withIndex()) {
                 val col = grid.cellColumns[r][ci].coerceAtMost(columnCount - 1)
                 val span = cell.colSpan.coerceIn(1, 10).coerceAtMost(columnCount - col)
+                val padding = tableCellPaddingPx(
+                    cell,
+                    settings,
+                    fontSizePx,
+                    availablePx,
+                    defaultCellPadPx,
+                )
                 val style = ReaderMetrics.tableCellStyle(
                     settings, fontSize, scale, cell.header, language,
                     table.block, cell.block, bookFonts,
@@ -91,7 +141,7 @@ fun measureTableLayout(
                         placeholders = tableCellPlaceholders(bidiCell.display),
                         constraints = Constraints(),
                     )
-                    .size.width + 2 * cellPadPx
+                    .size.width + padding.left + padding.right
                 val minIntrinsic = tableCellMinIntrinsicWidthPx(cell.text) { run, placeholders ->
                     val bidiRun = BidiLayoutText.of(run)
                     measurer.measure(
@@ -104,10 +154,20 @@ fun measureTableLayout(
                         },
                         constraints = Constraints(),
                     ).size.width
-                } + 2 * cellPadPx
+                } + padding.left + padding.right
                 if (span <= 1) {
+                    val authoredWidth = authoredTableCellWidthPx(
+                        box = cell.publisherBox,
+                        enabled = settings.bookStyles,
+                        availableWidthPx = availablePx,
+                        fontSizePx = fontSizePx,
+                    )
                     if (minIntrinsic > minW[col]) minW[col] = minIntrinsic
                     if (maxIntrinsic > maxW[col]) maxW[col] = maxIntrinsic
+                    if (authoredWidth != null) {
+                        if (authoredWidth > minW[col]) minW[col] = authoredWidth
+                        if (authoredWidth > maxW[col]) maxW[col] = authoredWidth
+                    }
                 } else {
                     spans += SpanIntrinsic(col, span, minIntrinsic, maxIntrinsic)
                 }
@@ -137,6 +197,13 @@ fun measureTableLayout(
             val span = cell.colSpan.coerceIn(1, 10).coerceAtMost(columnCount - col)
             var cellWidth = 0
             for (c in col until col + span) cellWidth += widths[c]
+            val padding = tableCellPaddingPx(
+                cell,
+                settings,
+                fontSizePx,
+                cellWidth,
+                defaultCellPadPx,
+            )
             val style = ReaderMetrics.tableCellStyle(
                 settings, fontSize, chosenScale, cell.header, language,
                 table.block, cell.block, bookFonts,
@@ -146,9 +213,11 @@ fun measureTableLayout(
                 text = bidiCell.display,
                 style = style,
                 placeholders = tableCellPlaceholders(bidiCell.display),
-                constraints = Constraints(maxWidth = (cellWidth - 2 * cellPadPx).coerceAtLeast(1)),
+                constraints = Constraints(
+                    maxWidth = (cellWidth - padding.left - padding.right).coerceAtLeast(1),
+                ),
             ).size.height
-            val total = textHeight + 2 * cellPadPx
+            val total = textHeight + padding.top + padding.bottom
             val rowSpan = cell.rowSpan.coerceIn(1, 20).coerceAtMost(table.rows.size - r)
             if (rowSpan <= 1) {
                 if (total > height) height = total
@@ -168,6 +237,21 @@ fun measureTableLayout(
     }
 
     TableLayout(grid, widths, rowHeights, chosenScale)
+}
+
+internal fun authoredTableCellWidthPx(
+    box: com.example.frogreader.data.model.PublisherBoxStyle?,
+    enabled: Boolean,
+    availableWidthPx: Int,
+    fontSizePx: Float,
+): Int? {
+    if (!enabled || box == null || availableWidthPx <= 0) return null
+    val requested = when {
+        box.widthFrac != null -> availableWidthPx * box.widthFrac.coerceIn(0.05f, 1f)
+        box.widthEm != null -> box.widthEm.coerceAtLeast(0.05f) * fontSizePx
+        else -> return null
+    }
+    return requested.roundToInt().coerceIn(1, availableWidthPx)
 }
 
 /**
@@ -247,6 +331,10 @@ fun TableBlock(
     footnotes: FootnoteHandler? = null,
     searchHighlight: String? = null,
     colors: ReaderColors,
+    /** Effective container surface, including translucent publisher boxes. */
+    surroundingBackground: Color = colors.background,
+    /** The table's retained publisher box already painted its own background. */
+    publisherBackgroundAlreadyApplied: Boolean = false,
     highlights: ReaderHighlights? = null,
     itemIndex: Int = -1,
     modifier: Modifier = Modifier,
@@ -257,7 +345,8 @@ fun TableBlock(
         table.block,
         settings.bookStyles,
         colors.text,
-        colors.background,
+        surroundingBackground,
+        backgroundAlreadyApplied = publisherBackgroundAlreadyApplied,
     )
 
     class CellPlacement(
@@ -316,13 +405,37 @@ fun TableBlock(
     }
 
     val borderColor = colors.secondaryText.copy(alpha = 0.35f)
+    val defaultCellPaddingPx = with(density) { ReaderMetrics.tableCellPadding.roundToPx() }
+    val fontSizePx = with(density) { fontSize.sp.toPx() }
+    val placementPaddings = remember(
+        table,
+        placements,
+        settings.bookStyles,
+        fontSizePx,
+        defaultCellPaddingPx,
+    ) {
+        placements.map { placement ->
+            tableCellPaddingPx(
+                table.rows[placement.row].cells[placement.cellIndex],
+                settings,
+                fontSizePx,
+                placement.width,
+                defaultCellPaddingPx,
+            )
+        }
+    }
     Layout(
         modifier = modifier.drawBehind {
             val stroke = Stroke(width = 1f)
             for (p in placements) {
+                val cell = table.rows[p.row].cells[p.cellIndex]
+                val publisherBox = cell.publisherBox?.takeIf { settings.bookStyles }
                 if (settings.bookStyles) {
-                    table.rows[p.row].cells[p.cellIndex].block
-                        ?.backgroundColorArgb
+                    // [cell.block] contains the composited tbody/tr/cell
+                    // surface. Prefer it over the cell's own raw box layer so
+                    // row backgrounds are not lost when a td is transparent.
+                    (cell.block?.backgroundColorArgb
+                        ?: publisherBox?.backgroundColorArgb)
                         ?.let { Color(it) }
                         ?.takeIf { it.alpha > 0f }
                         ?.let { cellBackground ->
@@ -333,42 +446,92 @@ fun TableBlock(
                             )
                         }
                 }
-                drawRect(
-                    color = borderColor,
-                    topLeft = Offset(p.x.toFloat(), p.y.toFloat()),
-                    size = Size(p.width.toFloat(), p.height.toFloat()),
-                    style = stroke,
-                )
+                val authoredBorder = publisherBox
+                    ?: com.example.frogreader.data.model.PublisherBoxStyle.DEFAULT
+                val hasVisibleAuthoredBorder = settings.bookStyles && (
+                    authoredBorder.borderTop != null || authoredBorder.borderRight != null ||
+                        authoredBorder.borderBottom != null || authoredBorder.borderLeft != null
+                    )
+                if (settings.bookStyles &&
+                    (cell.publisherBorderSpecified || hasVisibleAuthoredBorder)
+                ) {
+                    val left = p.x.toFloat()
+                    val top = p.y.toFloat()
+                    val right = left + p.width
+                    val bottom = top + p.height
+                    drawPublisherBorder(
+                        authoredBorder.borderLeft,
+                        left,
+                        top,
+                        left,
+                        bottom,
+                        fontSizePx,
+                    )
+                    drawPublisherBorder(
+                        authoredBorder.borderRight,
+                        right,
+                        top,
+                        right,
+                        bottom,
+                        fontSizePx,
+                    )
+                    drawPublisherBorder(
+                        authoredBorder.borderTop,
+                        left,
+                        top,
+                        right,
+                        top,
+                        fontSizePx,
+                    )
+                    drawPublisherBorder(
+                        authoredBorder.borderBottom,
+                        left,
+                        bottom,
+                        right,
+                        bottom,
+                        fontSizePx,
+                    )
+                } else {
+                    drawRect(
+                        color = borderColor,
+                        topLeft = Offset(p.x.toFloat(), p.y.toFloat()),
+                        size = Size(p.width.toFloat(), p.height.toFloat()),
+                        style = stroke,
+                    )
+                }
             }
         },
         content = {
             for (p in placements) {
                 val cell = table.rows[p.row].cells[p.cellIndex]
                 val align = cell.align ?: if (cell.header) BlockAlign.CENTER else null
+                val cellBackgroundArgb = cell.block
+                    ?.takeIf { settings.bookStyles }
+                    ?.backgroundColorArgb
+                    ?: cell.publisherBox
+                        ?.takeIf { settings.bookStyles }
+                        ?.backgroundColorArgb
                 val cellColors = publisherColorPair(
                     foregroundArgb = cell.block?.foregroundColorArgb
                         ?: table.block?.foregroundColorArgb,
-                    backgroundArgb = cell.block?.backgroundColorArgb
+                    backgroundArgb = cellBackgroundArgb
                         ?: table.block?.backgroundColorArgb,
                     enabled = settings.bookStyles,
                     defaultForeground = tableColors.foreground,
-                    surroundingBackground = if (cell.block?.backgroundColorArgb != null) {
-                        tableColors.effectiveBackground
-                    } else {
-                        colors.background
-                    },
+                    surroundingBackground = tableColors.effectiveBackground,
                 )
                 val linkColor = readableReaderForeground(
                     colors.accent,
                     cellColors.effectiveBackground,
                 )
-                val decorated = cell.text
-                    .withPublisherColors(settings.bookStyles, cellColors)
-                    .withFootnoteLinks(linkColor, footnotes)
-                    .withSearchHighlight(
-                        searchHighlight,
-                        colors.accent.copy(alpha = 0.3f),
-                    )
+                val decorated = remember(
+                    cell.text, settings.bookStyles, cellColors, linkColor,
+                    footnotes, searchHighlight, colors.accent,
+                ) {
+                    cell.text.withPublisherColors(settings.bookStyles, cellColors)
+                        .withFootnoteLinks(linkColor, footnotes)
+                        .withSearchHighlight(searchHighlight, colors.accent.copy(alpha = 0.3f))
+                }
                 val bidiDisplay = remember(decorated) { BidiLayoutText.of(decorated) }
                 val display = bidiDisplay.display
                 // A table's character space is its flattened text, the same
@@ -412,7 +575,6 @@ fun TableBlock(
             }
         },
     ) { measurables, _ ->
-        val pad = with(density) { ReaderMetrics.tableCellPadding.roundToPx() }
         var totalWidth = 0
         for (w in layout.colWidthsPx) totalWidth += w
         var totalHeight = 0
@@ -423,18 +585,20 @@ fun TableBlock(
 
         val placeables = measurables.mapIndexed { i, measurable ->
             val p = placements[i]
+            val padding = placementPaddings[i]
             measurable.measure(
                 Constraints(
-                    minWidth = (p.width - 2 * pad).coerceAtLeast(1),
-                    maxWidth = (p.width - 2 * pad).coerceAtLeast(1),
-                    maxHeight = (p.height - 2 * pad).coerceAtLeast(1),
+                    minWidth = (p.width - padding.left - padding.right).coerceAtLeast(1),
+                    maxWidth = (p.width - padding.left - padding.right).coerceAtLeast(1),
+                    maxHeight = (p.height - padding.top - padding.bottom).coerceAtLeast(1),
                 ),
             )
         }
         layout(totalWidth, totalHeight) {
             placeables.forEachIndexed { i, placeable ->
                 val p = placements[i]
-                placeable.place(p.x + pad, p.y + pad)
+                val padding = placementPaddings[i]
+                placeable.place(p.x + padding.left, p.y + padding.top)
             }
         }
     }

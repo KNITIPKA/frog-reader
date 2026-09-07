@@ -9,6 +9,7 @@ import androidx.compose.ui.text.withAnnotation
 import androidx.compose.ui.text.withStyle
 import com.example.frogreader.data.model.BlockStyle
 import com.example.frogreader.ui.reader.contrastRatio
+import com.example.frogreader.ui.reader.compositePublisherColorOver
 import com.example.frogreader.ui.reader.publisherColorPair
 import com.example.frogreader.ui.reader.withPublisherColors
 import org.junit.Assert.assertEquals
@@ -130,5 +131,34 @@ class PublisherColorsTest {
         // Fidelity wins for a complete pair, even when it is intentionally
         // low-contrast and the two declarations live on nested spans.
         assertEquals(raw.spanStyles, enabled.spanStyles)
+    }
+
+    @Test
+    fun `already applied translucent background is neither painted nor composited twice`() {
+        val authorBackground = Color(red = 1f, green = 0f, blue = 0f, alpha = 0.5f)
+        val paintedSurface = compositePublisherColorOver(authorBackground, Color.White)
+        val pair = publisherColorPair(
+            foregroundArgb = Color.Black.toArgb(),
+            backgroundArgb = authorBackground.toArgb(),
+            enabled = true,
+            defaultForeground = Color.Black,
+            surroundingBackground = paintedSurface,
+            backgroundAlreadyApplied = true,
+        )
+
+        assertNull(pair.background)
+        assertEquals(paintedSurface, pair.effectiveBackground)
+        assertEquals(Color.Black, pair.foreground)
+    }
+
+    @Test
+    fun `publisher alpha compositing uses source over semantics`() {
+        val foreground = Color(red = 1f, green = 0f, blue = 0f, alpha = 0.5f)
+        val result = compositePublisherColorOver(foreground, Color.Blue)
+
+        assertEquals(foreground.alpha, result.red, 0.001f)
+        assertEquals(0f, result.green, 0.001f)
+        assertEquals(1f - foreground.alpha, result.blue, 0.001f)
+        assertEquals(1f, result.alpha, 0.001f)
     }
 }

@@ -63,7 +63,8 @@ class MobiParserKf8Test {
         MobiBuilder.buildKf8(file, colors)
 
         val content = MobiParser.parseContent(file, tempFolder.newFolder())
-        val paragraph = content.chapters.single().elements
+        val chapter = content.chapters.single()
+        val paragraph = chapter.elements
             .filterIsInstance<ContentElement.Paragraph>().single()
         assertEquals(0xff006400.toInt(), paragraph.block?.foregroundColorArgb)
         assertEquals(0xfff0f8ff.toInt(), paragraph.block?.backgroundColorArgb)
@@ -74,8 +75,13 @@ class MobiParserKf8Test {
         }.item
         assertEquals(0xff663399.toInt(), accent.color.toArgb())
         assertEquals(0x88ffff00.toInt(), accent.background.toArgb())
+        val paragraphBox = chapter.publisherBoxes.single {
+            it.style.backgroundColorArgb == 0xfff0f8ff.toInt()
+        }
+        assertEquals(0, paragraphBox.startElement)
+        assertEquals(1, paragraphBox.endElementExclusive)
 
-        val table = content.chapters.single().elements
+        val table = chapter.elements
             .filterIsInstance<ContentElement.Table>().single()
         assertEquals(0xff006400.toInt(), table.block?.foregroundColorArgb)
         assertEquals(0xff000080.toInt(), table.block?.backgroundColorArgb)

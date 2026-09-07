@@ -105,8 +105,9 @@ class BookStylingTest {
         val epub = tempFolder.newFile("styled.epub")
         buildLitresLikeEpub(epub)
 
-        val elements = EpubParser.parseContent(epub, tempFolder.newFolder())
-            .chapters.single().elements
+        val chapter = EpubParser.parseContent(epub, tempFolder.newFolder())
+            .chapters.single()
+        val elements = chapter.elements
 
         val heading = elements.filterIsInstance<ContentElement.Heading>()
             .single { it.text.startsWith("Глава 1") }
@@ -123,23 +124,32 @@ class BookStylingTest {
         val epub = tempFolder.newFile("styled2.epub")
         buildLitresLikeEpub(epub)
 
-        val elements = EpubParser.parseContent(epub, tempFolder.newFolder())
-            .chapters.single().elements
+        val chapter = EpubParser.parseContent(epub, tempFolder.newFolder())
+            .chapters.single()
+        val elements = chapter.elements
         val paragraphs = elements.filterIsInstance<ContentElement.Paragraph>()
 
         val epigraph = paragraphs.single { it.text.text.startsWith("Мы перестали") }
         val block = epigraph.block
         assertNotNull(block)
         assertEquals(true, block!!.italic)
-        assertEquals(0.30f, block.indentLeftFrac, 0.01f)
+        val epigraphIndex = elements.indexOf(epigraph)
+        assertTrue(chapter.publisherBoxes.any { box ->
+            epigraphIndex in box.startElement until box.endElementExclusive &&
+                kotlin.math.abs(box.style.marginLeftFrac - 0.30f) < 0.01f
+        })
 
         // The author's signature keeps the epigraph indent plus its own 3em.
         val author = paragraphs.single { it.text.text == "Чарльз Дарвин" }
         val authorBlock = author.block
         assertNotNull(authorBlock)
         assertEquals(true, authorBlock!!.italic)
-        assertEquals(0.30f, authorBlock.indentLeftFrac, 0.01f)
-        assertTrue(authorBlock.indentLeftEm >= 2.9f)
+        val authorIndex = elements.indexOf(author)
+        val authorBoxes = chapter.publisherBoxes.filter { box ->
+            authorIndex in box.startElement until box.endElementExclusive
+        }
+        assertTrue(authorBoxes.any { it.style.marginLeftFrac >= 0.29f })
+        assertTrue(authorBoxes.any { it.style.marginLeftEm >= 2.9f })
         assertEquals(false, authorBlock.firstLineIndent)
 
         // Body text: the full book style is recorded (align, font, spacing);

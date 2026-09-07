@@ -16,12 +16,23 @@ import org.junit.Test
 
 class BidiSupportTest {
 
-    private fun mapped(html: String, css: String? = null): List<ContentElement> =
-        HtmlMapper(
+    private data class MappedDocument(
+        val elements: List<ContentElement>,
+        val boxes: List<com.example.frogreader.data.model.PublisherBoxSpan>,
+    )
+
+    private fun mappedDocument(html: String, css: String? = null): MappedDocument {
+        val mapper = HtmlMapper(
             resolveImage = { null },
             resolveLink = { href -> "OPS/ch.xhtml$href" },
             css = css?.let { CssResolver(listOf(CssResolver.Sheet(it))) },
-        ).map(Jsoup.parse(html).body())
+        )
+        val elements = mapper.map(Jsoup.parse(html).body())
+        return MappedDocument(elements, mapper.publisherBoxes)
+    }
+
+    private fun mapped(html: String, css: String? = null): List<ContentElement> =
+        mappedDocument(html, css).elements
 
     @Test
     fun `arabic and hebrew blocks preserve clean text and explicit directions`() {
@@ -173,46 +184,41 @@ class BidiSupportTest {
 
     @Test
     fun `logical and physical horizontal css insets remain distinct`() {
-        val paragraphs = mapped(
+        val mapped = mappedDocument(
             "<p class='physical' dir='rtl'>physical</p>" +
                 "<p class='logical' dir='rtl'>logical</p>",
             css = ".physical{margin-left:2em;margin-right:1em}" +
                 ".logical{margin-inline-start:3em;margin-inline-end:0.5em}",
-        ).filterIsInstance<ContentElement.Paragraph>()
+        )
 
-        val physical = requireNotNull(paragraphs[0].block)
-        assertEquals(2f, physical.indentLeftEm, 0.001f)
-        assertEquals(1f, physical.indentRightEm, 0.001f)
-        assertEquals(0f, physical.indentStartEm, 0.001f)
-        val logical = requireNotNull(paragraphs[1].block)
-        assertEquals(3f, logical.indentStartEm, 0.001f)
-        assertEquals(0.5f, logical.indentEndEm, 0.001f)
-        assertEquals(0f, logical.indentLeftEm, 0.001f)
+        val physical = mapped.boxes.single { it.startElement == 0 && it.endElementExclusive == 1 }
+            .style
+        assertEquals(2f, physical.marginLeftEm, 0.001f)
+        assertEquals(1f, physical.marginRightEm, 0.001f)
+        val logical = mapped.boxes.single { it.startElement == 1 && it.endElementExclusive == 2 }
+            .style
+        // Logical sides are resolved once into physical axes for the renderer.
+        assertEquals(0.5f, logical.marginLeftEm, 0.001f)
+        assertEquals(3f, logical.marginRightEm, 0.001f)
     }
 
     @Test
     fun `logical and physical aliases obey cascade instead of double counting`() {
-        val paragraphs = mapped(
+        val mapped = mappedDocument(
             "<p class='later' dir='ltr'>later</p>" +
                 "<p class='important' dir='ltr'>important</p>" +
                 "<p class='rtl' dir='rtl'>rtl</p>",
             css = ".later{margin-left:2em;margin-inline-start:3em}" +
                 ".important{margin-left:2em!important;margin-inline-start:3em}" +
                 ".rtl{margin-right:1em;margin-inline-start:4em}",
-        ).filterIsInstance<ContentElement.Paragraph>()
+        )
 
-        requireNotNull(paragraphs[0].block).let { block ->
-            assertEquals(3f, block.indentStartEm, 0.001f)
-            assertEquals(0f, block.indentLeftEm, 0.001f)
-        }
-        requireNotNull(paragraphs[1].block).let { block ->
-            assertEquals(0f, block.indentStartEm, 0.001f)
-            assertEquals(2f, block.indentLeftEm, 0.001f)
-        }
-        requireNotNull(paragraphs[2].block).let { block ->
-            assertEquals(4f, block.indentStartEm, 0.001f)
-            assertEquals(0f, block.indentRightEm, 0.001f)
-        }
+        fun styleAt(index: Int) = mapped.boxes.single {
+            it.startElement == index && it.endElementExclusive == index + 1
+        }.style
+        assertEquals(3f, styleAt(0).marginLeftEm, 0.001f)
+        assertEquals(2f, styleAt(1).marginLeftEm, 0.001f)
+        assertEquals(4f, styleAt(2).marginRightEm, 0.001f)
     }
 
     private fun isBidiControl(char: Char): Boolean = char in setOf(

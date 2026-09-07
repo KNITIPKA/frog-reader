@@ -1,6 +1,6 @@
 # Аудит движка форматов FrogReader
 
-Дата среза: 2026-08-25. Область: FB2 2.x, EPUB 2 / EPUB 3.3,
+Дата среза: 2026-08-31. Область: FB2 2.x, EPUB 2 / EPUB 3.3,
 legacy MOBI6/7 и Kindle Format 8 (KF8/AZW3). Аудио и видео EPUB/KF8
 намеренно отложены по решению владельца продукта.
 
@@ -61,14 +61,19 @@ embedded fonts и очень широкие таблицы), явно не вы�
 
 ## Архитектурный вывод
 
-Сейчас FrogReader — нормализующий reflow-движок: все форматы превращаются в
-небольшой плоский набор paragraph/heading/image/table/spacer. Это сильная
-архитектура для обычной прозы: единая пагинация, поиск, выделение, темы и
-закладки. Но она принципиально не может выразить полный CSS box model,
+Сейчас FrogReader — нормализующий reflow-движок. Его семантические
+paragraph/heading/image/table/spacer остаются плоскими, что даёт единую
+пагинацию, поиск, выделение, темы и закладки. Теперь параллельно им
+хранится иерархия `PublisherBoxSpan`: вложенные авторские контейнеры могут
+сохранить background, физические margin/padding/border, width/alignment,
+`break-inside:avoid`, float/clear и границы продолжения при разрезании главы,
+не ломая стабильные leaf coordinates.
+
+Это bounded native CSS box model, а не браузер. Он по-прежнему не может выразить
 fixed-layout, полноценную двумерную MathML-вёрстку, вертикальное письмо,
 абсолютное позиционирование и сложные SVG/HTML accessibility trees. Для MathML
-теперь есть bounded native fallback, который сохраняет формулу читаемой и
-стилизованной, но не притворяется браузерной математической версткой.
+есть bounded native fallback, который сохраняет формулу читаемой и стилизованной,
+но не притворяется браузерной математической версткой.
 
 Поэтому путь к действительно лучшему движку двухконтурный:
 
@@ -92,7 +97,10 @@ fixed-layout, полноценную двумерную MathML-вёрстку, �
 - Обычные fragment-ссылки отделены от настоящих `noteref`; popup-сноски больше
   не поглощают содержание и перекрёстные ссылки.
 - Inline `<img>` остаётся в исходной позиции текста; крупные и float-images
-  остаются блочными/обтекаемыми без дублирования.
+  остаются блочными/обтекаемыми без дублирования. Если крупная inline-картинка
+  вынесена в отдельный native leaf, `text-align` содержащего блока продолжает
+  задавать её физическое положение; явный `display:block`, float и auto margins
+  сохраняют собственную CSS-семантику.
 - Embedded SVG сохраняется целиком, включая одновременные vector shapes, text
   и raster `<image>`; локальный raster в сериализованном SVG встраивается как
   data URI.
@@ -170,6 +178,57 @@ fixed-layout, полноценную двумерную MathML-вёрстку, �
   rich notes. Publisher toggle полностью снимает их; одиночная авторская
   сторона получает contrast-safe пару, полная foreground/background пара
   сохраняется без самовольной перекраски.
+- HTML containers теперь остаются плоскими для семантического reader API,
+  но их вложенная геометрия хранится отдельными half-open
+  `PublisherBoxSpan`. Background родителя больше не копируется на каждый
+  дочерний paragraph, а рисуется один раз вокруг диапазона.
+- Прямой текст структурного `div`/`section` создаёт анонимный CSS block, а не
+  обычный reader paragraph: ему не добавляются выдуманные first-line indent и
+  paragraph gaps, при этом явный или унаследованный `text-indent` сохраняется.
+- Native publisher-box planner сохраняет вложенные background, margin/padding,
+  базовые solid/dashed/dotted/double borders, процентную/шрифтовую ширину,
+  центрирование и `break-inside:avoid`; измерение, pagination cache и painting
+  используют одну и ту же модель.
+- Базовый `float:left/right` теперь относится не только к одной буквице или
+  картинке: безопасный короткий container/figure может обтекаться соседним
+  текстом. `clear:left/right/both` заканчивает такое обтекание, а небезопасная
+  комбинация честно возвращается в normal flow вместо потери контента.
+- Авторская геометрия ячейки таблицы хранится рядом с её текстовым стилем:
+  разделяются padding и border, включая явные `padding:0` и `border:none`;
+  intrinsic measurement, split по страницам и drawing учитывают эту геометрию.
+  Неразрывная row/rowspan-группа выше доступной страницы не обрезается:
+  конкретная страница получает локальный вертикальный scroll как аварийный
+  fallback, сохраняя весь контент и остальные страницы обычными.
+
+## Реальная регрессия: *The Math Book*
+
+Файл, показавший разрыв со сторонней читалкой, разобран как пакет, а не
+по отдельным скриншотам. Это reflowable EPUB, а не pre-paginated/fixed-layout:
+
+- 122 XHTML content documents;
+- 450 raster assets и 477 ссылок на изображения;
+- две реальные HTML tables; часть визуальных таблиц/схем на страницах
+  на самом деле является JPEG;
+- нет embedded fonts, SVG, MathML, audio и video.
+
+Поэтому разница шрифта не может быть исправлена «извлечением шрифта книги»: его в
+пакете нет. FrogReader должен сохранить авторские size/weight/style/family hints,
+но не выдумывать отсутствующую font family.
+
+Наблюдаемая поломка была в native reflow path: background стилизованного
+контейнера размножался на его leaf paragraphs, float-группа теряла связь
+картинки с caption/text, а padding/borders табличных ячеек не доходили до
+общего measure/render path. Исправление не проверяет title, ISBN или классы этой
+книги: вся production logic опирается на обычную DOM/CSS семантику и применима к
+следующим учебникам.
+
+`MathBookPublisherRegressionTest` условно открывает локальный оригинал и проверяет,
+что серый, зелёный и розовый panels, белые rules, прямые rule-labels без
+абзацного отступа, левый float, центрированная 80%-картинка, 90% images и
+геометрия реальных cells доходят до общей модели. Тест пропускается, если
+личного EPUB нет на машине, поэтому он дополняет, а не заменяет синтетические
+детерминированные fixtures. Пока device-gate ниже не пройден, это доказательство
+parser/model/measure policy, но не pixel-identical визуальной паритетности.
 
 ## Единый нумерованный capability checklist
 
@@ -217,7 +276,7 @@ fixed-layout, полноценную двумерную MathML-вёрстку, �
 | 26 | Безопасные HTTP(S)/mailto/tel links | ✅ | ✅ | ✅ | ✅ |
 | 27 | EPUB CFI / Kindle locations / переносимые ranges | Ø | ❌ | ❌ | ❌ |
 | 28 | Author page breaks before block | ◐ | ✅ | ✅ | ✅ |
-| 29 | Break after/inside, widows/orphans | Ø/◐ | ❌ | ❌ | ❌ |
+| 29 | Break after/inside, widows/orphans | Ø/◐ | ◐ | ◐ | ◐ |
 | 30 | RTL page progression / spreads | ◐ | ◐ | ◐ | ◐ |
 
 EPUB `linear="no"` не подмешивается в главы и прогресс: обычная XHTML-ссылка
@@ -302,19 +361,21 @@ CSS paragraph boundary невозможен, если исходный box уж�
 | 65 | Text align/justify/indent | ✅ | ✅ | ✅ | ✅ |
 | 66 | Margins/padding/centered boxes | ◐ | ◐ | ◐ | ◐ |
 | 67 | Foreground color и background | ✅ | ✅ | ✅ | ✅ |
-| 68 | Borders/radius/outline/shadow | ❌ | ❌ | ❌ | ❌ |
+| 68 | Basic borders / radius, outline, shadow | ◐ | ◐ | ◐ | ◐ |
 | 69 | Letter/word spacing, transform, text-shadow | ❌ | ❌ | ❌ | ❌ |
-| 70 | Image float и basic text wrapping | Ø/◐ | ✅ | ✅ | ✅ |
-| 71 | Clear/overflow/object-fit/min-max/aspect-ratio | Ø | ❌ | ❌ | ❌ |
+| 70 | Image/container float и basic text wrapping | Ø/◐ | ◐ | ◐ | ◐ |
+| 71 | Clear/overflow/object-fit/min-max/aspect-ratio | Ø | ◐ | ◐ | ◐ |
 | 72 | Absolute/fixed positioning, z-index, transform | Ø | ❌ | Ø | ❌ |
 | 73 | Flex/grid/columns | Ø | ❌ | Ø | Ø/⚠ |
-| 74 | Full table CSS/border-collapse/layout | ◐ | ❌ | ❌ | ❌ |
+| 74 | Full table CSS/border-collapse/layout | ◐ | ◐ | ◐ | ◐ |
 | 75 | `@page`, named pages, page floats | Ø | ❌ | Ø | Ø/⚠ |
 
 FB2 stylesheet support — это compatibility-профиль поверх семантического XML,
 а не браузерная обязанность. EPUB/KF8, напротив, реально умеют гораздо больше
-CSS, поэтому строки 67–75 являются подтверждёнными reader gaps, а не пределом
-форматов.
+CSS, поэтому неполные строки 68–75 остаются reader gaps, а не пределом форматов.
+В строке 68 реализованы физические basic borders, но не radius/outline/shadow;
+в строке 71 — только basic `clear`; в строке 74 — cell padding/background/borders
+без полной браузерной модели `border-collapse`, colgroup и nested layout.
 
 ### E. Изображения, SVG, таблицы и специальные режимы
 
@@ -380,9 +441,11 @@ fragment targets в одном XHTML, Unicode IRI fragments, embedded/obfuscated
 fonts, recursive imports, substantial CSS cascade, tables, lists, ruby,
 preformatted text, SVG/images, semantic links и отдельно открываемые
 `linear="no"` documents. EPUB 2 DTBook проходит тот же package path, а
-Presentation MathML имеет читаемый native fallback. Главные настоящие reader
-gaps: fixed layout и browser-level MathML fidelity, vertical writing, полный
-CSS painting/box model, SVG как searchable/accessibility tree,
+Presentation MathML имеет читаемый native fallback. Вложенные reflowable HTML
+containers теперь сохраняют bounded box geometry, basic float/clear и
+ячеечную геометрию без перевода в fixed-layout. Главные настоящие reader
+gaps: fixed layout и browser-level MathML fidelity, vertical writing, оставшийся
+browser-level CSS painting/box model, SVG как searchable/accessibility tree,
 scripts/media overlays и DPUB-ARIA semantics.
 
 ### MOBI6/7
@@ -464,9 +527,12 @@ session закрывается ViewModel. Эти инварианты требу
 
 ### P1 — fidelity обычных reflowable книг
 
-- borders/radius/shadow и ограниченный безопасный box painting в Compose;
+- border radius/outline/shadow, border-collapse и более полный безопасный
+  box painting поверх уже реализованных basic borders/background в Compose;
 - white-space/word-break/overflow-wrap, letter/word spacing, text-transform,
   visibility и поддержанные font-feature/variant свойства;
+- более общая float formatting context: несколько одновременных floats,
+  многоабзацное обтекание, min/max-width и overflow/object-fit;
 - richer object/picture/srcset/resource fallback, URL query/base semantics и
   external references внутри SVG;
 - EPUB page-list, landmarks/guide/start-reading, multiple rootfiles/renditions;
@@ -510,6 +576,15 @@ DTBook fixture. Источники и проверка детерминиров�
 Синтетический fixture доказывает точный инвариант; реальная книга доказывает,
 что мы правильно поняли экосистему.
 
+Новый publisher-layout gate разделён по слоям: `PublisherLayoutCssTest` и
+`PublisherBoxStyleResolverTest` проверяют cascade и box values;
+`PublisherLayoutMapperTest`/`PublisherLayoutSpanTest` — вложенные half-open ranges,
+slice/rebase и clear markers; `ReaderPublisherLayoutTest` — safe float planning;
+`PublisherBoxLayoutGeometryTest` и `PaginationPublisherPolicyTest` — общую
+measure/render geometry и pagination policy; `PaginationCacheTest` — полную
+сериализацию новой модели. `MathBookPublisherRegressionTest` добавляет
+условную проверку исходного EPUB, когда он доступен локально.
+
 ## Обязательный ручной device-gate (Pixel 9a)
 
 Автоматизация телефона не выполняется. Владелец вручную проверяет:
@@ -542,6 +617,28 @@ DTBook fixture. Источники и проверка детерминиров�
 15. Arabic/Hebrew: mixed RTL/LTR с цифрами и скобками, `dir=auto`, `bdi`/`bdo`,
     headings/lists/table, logical margins, page order/tap zones, selection,
     search/copy в page и scroll режимах.
+16. *The Math Book*, «Numerals take their places»: зелёная иллюстрация и заголовок
+    сохраняют авторскую ширину; `IN CONTEXT` — один серый bordered panel
+    с белыми separators, а не отдельные серые полосы за каждым paragraph;
+    `KEY CIVILIZATION`, `FIELD`, `BEFORE`, `AFTER` начинаются у общего левого края.
+17. *The Math Book*, `Cuneiform`: рисунок с caption слева и текст справа
+    остаются одним светло-зелёным bordered container; при узкой ширине или
+    крупном шрифте stacked fallback не теряет ни рисунок, ни caption, ни текст.
+18. *The Math Book*, `Parabolas`: схема зеркала имеет примерно 90% ширины,
+    а розовый `Practical applications` сохраняет heading rule, background,
+    frame и безопасное image/text wrapping.
+19. Обе реальные HTML tables книги: cell padding/background/borders видны,
+    колонки не выходят за viewport, а разрез по страницам не съедает нижний
+    inset/border. Растровая 80%-схема base-60 центрирована в колонке, а не
+    приклеена к её левому краю.
+20. Пункты 16–19 повторяются в paged и scroll mode, на малом и крупном
+    шрифте. Publisher formatting on сохраняет hierarchy; off снимает
+    author boxes/colors без потери текста, картинок, переходов и progress anchors.
+
+В этой книге нет embedded font, поэтому device-gate не должен требовать
+pixel-identical гарниту из эталонного приложения. Проверяются авторские
+font size/weight/style и layout hierarchy, а выбор конкретной доступной гарнитуры
+остаётся политикой reader typography.
 
 До этой проверки формулировка — «код и автоматические gates зелёные», а не
 «визуально лучший движок на рынке уже доказан».

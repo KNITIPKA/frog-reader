@@ -3,6 +3,10 @@ package com.example.frogreader.data.parser
 import com.example.frogreader.data.model.BookTextDirection
 import com.example.frogreader.data.model.FirstLetterStyle
 import com.example.frogreader.data.model.HeadingDefaults
+import com.example.frogreader.data.model.PublisherBorderSide
+import com.example.frogreader.data.model.PublisherBorderStyle
+import com.example.frogreader.data.model.PublisherBoxAlign
+import com.example.frogreader.data.model.PublisherBoxStyle
 import org.jsoup.nodes.Element
 import java.util.IdentityHashMap
 
@@ -49,6 +53,7 @@ class CssResolver(sheets: List<Sheet>) {
 
     private enum class MarginSide { TOP, RIGHT, BOTTOM, LEFT, INLINE_START, INLINE_END }
     private enum class FontPart { STYLE, WEIGHT, SIZE, LINE_HEIGHT, FAMILY }
+    private enum class BorderPart { WIDTH, STYLE, COLOR }
 
     private class Declaration(
         val value: String,
@@ -57,7 +62,21 @@ class CssResolver(sheets: List<Sheet>) {
         val marginSide: MarginSide? = null,
         /** Non-null for a `font: var(...)` pending computed-value expansion. */
         val fontPart: FontPart? = null,
+        /** Non-null for a border shorthand pending computed-value expansion. */
+        val borderPart: BorderPart? = null,
+        /** True for `background`, whose retained native subset is its color. */
+        val backgroundShorthand: Boolean = false,
     )
+
+    private class MutableBorder(colorArgb: Int) {
+        var widthEm: Float = MEDIUM_BORDER_EM
+        var colorArgb: Int = colorArgb
+        var style: PublisherBorderStyle = PublisherBorderStyle.NONE
+
+        fun toPublisherSide(): PublisherBorderSide? =
+            takeIf { widthEm > 0f && style != PublisherBorderStyle.NONE }
+                ?.let { PublisherBorderSide(widthEm, colorArgb, style) }
+    }
 
     /** One parsed declaration block for one selector. */
     private class Rule(
@@ -257,22 +276,38 @@ class CssResolver(sheets: List<Sheet>) {
         val fontSizeEm: Float,
         /** "center" | "left" | "right" | "end" | "start" | "justify" or null. */
         val textAlign: String?,
-        /** First-line indent in em, null when never specified. */
+        /** First-line indent normalized to reader-root em, null when unspecified. */
         val textIndentEm: Float?,
         val hidden: Boolean,
-        /** Own (non-inherited) box properties in em / width fractions. */
-        /** Physical CSS left/right margins and padding (legacy names retained internally). */
+        /** Own computed display value; null means the tag's initial display. */
+        val display: String?,
+        /** Own (non-inherited) box properties in root-em / width fractions. */
+        /** Physical CSS left/right margins (legacy start/end names retained internally). */
         val marginStartEm: Float,
         val marginStartFrac: Float,
         val marginEndEm: Float,
         val marginEndFrac: Float,
-        /** Logical CSS inline-axis margins and padding. */
+        /** Logical CSS inline-axis margins. */
         val marginInlineStartEm: Float,
         val marginInlineStartFrac: Float,
         val marginInlineEndEm: Float,
         val marginInlineEndFrac: Float,
         val marginTopEm: Float,
         val marginBottomEm: Float,
+        /** Own vertical margin declaration exists, including an explicit zero. */
+        val marginTopSpecified: Boolean,
+        val marginBottomSpecified: Boolean,
+        /** Padding stays distinct from margins for container box painting. */
+        val paddingStartEm: Float,
+        val paddingStartFrac: Float,
+        val paddingEndEm: Float,
+        val paddingEndFrac: Float,
+        val paddingInlineStartEm: Float,
+        val paddingInlineStartFrac: Float,
+        val paddingInlineEndEm: Float,
+        val paddingInlineEndFrac: Float,
+        val paddingTopEm: Float,
+        val paddingBottomEm: Float,
         /** margin-left/right: auto — a centered block. */
         val centeredBox: Boolean,
         val underline: Boolean,
@@ -305,14 +340,27 @@ class CssResolver(sheets: List<Sheet>) {
         val backgroundColorArgb: Int?,
         /** page-break-before: always — start this block on a fresh page. */
         val pageBreakBefore: Boolean,
+        /** page-break-inside/break-inside: avoid. */
+        val breakInsideAvoid: Boolean,
         /** float: "left"/"right" — text may wrap around this element. */
         val floatSide: String?,
+        /** clear: "left"/"right"/"both" after logical-side resolution. */
+        val clear: String?,
         /** width as a fraction of the container, when given in %. */
         val widthFrac: Float?,
-        /** width in em, when given as a length. */
+        /** Width normalized to reader-root em, when given as a length. */
         val widthEm: Float?,
-        /** height in em, when given as a length (ornament images). */
+        /** Height normalized to reader-root em (ornament images). */
         val heightEm: Float? = null,
+        /** Physical publisher border edges; null means no painted edge. */
+        val borderTop: PublisherBorderSide? = null,
+        val borderRight: PublisherBorderSide? = null,
+        val borderBottom: PublisherBorderSide? = null,
+        val borderLeft: PublisherBorderSide? = null,
+        /** Own padding declaration exists, including an explicit zero. */
+        val paddingSpecified: Boolean = false,
+        /** Own border declaration exists, including `none`/zero width. */
+        val borderSpecified: Boolean = false,
         /** Custom properties (`--x`) in scope, inherited like text styles. */
         val customProps: Map<String, String> = emptyMap(),
     )
@@ -367,6 +415,122 @@ class CssResolver(sheets: List<Sheet>) {
      * cache from pinning every DOM node of the whole book in memory.
      */
     fun clearCache() = cache.clear()
+
+    /**
+     * Own CSS box decoration of [element] in renderer-ready physical axes.
+     *
+     * Text inheritance is intentionally absent. Logical inline margin and
+     * padding declarations are mapped exactly once using the computed bidi
+     * direction, then combined with the surviving physical declarations.
+     * Null means the element contributes no retained native box styling.
+     */
+    fun publisherBoxStyle(element: Element): PublisherBoxStyle? {
+        val value = computed(element)
+        val rtl = when (value.direction) {
+            "rtl" -> true
+            "auto" -> firstStrongRtl(element.text()) ?: false
+            else -> false
+        }
+        val style = PublisherBoxStyle(
+            marginTopEm = value.marginTopEm,
+            marginRightEm = (value.marginEndEm + if (rtl) {
+                value.marginInlineStartEm
+            } else {
+                value.marginInlineEndEm
+            }).coerceIn(0f, MAX_BOX_INLINE_EM),
+            marginRightFrac = (value.marginEndFrac + if (rtl) {
+                value.marginInlineStartFrac
+            } else {
+                value.marginInlineEndFrac
+            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            marginBottomEm = value.marginBottomEm,
+            marginLeftEm = (value.marginStartEm + if (rtl) {
+                value.marginInlineEndEm
+            } else {
+                value.marginInlineStartEm
+            }).coerceIn(0f, MAX_BOX_INLINE_EM),
+            marginLeftFrac = (value.marginStartFrac + if (rtl) {
+                value.marginInlineEndFrac
+            } else {
+                value.marginInlineStartFrac
+            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            paddingTopEm = value.paddingTopEm,
+            paddingRightEm = (value.paddingEndEm + if (rtl) {
+                value.paddingInlineStartEm
+            } else {
+                value.paddingInlineEndEm
+            }).coerceIn(0f, MAX_BOX_INLINE_EM),
+            paddingRightFrac = (value.paddingEndFrac + if (rtl) {
+                value.paddingInlineStartFrac
+            } else {
+                value.paddingInlineEndFrac
+            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            paddingBottomEm = value.paddingBottomEm,
+            paddingLeftEm = (value.paddingStartEm + if (rtl) {
+                value.paddingInlineEndEm
+            } else {
+                value.paddingInlineStartEm
+            }).coerceIn(0f, MAX_BOX_INLINE_EM),
+            paddingLeftFrac = (value.paddingStartFrac + if (rtl) {
+                value.paddingInlineEndFrac
+            } else {
+                value.paddingInlineStartFrac
+            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            backgroundColorArgb = value.backgroundColorArgb
+                ?.takeIf { (it ushr 24) != 0 },
+            borderTop = value.borderTop,
+            borderRight = value.borderRight,
+            borderBottom = value.borderBottom,
+            borderLeft = value.borderLeft,
+            widthFrac = value.widthFrac,
+            widthEm = value.widthEm,
+            horizontalAlign = publisherHorizontalAlign(element, value),
+            breakInsideAvoid = value.breakInsideAvoid,
+        )
+        return style.takeUnless(PublisherBoxStyle::isDefault)
+    }
+
+    /**
+     * Preserve the inline formatting position when a replaced element becomes
+     * a standalone native reader leaf.
+     *
+     * In HTML, `text-align` belongs to the containing block, not to `<img>`
+     * itself. The native mapper has to lift a large inline image out of its
+     * line box, so without this bridge an authored `text-align:center` keeps
+     * the 80% width but incorrectly places that narrower box at the left edge.
+     * Explicit block display and floats keep their own CSS positioning rules;
+     * auto inline margins continue to center any block via [Computed.centeredBox].
+     */
+    private fun publisherHorizontalAlign(
+        element: Element,
+        value: Computed,
+    ): PublisherBoxAlign {
+        if (value.floatSide != null) return PublisherBoxAlign.START
+        if (value.centeredBox) return PublisherBoxAlign.CENTER
+        if (element.normalName() !in INLINE_REPLACED_TAGS ||
+            value.display in BLOCK_LEVEL_DISPLAY_VALUES
+        ) {
+            return PublisherBoxAlign.START
+        }
+
+        val container = element.parent()
+            ?.takeIf { it.normalName() != "#root" }
+            ?.let(::computed)
+            ?: return PublisherBoxAlign.START
+        val containerRtl = when (container.direction) {
+            "rtl" -> true
+            "auto" -> firstStrongRtl(element.parent()?.text().orEmpty()) ?: false
+            else -> false
+        }
+        return when (container.textAlign) {
+            "center" -> PublisherBoxAlign.CENTER
+            "right" -> PublisherBoxAlign.END
+            "left" -> PublisherBoxAlign.START
+            "start" -> if (containerRtl) PublisherBoxAlign.END else PublisherBoxAlign.START
+            "end" -> if (containerRtl) PublisherBoxAlign.START else PublisherBoxAlign.END
+            else -> PublisherBoxAlign.START
+        }
+    }
 
     /**
      * Visible background contributed by [element] and its wrapper ancestors.
@@ -806,20 +970,7 @@ class CssResolver(sheets: List<Sheet>) {
         // properties, since CSS computed values do not depend on declaration
         // order (`line-height` must see the final font size either way).
         val declaredFontSize = decl["font-size"]?.let { declaration ->
-            val original = declaration.value
-            val raw = if ("var(" in original) {
-                substituteVars(original, customProps) ?: return@let null
-            } else {
-                original
-            }
-            val normalized = raw.trim().lowercase()
-            val value = declaration.fontPart?.let { part ->
-                fontShorthandValues(normalized)?.value(part)
-            } ?: if (declaration.fontPart != null) {
-                return@let null
-            } else {
-                normalized
-            }
+            val value = resolvedDeclarationValue(declaration, customProps) ?: return@let null
             when (value) {
                 "inherit", "unset" -> inheritedFontSize
                 "initial" -> 1f
@@ -831,6 +982,7 @@ class CssResolver(sheets: List<Sheet>) {
         var align = parent?.textAlign
         var indent = parent?.textIndentEm
         var hidden = parent?.hidden ?: false
+        var display: String? = null
         var underline = parent?.underline ?: false
         var strike = parent?.strike ?: false
         var monospace = parent?.monospace ?: false
@@ -876,7 +1028,9 @@ class CssResolver(sheets: List<Sheet>) {
         val foregroundColorArgb = declaredForeground?.let {
             resolveForeground(it, parent?.foregroundColorArgb)
         } ?: parent?.foregroundColorArgb
-        val declaredBackground = declarationValue(decl["background-color"], customProps)
+        val declaredBackground = decl["background-color"]?.let {
+            resolvedDeclarationValue(it, customProps)
+        }
             ?: element.attr("bgcolor").takeIf { it.isNotBlank() }
         val backgroundColorArgb = declaredBackground?.let {
             resolveBackground(it, parent?.backgroundColorArgb, foregroundColorArgb)
@@ -901,13 +1055,53 @@ class CssResolver(sheets: List<Sheet>) {
         var paddingInlineEndFrac = 0f
         var marginTopEm = 0f
         var marginBottomEm = 0f
-        var autoStart = false
-        var autoEnd = false
+        var paddingTopEm = 0f
+        var paddingBottomEm = 0f
+        var autoLeft = false
+        var autoRight = false
         var pageBreakBefore = false
+        var breakInsideAvoid = false
         var floatSide: String? = null
+        var clear: String? = null
         var widthFrac: Float? = null
         var widthEm: Float? = null
         var heightEm: Float? = null
+        val currentColor = foregroundColorArgb ?: BLACK_ARGB
+        val borderTop = MutableBorder(currentColor)
+        val borderRight = MutableBorder(currentColor)
+        val borderBottom = MutableBorder(currentColor)
+        val borderLeft = MutableBorder(currentColor)
+        val paddingSpecified = decl.keys.any { it.startsWith("padding-") }
+        val borderSpecified = decl.keys.any { property ->
+            property.startsWith("border-top-") || property.startsWith("border-right-") ||
+                property.startsWith("border-bottom-") || property.startsWith("border-left-")
+        }
+        val marginTopSpecified = "margin-top" in decl
+        val marginBottomSpecified = "margin-bottom" in decl
+
+        fun applyBorder(
+            border: MutableBorder,
+            inherited: PublisherBorderSide?,
+            part: BorderPart,
+            value: String,
+        ) {
+            when (part) {
+                BorderPart.WIDTH -> borderWidthEm(
+                    value,
+                    inherited?.widthEm ?: MEDIUM_BORDER_EM,
+                    emScale = fontSize,
+                )?.let { border.widthEm = it }
+                BorderPart.STYLE -> borderStyle(
+                    value,
+                    inherited?.style ?: PublisherBorderStyle.NONE,
+                )?.let { border.style = it }
+                BorderPart.COLOR -> borderColor(
+                    value,
+                    inherited?.colorArgb ?: currentColor,
+                    currentColor,
+                )?.let { border.colorArgb = it }
+            }
+        }
 
         // Tag defaults, so CSS-less inline tags keep working through here.
         when (element.normalName()) {
@@ -923,23 +1117,7 @@ class CssResolver(sheets: List<Sheet>) {
 
         for ((property, declaration) in decl) {
             if (property.startsWith("--")) continue
-            val declaredValue = declaration.value
-            // var() substitution: unresolvable without a fallback → the
-            // declaration is invalid at computed-value time and dropped.
-            val rawValue = if ("var(" in declaredValue) {
-                substituteVars(declaredValue, customProps) ?: continue
-            } else {
-                declaredValue
-            }
-            val normalizedValue = rawValue.trim().lowercase()
-            val value = when {
-                declaration.marginSide != null ->
-                    marginShorthandValue(normalizedValue, declaration.marginSide)
-                declaration.fontPart != null ->
-                    fontShorthandValues(normalizedValue)?.value(declaration.fontPart)
-                else -> normalizedValue
-            }
-            if (value == null) continue
+            val value = resolvedDeclarationValue(declaration, customProps) ?: continue
             when (property) {
                 "font-style" -> when {
                     value.startsWith("italic") || value.startsWith("oblique") -> italic = true
@@ -1021,11 +1199,22 @@ class CssResolver(sheets: List<Sheet>) {
                     // "inherit": keep the parent's value already in `align`.
                 }
 
-                "text-indent" -> lengthEm(value, percentBase = 0.30f)?.let {
+                "text-indent" -> lengthEm(
+                    value,
+                    percentBase = 0.30f,
+                    emScale = fontSize,
+                )?.let {
                     indent = it.coerceIn(0f, 4f)
                 }
 
-                "display" -> hidden = hidden || value == "none"
+                "display" -> when (value) {
+                    "inherit" -> display = parent?.display
+                    "initial", "unset", "revert", "revert-layer" -> display = null
+                    else -> {
+                        display = value
+                        hidden = hidden || value == "none"
+                    }
+                }
 
                 "text-decoration", "text-decoration-line" -> {
                     if (value.contains("underline")) underline = true
@@ -1049,20 +1238,76 @@ class CssResolver(sheets: List<Sheet>) {
                     "auto", "avoid" -> pageBreakBefore = false
                 }
 
+                "page-break-inside", "break-inside" -> when (value) {
+                    "avoid", "avoid-page", "avoid-column", "avoid-region" ->
+                        breakInsideAvoid = true
+                    "auto" -> breakInsideAvoid = false
+                    "inherit" -> breakInsideAvoid = parent?.breakInsideAvoid ?: false
+                    "initial", "unset", "revert", "revert-layer" ->
+                        breakInsideAvoid = false
+                }
+
                 "float" -> when (value) {
                     "left", "right" -> floatSide = value
                     "none" -> floatSide = null
                 }
 
+                "clear" -> clear = when (value) {
+                    "left", "right", "both" -> value
+                    "inline-start" -> if (rtlLogicalAxis) "right" else "left"
+                    "inline-end" -> if (rtlLogicalAxis) "left" else "right"
+                    "inherit" -> parent?.clear
+                    else -> null
+                }
+
                 "width" -> if (value.endsWith("%")) {
                     leadingNumber(value)?.let { widthFrac = (it / 100f).coerceIn(0.05f, 1f) }
                 } else {
-                    lengthEm(value)?.let { widthEm = it }
+                    lengthEm(value, emScale = fontSize)?.let { widthEm = it }
                 }
 
                 "height" -> if (!value.endsWith("%") && value != "auto") {
-                    lengthEm(value)?.takeIf { it > 0f }?.let { heightEm = it }
+                    lengthEm(value, emScale = fontSize)
+                        ?.takeIf { it > 0f }
+                        ?.let { heightEm = it }
                 }
+
+                "border-top-width" -> applyBorder(
+                    borderTop, parent?.borderTop, BorderPart.WIDTH, value,
+                )
+                "border-right-width" -> applyBorder(
+                    borderRight, parent?.borderRight, BorderPart.WIDTH, value,
+                )
+                "border-bottom-width" -> applyBorder(
+                    borderBottom, parent?.borderBottom, BorderPart.WIDTH, value,
+                )
+                "border-left-width" -> applyBorder(
+                    borderLeft, parent?.borderLeft, BorderPart.WIDTH, value,
+                )
+                "border-top-style" -> applyBorder(
+                    borderTop, parent?.borderTop, BorderPart.STYLE, value,
+                )
+                "border-right-style" -> applyBorder(
+                    borderRight, parent?.borderRight, BorderPart.STYLE, value,
+                )
+                "border-bottom-style" -> applyBorder(
+                    borderBottom, parent?.borderBottom, BorderPart.STYLE, value,
+                )
+                "border-left-style" -> applyBorder(
+                    borderLeft, parent?.borderLeft, BorderPart.STYLE, value,
+                )
+                "border-top-color" -> applyBorder(
+                    borderTop, parent?.borderTop, BorderPart.COLOR, value,
+                )
+                "border-right-color" -> applyBorder(
+                    borderRight, parent?.borderRight, BorderPart.COLOR, value,
+                )
+                "border-bottom-color" -> applyBorder(
+                    borderBottom, parent?.borderBottom, BorderPart.COLOR, value,
+                )
+                "border-left-color" -> applyBorder(
+                    borderLeft, parent?.borderLeft, BorderPart.COLOR, value,
+                )
 
                 "margin-left" -> {
                     // Physical left competes with logical start in LTR and
@@ -1075,8 +1320,9 @@ class CssResolver(sheets: List<Sheet>) {
                         marginInlineStartEm = 0f
                         marginInlineStartFrac = 0f
                     }
-                    if (value == "auto") autoStart = true else {
-                        lengthEm(value)?.let { marginStartEm = it }
+                    autoLeft = value == "auto"
+                    if (value != "auto") {
+                        lengthEm(value, emScale = fontSize)?.let { marginStartEm = it }
                         percentFrac(value)?.let { marginStartFrac = it }
                     }
                 }
@@ -1089,8 +1335,9 @@ class CssResolver(sheets: List<Sheet>) {
                         marginInlineEndEm = 0f
                         marginInlineEndFrac = 0f
                     }
-                    if (value == "auto") autoEnd = true else {
-                        lengthEm(value)?.let { marginEndEm = it }
+                    autoRight = value == "auto"
+                    if (value != "auto") {
+                        lengthEm(value, emScale = fontSize)?.let { marginEndEm = it }
                         percentFrac(value)?.let { marginEndFrac = it }
                     }
                 }
@@ -1103,8 +1350,14 @@ class CssResolver(sheets: List<Sheet>) {
                         marginStartEm = 0f
                         marginStartFrac = 0f
                     }
-                    if (value == "auto") autoStart = true else {
-                        lengthEm(value)?.let { marginInlineStartEm = it }
+                    if (rtlLogicalAxis) {
+                        autoRight = value == "auto"
+                    } else {
+                        autoLeft = value == "auto"
+                    }
+                    if (value != "auto") {
+                        lengthEm(value, emScale = fontSize)
+                            ?.let { marginInlineStartEm = it }
                         percentFrac(value)?.let { marginInlineStartFrac = it }
                     }
                 }
@@ -1117,14 +1370,24 @@ class CssResolver(sheets: List<Sheet>) {
                         marginEndEm = 0f
                         marginEndFrac = 0f
                     }
-                    if (value == "auto") autoEnd = true else {
-                        lengthEm(value)?.let { marginInlineEndEm = it }
+                    if (rtlLogicalAxis) {
+                        autoLeft = value == "auto"
+                    } else {
+                        autoRight = value == "auto"
+                    }
+                    if (value != "auto") {
+                        lengthEm(value, emScale = fontSize)
+                            ?.let { marginInlineEndEm = it }
                         percentFrac(value)?.let { marginInlineEndFrac = it }
                     }
                 }
 
-                "margin-top" -> lengthEm(value)?.let { marginTopEm = it }
-                "margin-bottom" -> lengthEm(value)?.let { marginBottomEm = it }
+                "margin-top" -> lengthEm(value, emScale = fontSize)?.let { marginTopEm = it }
+                "margin-bottom" -> lengthEm(value, emScale = fontSize)
+                    ?.let { marginBottomEm = it }
+                "padding-top" -> lengthEm(value, emScale = fontSize)?.let { paddingTopEm = it }
+                "padding-bottom" -> lengthEm(value, emScale = fontSize)
+                    ?.let { paddingBottomEm = it }
 
                 "padding-left" -> {
                     if (rtlLogicalAxis) {
@@ -1134,7 +1397,7 @@ class CssResolver(sheets: List<Sheet>) {
                         paddingInlineStartEm = 0f
                         paddingInlineStartFrac = 0f
                     }
-                    lengthEm(value)?.let { paddingStartEm = it }
+                    lengthEm(value, emScale = fontSize)?.let { paddingStartEm = it }
                     percentFrac(value)?.let { paddingStartFrac = it }
                 }
                 "padding-right" -> {
@@ -1145,7 +1408,7 @@ class CssResolver(sheets: List<Sheet>) {
                         paddingInlineEndEm = 0f
                         paddingInlineEndFrac = 0f
                     }
-                    lengthEm(value)?.let { paddingEndEm = it }
+                    lengthEm(value, emScale = fontSize)?.let { paddingEndEm = it }
                     percentFrac(value)?.let { paddingEndFrac = it }
                 }
                 "padding-inline-start" -> {
@@ -1156,7 +1419,8 @@ class CssResolver(sheets: List<Sheet>) {
                         paddingStartEm = 0f
                         paddingStartFrac = 0f
                     }
-                    lengthEm(value)?.let { paddingInlineStartEm = it }
+                    lengthEm(value, emScale = fontSize)
+                        ?.let { paddingInlineStartEm = it }
                     percentFrac(value)?.let { paddingInlineStartFrac = it }
                 }
                 "padding-inline-end" -> {
@@ -1167,7 +1431,8 @@ class CssResolver(sheets: List<Sheet>) {
                         paddingEndEm = 0f
                         paddingEndFrac = 0f
                     }
-                    lengthEm(value)?.let { paddingInlineEndEm = it }
+                    lengthEm(value, emScale = fontSize)
+                        ?.let { paddingInlineEndEm = it }
                     percentFrac(value)?.let { paddingInlineEndFrac = it }
                 }
             }
@@ -1181,21 +1446,30 @@ class CssResolver(sheets: List<Sheet>) {
             textAlign = align,
             textIndentEm = indent,
             hidden = hidden,
-            marginStartEm = (marginStartEm + paddingStartEm).coerceIn(0f, 8f),
-            marginStartFrac = (marginStartFrac + paddingStartFrac).coerceIn(0f, 0.45f),
-            marginEndEm = (marginEndEm + paddingEndEm).coerceIn(0f, 8f),
-            marginEndFrac = (marginEndFrac + paddingEndFrac).coerceIn(0f, 0.45f),
-            marginInlineStartEm = (marginInlineStartEm + paddingInlineStartEm)
-                .coerceIn(0f, 8f),
-            marginInlineStartFrac = (marginInlineStartFrac + paddingInlineStartFrac)
-                .coerceIn(0f, 0.45f),
-            marginInlineEndEm = (marginInlineEndEm + paddingInlineEndEm)
-                .coerceIn(0f, 8f),
-            marginInlineEndFrac = (marginInlineEndFrac + paddingInlineEndFrac)
-                .coerceIn(0f, 0.45f),
-            marginTopEm = marginTopEm.coerceIn(0f, 4f),
-            marginBottomEm = marginBottomEm.coerceIn(0f, 4f),
-            centeredBox = autoStart && autoEnd,
+            display = display,
+            marginStartEm = marginStartEm.coerceIn(0f, MAX_BOX_INLINE_EM),
+            marginStartFrac = marginStartFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            marginEndEm = marginEndEm.coerceIn(0f, MAX_BOX_INLINE_EM),
+            marginEndFrac = marginEndFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            marginInlineStartEm = marginInlineStartEm.coerceIn(0f, MAX_BOX_INLINE_EM),
+            marginInlineStartFrac = marginInlineStartFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            marginInlineEndEm = marginInlineEndEm.coerceIn(0f, MAX_BOX_INLINE_EM),
+            marginInlineEndFrac = marginInlineEndFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            marginTopEm = marginTopEm.coerceIn(0f, MAX_BOX_BLOCK_EM),
+            marginBottomEm = marginBottomEm.coerceIn(0f, MAX_BOX_BLOCK_EM),
+            marginTopSpecified = marginTopSpecified,
+            marginBottomSpecified = marginBottomSpecified,
+            paddingStartEm = paddingStartEm.coerceIn(0f, MAX_BOX_INLINE_EM),
+            paddingStartFrac = paddingStartFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            paddingEndEm = paddingEndEm.coerceIn(0f, MAX_BOX_INLINE_EM),
+            paddingEndFrac = paddingEndFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            paddingInlineStartEm = paddingInlineStartEm.coerceIn(0f, MAX_BOX_INLINE_EM),
+            paddingInlineStartFrac = paddingInlineStartFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            paddingInlineEndEm = paddingInlineEndEm.coerceIn(0f, MAX_BOX_INLINE_EM),
+            paddingInlineEndFrac = paddingInlineEndFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            paddingTopEm = paddingTopEm.coerceIn(0f, MAX_BOX_BLOCK_EM),
+            paddingBottomEm = paddingBottomEm.coerceIn(0f, MAX_BOX_BLOCK_EM),
+            centeredBox = autoLeft && autoRight,
             underline = underline,
             strike = strike,
             superScript = superScript,
@@ -1212,10 +1486,18 @@ class CssResolver(sheets: List<Sheet>) {
             foregroundColorArgb = foregroundColorArgb,
             backgroundColorArgb = backgroundColorArgb,
             pageBreakBefore = pageBreakBefore,
+            breakInsideAvoid = breakInsideAvoid,
             floatSide = floatSide,
+            clear = clear,
             widthFrac = widthFrac,
             widthEm = widthEm,
             heightEm = heightEm,
+            borderTop = borderTop.toPublisherSide(),
+            borderRight = borderRight.toPublisherSide(),
+            borderBottom = borderBottom.toPublisherSide(),
+            borderLeft = borderLeft.toPublisherSide(),
+            paddingSpecified = paddingSpecified,
+            borderSpecified = borderSpecified,
         )
     }
 
@@ -1227,6 +1509,29 @@ class CssResolver(sheets: List<Sheet>) {
         return (if ("var(" in value) substituteVars(value, customProps) else value)
             ?.trim()
             ?.lowercase()
+    }
+
+    /** Resolve var() and delayed shorthand expansion for one cascaded longhand. */
+    private fun resolvedDeclarationValue(
+        declaration: Declaration,
+        customProps: Map<String, String>,
+    ): String? {
+        val raw = if ("var(" in declaration.value) {
+            substituteVars(declaration.value, customProps) ?: return null
+        } else {
+            declaration.value
+        }
+        val normalized = raw.trim().lowercase()
+        return when {
+            declaration.marginSide != null ->
+                marginShorthandValue(normalized, declaration.marginSide)
+            declaration.fontPart != null ->
+                fontShorthandValues(normalized)?.value(declaration.fontPart)
+            declaration.borderPart != null ->
+                borderShorthandValues(normalized)?.value(declaration.borderPart)
+            declaration.backgroundShorthand -> backgroundColorFromShorthand(normalized)
+            else -> normalized
+        }
     }
 
     /** First-strong direction used only to map logical CSS box sides for dir=auto. */
@@ -1346,18 +1651,34 @@ class CssResolver(sheets: List<Sheet>) {
         }
     }
 
-    /** Length in em (relative to the element's font), or null. */
-    private fun lengthEm(value: String, percentBase: Float = 0f): Float? {
+    /**
+     * Length normalized into reader-root em, or null.
+     *
+     * CSS `em`/`ch`/`ex` units belong to the element's computed font size,
+     * while `rem` and absolute units remain rooted in the publication. The
+     * native renderer measures retained box geometry against the reader base
+     * font, so resolving [emScale] here prevents a 0.5em padding on a 2em
+     * heading from being incorrectly rendered as only 0.5 root-em.
+     */
+    private fun lengthEm(
+        value: String,
+        percentBase: Float = 0f,
+        emScale: Float = 1f,
+    ): Float? {
         if (value == "0") return 0f
         if (CssCalc.isMath(value)) {
             val percentUnit = if (percentBase > 0f) percentBase * 30f / 100f else null
-            return CssCalc.eval(value, CssCalc.Ctx(1f, 1f, 1f / 16f, percentUnit))
+            return CssCalc.eval(
+                value,
+                CssCalc.Ctx(emScale, 1f, 1f / 16f, percentUnit),
+            )
                 ?.coerceAtLeast(0f)
         }
         val number = leadingNumber(value) ?: return null
         if (number < 0) return 0f
         return when (unitOf(value)) {
-            "em", "rem" -> number
+            "em" -> number * emScale
+            "rem" -> number
             "px" -> number / 16f
             "pt" -> number / 12f
             "pc" -> number // 16px
@@ -1365,7 +1686,7 @@ class CssResolver(sheets: List<Sheet>) {
             "cm" -> number * 2.3622f
             "mm" -> number * 0.23622f
             "q" -> number * 0.059055f
-            "ch", "ex" -> number * 0.5f
+            "ch", "ex" -> number * 0.5f * emScale
             // Viewport units against the 30-em content-width convention.
             "vw", "vmin" -> number * 0.30f
             "vh", "vmax" -> number * 0.50f
@@ -2077,6 +2398,16 @@ class CssResolver(sheets: List<Sheet>) {
                         )
                     }
 
+                    "padding" -> {
+                        if (splitTopLevelWhitespace(value).size !in 1..4) continue
+                        listOf(
+                            "padding-top" to Declaration(value, important, MarginSide.TOP),
+                            "padding-right" to Declaration(value, important, MarginSide.RIGHT),
+                            "padding-bottom" to Declaration(value, important, MarginSide.BOTTOM),
+                            "padding-left" to Declaration(value, important, MarginSide.LEFT),
+                        )
+                    }
+
                     "padding-inline" -> {
                         if (splitTopLevelWhitespace(value).size !in 1..2) continue
                         listOf(
@@ -2085,6 +2416,52 @@ class CssResolver(sheets: List<Sheet>) {
                             ),
                             "padding-inline-end" to Declaration(
                                 value, important, MarginSide.INLINE_END,
+                            ),
+                        )
+                    }
+
+                    "border" -> borderShorthandDeclarations(
+                        value,
+                        important,
+                        listOf(
+                            MarginSide.TOP,
+                            MarginSide.RIGHT,
+                            MarginSide.BOTTOM,
+                            MarginSide.LEFT,
+                        ),
+                    ) ?: continue
+                    "border-top" -> borderShorthandDeclarations(
+                        value, important, listOf(MarginSide.TOP),
+                    ) ?: continue
+                    "border-right" -> borderShorthandDeclarations(
+                        value, important, listOf(MarginSide.RIGHT),
+                    ) ?: continue
+                    "border-bottom" -> borderShorthandDeclarations(
+                        value, important, listOf(MarginSide.BOTTOM),
+                    ) ?: continue
+                    "border-left" -> borderShorthandDeclarations(
+                        value, important, listOf(MarginSide.LEFT),
+                    ) ?: continue
+                    "border-width" -> borderFourSideDeclarations(
+                        value, important, "width",
+                    ) ?: continue
+                    "border-style" -> borderFourSideDeclarations(
+                        value, important, "style",
+                    ) ?: continue
+                    "border-color" -> borderFourSideDeclarations(
+                        value, important, "color",
+                    ) ?: continue
+                    "background" -> {
+                        if (!value.contains("var(", ignoreCase = true) &&
+                            backgroundColorFromShorthand(value.lowercase()) == null
+                        ) {
+                            continue
+                        }
+                        listOf(
+                            "background-color" to Declaration(
+                                value = value,
+                                important = important,
+                                backgroundShorthand = true,
                             ),
                         )
                     }
@@ -2149,6 +2526,147 @@ class CssResolver(sheets: List<Sheet>) {
             out[property] = candidate
         }
     }
+
+    private data class BorderShorthandValues(
+        val width: String,
+        val style: String,
+        val color: String,
+    ) {
+        fun value(part: BorderPart): String = when (part) {
+            BorderPart.WIDTH -> width
+            BorderPart.STYLE -> style
+            BorderPart.COLOR -> color
+        }
+    }
+
+    private fun borderShorthandDeclarations(
+        value: String,
+        important: Boolean,
+        sides: List<MarginSide>,
+    ): List<Pair<String, Declaration>>? {
+        if (!value.contains("var(", ignoreCase = true) &&
+            borderShorthandValues(value.lowercase()) == null
+        ) {
+            return null
+        }
+        val result = ArrayList<Pair<String, Declaration>>(sides.size * 3)
+        for (side in sides) {
+            val sideName = side.physicalCssName() ?: continue
+            for (part in BorderPart.entries) {
+                result += "border-$sideName-${part.name.lowercase()}" to Declaration(
+                    value = value,
+                    important = important,
+                    borderPart = part,
+                )
+            }
+        }
+        return result
+    }
+
+    private fun borderFourSideDeclarations(
+        value: String,
+        important: Boolean,
+        suffix: String,
+    ): List<Pair<String, Declaration>>? {
+        if (splitTopLevelWhitespace(value).size !in 1..4) return null
+        return listOf(
+            MarginSide.TOP,
+            MarginSide.RIGHT,
+            MarginSide.BOTTOM,
+            MarginSide.LEFT,
+        ).map { side ->
+            "border-${side.physicalCssName()}-$suffix" to Declaration(
+                value = value,
+                important = important,
+                marginSide = side,
+            )
+        }
+    }
+
+    private fun MarginSide.physicalCssName(): String? = when (this) {
+        MarginSide.TOP -> "top"
+        MarginSide.RIGHT -> "right"
+        MarginSide.BOTTOM -> "bottom"
+        MarginSide.LEFT -> "left"
+        MarginSide.INLINE_START, MarginSide.INLINE_END -> null
+    }
+
+    private fun borderShorthandValues(value: String): BorderShorthandValues? {
+        val normalized = value.trim().lowercase()
+        if (normalized in CSS_WIDE_KEYWORDS) {
+            return BorderShorthandValues(normalized, normalized, normalized)
+        }
+        val tokens = splitTopLevelWhitespace(normalized)
+        if (tokens.isEmpty() || tokens.size > 3) return null
+        var width: String? = null
+        var style: String? = null
+        var color: String? = null
+        for (token in tokens) {
+            when {
+                token in BORDER_STYLE_KEYWORDS && style == null -> style = token
+                isBorderWidthToken(token) && width == null -> width = token
+                isBorderColorToken(token) && color == null -> color = token
+                else -> return null
+            }
+        }
+        return BorderShorthandValues(
+            width = width ?: "medium",
+            style = style ?: "none",
+            color = color ?: "currentcolor",
+        )
+    }
+
+    private fun isBorderWidthToken(value: String): Boolean =
+        value == "thin" || value == "medium" || value == "thick" ||
+            lengthEm(value) != null
+
+    private fun isBorderColorToken(value: String): Boolean =
+        value == "currentcolor" || CssColor.parse(value) != null
+
+    /** The native background subset is a single solid authored color. */
+    private fun backgroundColorFromShorthand(value: String): String? {
+        val normalized = value.trim().lowercase()
+        if (normalized in CSS_WIDE_KEYWORDS) return normalized
+        if (normalized == "none") return "transparent"
+        if (normalized == "currentcolor" || CssColor.parse(normalized) != null) {
+            return normalized
+        }
+        val colors = splitTopLevelWhitespace(normalized).filter(::isBorderColorToken)
+        return colors.singleOrNull()
+    }
+
+    private fun borderWidthEm(
+        value: String,
+        inherited: Float,
+        emScale: Float,
+    ): Float? = when (value) {
+        "inherit" -> inherited
+        "initial", "unset", "revert", "revert-layer", "medium" -> MEDIUM_BORDER_EM
+        "thin" -> THIN_BORDER_EM
+        "thick" -> THICK_BORDER_EM
+        else -> lengthEm(value, emScale = emScale)?.coerceIn(0f, MAX_BORDER_EM)
+    }
+
+    private fun borderStyle(
+        value: String,
+        inherited: PublisherBorderStyle,
+    ): PublisherBorderStyle? = when (value) {
+        "inherit" -> inherited
+        "none", "hidden", "initial", "unset", "revert", "revert-layer" ->
+            PublisherBorderStyle.NONE
+        "solid" -> PublisherBorderStyle.SOLID
+        "dashed" -> PublisherBorderStyle.DASHED
+        "dotted" -> PublisherBorderStyle.DOTTED
+        "double" -> PublisherBorderStyle.DOUBLE
+        else -> null
+    }
+
+    private fun borderColor(value: String, inherited: Int, currentColor: Int): Int? =
+        when (value) {
+            "inherit" -> inherited
+            "currentcolor", "initial", "unset", "revert", "revert-layer" -> currentColor
+            else -> CssColor.parse(value)
+        }
 
     private data class FontShorthandValues(
         val style: String,
@@ -2382,6 +2900,13 @@ class CssResolver(sheets: List<Sheet>) {
 
     private companion object {
         const val BLACK_ARGB: Int = -0x1000000
+        const val MAX_BOX_INLINE_EM = 8f
+        const val MAX_BOX_INLINE_FRAC = 0.45f
+        const val MAX_BOX_BLOCK_EM = 4f
+        const val THIN_BORDER_EM = 1f / 16f
+        const val MEDIUM_BORDER_EM = 2f / 16f
+        const val THICK_BORDER_EM = 3f / 16f
+        const val MAX_BORDER_EM = 2f
         const val MAX_GROUP_RULE_DEPTH = 64
         const val MAX_RULES = 16_384
         const val MAX_FONT_FACES = 512
@@ -2406,6 +2931,16 @@ class CssResolver(sheets: List<Sheet>) {
         val FONT_STRETCH_KEYWORDS = setOf(
             "ultra-condensed", "extra-condensed", "condensed", "semi-condensed",
             "semi-expanded", "expanded", "extra-expanded", "ultra-expanded",
+        )
+        val CSS_WIDE_KEYWORDS = setOf(
+            "inherit", "initial", "unset", "revert", "revert-layer",
+        )
+        val BORDER_STYLE_KEYWORDS = setOf(
+            "none", "hidden", "solid", "dashed", "dotted", "double",
+        )
+        val INLINE_REPLACED_TAGS = setOf("img", "image", "svg")
+        val BLOCK_LEVEL_DISPLAY_VALUES = setOf(
+            "block", "flow-root", "flex", "grid", "list-item", "table",
         )
         val fontUrlRegex = Regex("""url\(\s*['"]?([^'")]+)['"]?\s*\)""")
         val caseFlagRegex = Regex("""^(['"].*['"])\s+[iIsS]$""")

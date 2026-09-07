@@ -20,6 +20,7 @@ import com.example.frogreader.data.model.PublisherSourceDescriptor
 import com.example.frogreader.data.model.PublisherSpineItem
 import com.example.frogreader.data.model.PublisherViewport
 import com.example.frogreader.data.model.RenditionLayout
+import com.example.frogreader.data.model.slicePublisherBoxSpans
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -428,6 +429,10 @@ object EpubParser {
                     css = resolver,
                     resolveInlineSvg = { markup -> writeInlineSvg(markup, imagesDir, inlineSvgs) },
                     expansionBudget = htmlExpansionBudget,
+                    // The same manifest document may legally appear more
+                    // than once in the spine; include its occurrence so a
+                    // later merge cannot create duplicate box IDs.
+                    publisherBoxIdPrefix = "$chapterPath@${spineItem.ordinal}",
                 )
                 val elements = mapper.map(body)
                 mapper.noteDocuments.forEach { (id, note) ->
@@ -450,6 +455,7 @@ object EpubParser {
                         id = chapterPath,
                         title = title,
                         elements = elements,
+                        publisherBoxes = mapper.publisherBoxes.toList(),
                     )
                     linkedLocations.putIfAbsent(
                         chapterPath,
@@ -509,9 +515,15 @@ object EpubParser {
                         val previous = chapters.removeAt(chapters.lastIndex)
                         elementBase = previous.elements.size
                         chapters += Chapter(
-                            previous.title,
-                            previous.elements + elements.subList(start, end),
-                            previous.depth,
+                            title = previous.title,
+                            elements = previous.elements + elements.subList(start, end),
+                            depth = previous.depth,
+                            publisherBoxes = previous.publisherBoxes + slicePublisherBoxSpans(
+                                spans = mapper.publisherBoxes,
+                                startElement = start,
+                                endElementExclusive = end,
+                                destinationOffset = elementBase,
+                            ),
                         )
                         chapterIndex = chapters.lastIndex
                     } else {
@@ -521,7 +533,16 @@ object EpubParser {
                                 ?.let { (it as ContentElement.Heading).text }
                         chapterIndex = chapters.size
                         elementBase = 0
-                        chapters += Chapter(title, segment, tocEntry?.depth ?: 0)
+                        chapters += Chapter(
+                            title = title,
+                            elements = segment,
+                            depth = tocEntry?.depth ?: 0,
+                            publisherBoxes = slicePublisherBoxSpans(
+                                spans = mapper.publisherBoxes,
+                                startElement = start,
+                                endElementExclusive = end,
+                            ),
+                        )
                     }
                     added += AddedSegment(start, end, chapterIndex, elementBase)
                 }
@@ -563,7 +584,13 @@ object EpubParser {
                     if (target.documentId == documentId) key to (0 to target.elementIndex) else null
                 }.toMap()
                 notes += buildNotes(
-                    chapters = listOf(Chapter(document.title, document.elements)),
+                    chapters = listOf(
+                        Chapter(
+                            title = document.title,
+                            elements = document.elements,
+                            publisherBoxes = document.publisherBoxes,
+                        ),
+                    ),
                     anchorLocations = localAnchors,
                     linkTargets = noteTargets,
                     exactDocuments = exactNoteDocuments,
