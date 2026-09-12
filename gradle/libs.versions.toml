@@ -1,5 +1,5 @@
 [versions]
-agp = "9.3.2"
+agp = "9.4.0"
 # Kotlin version for compiler plugins (Compose, serialization).
 # Must stay in sync with the Kotlin bundled in AGP (AGP 9.2 ships KGP 2.3.10).
 kotlin = "2.3.10"
