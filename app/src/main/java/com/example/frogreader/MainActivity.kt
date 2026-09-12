@@ -130,6 +130,10 @@ import com.example.frogreader.data.effectiveTheme
 import com.example.frogreader.data.parser.BookParsers
 import com.example.frogreader.ui.library.DuplicateBookDialog
 import com.example.frogreader.ui.library.ImportPreviewScreen
+import com.example.frogreader.ui.library.BookMetadataScreen
+import com.example.frogreader.ui.nav.BookMetadataRoute
+import com.example.frogreader.ui.nav.BookInfoRoute
+import com.example.frogreader.ui.library.BookInfoScreen
 import com.example.frogreader.ui.library.LibraryScreen
 import com.example.frogreader.ui.library.ScanFolderScreen
 import com.example.frogreader.ui.library.LibraryViewModel
@@ -356,6 +360,7 @@ class MainActivity : ComponentActivity() {
                             else -> AppNavigation(
                                 navController = navController,
                                 startupReaderBookId = startupReaderBookId,
+                                theme = theme,
                             )
                         }
                     }
@@ -413,6 +418,7 @@ class MainActivity : ComponentActivity() {
     private fun AppNavigation(
         navController: NavHostController,
         startupReaderBookId: String?,
+        theme: AppTheme,
     ) {
         val backStackEntry by navController.currentBackStackEntryAsState()
         val destination = backStackEntry?.destination
@@ -441,12 +447,14 @@ class MainActivity : ComponentActivity() {
         // it here is early enough that there is nothing to see.
         val activity = LocalActivity.current
         val inReader = destination?.hasRoute<ReaderRoute>() == true
-        LaunchedEffect(inReader) {
+        LaunchedEffect(inReader, theme) {
             if (inReader) return@LaunchedEffect
             val window = activity?.window ?: return@LaunchedEffect
             val controller = WindowCompat.getInsetsController(window, window.decorView)
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
             controller.show(WindowInsetsCompat.Type.systemBars())
+            controller.isAppearanceLightStatusBars = !theme.isDark()
+            controller.isAppearanceLightNavigationBars = !theme.isDark()
         }
 
         // Hoisted to the activity on purpose. The add button and the
@@ -580,7 +588,48 @@ class MainActivity : ComponentActivity() {
                             navController.navigate(ReaderRoute(book.id))
                         },
                         onOpenSettings = { navController.navigate(SettingsRoute) },
+                        onEditBook = { navController.navigate(BookMetadataRoute(it.id)) },
+                        onBookInfo = { navController.navigate(BookInfoRoute(it.id)) },
                     )
+                }
+
+                composable<BookMetadataRoute>(
+                    enterTransition = {
+                        if (initialState.destination.hasRoute<BookInfoRoute>()) {
+                            slideInHorizontally(NavSlide) { it } + fadeIn(spring(stiffness = Spring.StiffnessMediumLow))
+                        } else {
+                            pushEnter()
+                        }
+                    },
+                    popExitTransition = {
+                        if (targetState.destination.hasRoute<BookInfoRoute>()) {
+                            slideOutHorizontally(NavSlide) { it } + fadeOut(spring(stiffness = Spring.StiffnessMediumLow))
+                        } else {
+                            popExit()
+                        }
+                    },
+                ) { entry ->
+                    BookMetadataScreen(entry.toRoute<BookMetadataRoute>().bookId, onBack = { navController.popBackStack() })
+                }
+
+                composable<BookInfoRoute>(
+                    exitTransition = {
+                        if (targetState.destination.hasRoute<BookMetadataRoute>()) {
+                            slideOutHorizontally(NavSlide) { -it } + fadeOut(spring(stiffness = Spring.StiffnessMediumLow))
+                        } else {
+                            fadeOut(NavFade)
+                        }
+                    },
+                    popEnterTransition = {
+                        if (initialState.destination.hasRoute<BookMetadataRoute>()) {
+                            slideInHorizontally(NavSlide) { -it } + fadeIn(spring(stiffness = Spring.StiffnessMediumLow))
+                        } else {
+                            fadeIn(NavFade)
+                        }
+                    },
+                ) { entry ->
+                    val id = entry.toRoute<BookInfoRoute>().bookId
+                    BookInfoScreen(id, onBack = { navController.popBackStack() }, onEdit = { navController.navigate(BookMetadataRoute(id)) })
                 }
 
                 composable<ProfileRoute> {

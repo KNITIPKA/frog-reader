@@ -30,3 +30,10 @@ enum class NavTab {
     LIBRARY,
     PROFILE,
 }
+
+/** Edits the actual stored book file. */
+@Serializable
+data class BookMetadataRoute(val bookId: String)
+
+@Serializable
+data class BookInfoRoute(val bookId: String)

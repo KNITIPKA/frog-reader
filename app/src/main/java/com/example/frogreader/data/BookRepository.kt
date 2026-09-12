@@ -4,6 +4,11 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.data.model.EditableBookMetadata
+import com.example.frogreader.data.metadata.BookMetadataWriter
+import com.example.frogreader.data.metadata.CoverEdit
+import kotlinx.coroutines.NonCancellable
+import java.io.FileOutputStream
 import com.example.frogreader.data.model.BookContent
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.BookMetadata
@@ -699,13 +704,14 @@ open class BookRepository(private val context: Context? = null) {
      */
     private var cachedContentId: String? = null
     private var cachedContent: BookContent? = null
+    private var cachedContentFileName: String? = null
 
     /** Parses already running, so a second asker joins instead of repeating. */
     private val inFlight = HashMap<String, Deferred<BookContent>>()
 
     open suspend fun loadContent(book: Book): BookContent {
         synchronized(contentLock) {
-            if (cachedContentId == book.id) cachedContent else null
+            if (cachedContentId == book.id && cachedContentFileName == book.fileName) cachedContent else null
         }?.let { return it }
 
         // The parse runs on the repository's own scope, not the caller's. Two
@@ -715,15 +721,16 @@ open class BookRepository(private val context: Context? = null) {
         // second one, and backing out mid-open no longer throws the work away —
         // `parseContent` has no suspension points, so it cannot be interrupted
         // anyway. It finishes, caches, and the next tap is instant.
+        val parseKey = "${book.id}/${book.fileName}"
         val parse = synchronized(contentLock) {
-            inFlight.getOrPut(book.id) {
+            inFlight.getOrPut(parseKey) {
                 bookkeeping.async { parseAndCache(book) }
             }
         }
         try {
             return parse.await()
         } finally {
-            synchronized(contentLock) { inFlight.remove(book.id, parse) }
+            synchronized(contentLock) { inFlight.remove(parseKey, parse) }
         }
     }
 
@@ -731,10 +738,13 @@ open class BookRepository(private val context: Context? = null) {
         val name = book.fileName ?: throw IOException("This book has no file attached yet")
         val file = File(booksDir, name)
         if (!file.exists()) throw IOException("Book file is missing")
-        val content = BookParsers.parseContent(file, book.format, File(imagesDir, book.id))
+        val content = BookParsers.parseContent(file, book.format, File(File(imagesDir, book.id), file.nameWithoutExtension))
         synchronized(contentLock) {
-            cachedContentId = book.id
-            cachedContent = content
+            if (books.value.firstOrNull { it.id == book.id }?.fileName == book.fileName) {
+                cachedContentId = book.id
+                cachedContentFileName = book.fileName
+                cachedContent = content
+            }
         }
         return content
     }
@@ -745,6 +755,7 @@ open class BookRepository(private val context: Context? = null) {
     fun releaseContentCache() {
         synchronized(contentLock) {
             cachedContentId = null
+            cachedContentFileName = null
             cachedContent = null
         }
     }
@@ -1030,37 +1041,92 @@ open class BookRepository(private val context: Context? = null) {
         }
     }
 
-    /** Updates title/author and optionally replaces the cover with [newCoverUri]. */
-    open suspend fun updateBookDetails(
+    /** File metadata is read afresh so author boundaries are not guessed from a comma-separated label. */
+    suspend fun editableMetadata(bookId: String): Pair<Book, EditableBookMetadata> = withContext(Dispatchers.IO) {
+        val book = books.value.firstOrNull { it.id == bookId } ?: throw IOException("Book no longer exists.")
+        val file = bookFileFor(book) ?: throw IOException("Attach the book file before editing its metadata.")
+        book to EditableBookMetadata.from(book, BookParsers.parseMetadata(file, book.format))
+    }
+
+    suspend fun metadataFileInfo(book: Book) = withContext(Dispatchers.IO) {
+        BookMetadataWriter.fileInfo(bookFileFor(book) ?: throw IOException("Book file is missing."), book.format)
+    }
+
+    /**
+     * Copy-on-write: a complete, fsynced book and cover exist before library.json
+     * points at them. A failed write or process death leaves the old book valid.
+     * The previous generation remains available to library.json.bak recovery.
+     */
+    suspend fun saveBookMetadata(
         bookId: String,
-        title: String,
-        author: String?,
-        newCoverUri: Uri?,
-    ) = withContext(Dispatchers.IO) {
-        val c = context
-        val newCoverFileName = newCoverUri?.let { uri ->
-            if (c == null) throw IOException("Cannot read the selected image")
-            coversDir.mkdirs()
-            // A fresh file name each time so image caches don't show stale art.
-            val name = "$bookId-${System.currentTimeMillis()}.img"
-            c.contentResolver.openInputStream(uri)?.use { input ->
-                File(coversDir, name).outputStream().use { input.copyTo(it) }
-            } ?: throw IOException("Cannot read the selected image")
-            name
-        }
-        updateIndex { books ->
-            books.map { book ->
-                if (book.id != bookId) return@map book
-                if (newCoverFileName != null) {
-                    book.coverFileName?.let { File(coversDir, it).delete() }
-                }
-                book.copy(
-                    title = title.ifBlank { book.title },
-                    author = author?.takeIf { it.isNotBlank() },
-                    coverFileName = newCoverFileName ?: book.coverFileName,
-                )
+        expectedFileName: String?,
+        metadata: EditableBookMetadata,
+        cover: CoverEdit = CoverEdit.Keep,
+    ): Book = withContext(Dispatchers.IO) {
+        val original = books.value.firstOrNull { it.id == bookId } ?: throw IOException("Book no longer exists.")
+        require(original.fileName == expectedFileName) { "The book file changed. Reopen the editor before saving." }
+        val source = bookFileFor(original) ?: throw IOException("Attach the book file before editing its metadata.")
+        val generation = "$bookId-edit-${UUID.randomUUID()}"
+        val target = File(booksDir, "$generation.${source.extension}")
+        var newCover: File? = null
+        var committed = false
+        try {
+            val actual = BookMetadataWriter.write(source, target, original.format, metadata, cover)
+            val hash = ContentHash.of(target)
+            if (actual.coverBytes != null) {
+                coversDir.mkdirs()
+                newCover = File(coversDir, "$generation.img")
+                FileOutputStream(newCover).use { it.write(actual.coverBytes); it.fd.sync() }
             }
+            // Cancellation after the index commit must never delete its new book file.
+            withContext(NonCancellable) {
+                updateIndex { current ->
+                    val live = current.firstOrNull { it.id == bookId } ?: throw IOException("Book no longer exists.")
+                    require(live.fileName == expectedFileName) { "The book file changed. Reopen the editor before saving." }
+                    current.map { book ->
+                        if (book.id != bookId) book else book.copy(
+                            title = actual.title ?: metadata.title,
+                            author = actual.authors.ifEmpty { listOfNotNull(actual.author) }.joinToString(", ").ifBlank { null },
+                            description = actual.description, genres = actual.genres,
+                            series = actual.series, seriesNumber = actual.seriesNumber,
+                            publisher = actual.publisher, year = actual.year, isbn = actual.isbn,
+                            translators = actual.translators, language = actual.language,
+                            fileName = target.name, coverFileName = newCover?.name,
+                            contentHash = hash, sizeBytes = target.length(),
+                        )
+                    }
+                }
+                committed = true
+                releaseContentCache()
+                context?.let { File(File(it.filesDir, "pagination"), "$bookId.json").delete() }
+                // Keep files referenced by either index generation. Cleanup is best-effort,
+                // and only touches files created by this editor, never imported originals.
+                runCatching {
+                    synchronized(indexLock) {
+                        val previous = if (indexStore.backupFile.exists())
+                            json.decodeFromString(LibraryIndex.serializer(), indexStore.backupFile.readText()).books else emptyList()
+                        val records = stored().index.books + previous
+                        val keptBooks = records.mapNotNull { it.fileName }.toSet()
+                        val keptCovers = records.mapNotNull { it.coverFileName }.toSet()
+                        booksDir.listFiles()?.filter { it.name.startsWith("$bookId-edit-") && it.name !in keptBooks }?.forEach { it.delete() }
+                        coversDir.listFiles()?.filter { it.name.startsWith("$bookId-edit-") && it.name !in keptCovers }?.forEach { it.delete() }
+                    }
+                }
+            }
+            books.value.first { it.id == bookId }
+        } finally {
+            if (!committed) { target.delete(); newCover?.delete() }
         }
+    }
+
+    /** Exports the actual stored book bytes, including metadata edits. */
+    suspend fun exportBook(bookId: String, destination: Uri) = withContext(Dispatchers.IO) {
+        val c = context ?: throw IOException("Cannot export without a document provider.")
+        val book = books.value.firstOrNull { it.id == bookId } ?: throw IOException("Book no longer exists.")
+        val file = bookFileFor(book) ?: throw IOException("Book file is missing.")
+        c.contentResolver.openOutputStream(destination, "wt")?.use { output ->
+            file.inputStream().use { it.copyTo(output) }
+        } ?: throw IOException("Cannot write to the selected location.")
     }
 
     suspend fun toggleBookmark(bookId: String, bookmark: Bookmark) {
@@ -1385,13 +1451,14 @@ open class BookRepository(private val context: Context? = null) {
                     now = System.currentTimeMillis(),
                 )
 
-                mutableStored = after
-                _books.value = merged
-                _shelves.value = shelves
-
                 if (after.index != before.index) indexStore.write(after.index)
                 if (after.user != before.user) userStore.write(after.user)
                 if (after.progress != before.progress) progressStore.write(after.progress)
+
+                // Publish only durable data; a failed save must not appear successful in search/UI.
+                mutableStored = after
+                _books.value = mergeBooks(after)
+                _shelves.value = after.index.shelves
 
                 after.index != before.index || after.progress != before.progress
             }

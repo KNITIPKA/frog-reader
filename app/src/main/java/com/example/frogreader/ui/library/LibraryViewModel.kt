@@ -126,12 +126,6 @@ class LibraryViewModel(
         }
     }
 
-    fun updateBookDetails(bookId: String, title: String, author: String?, newCoverUri: Uri?) {
-        viewModelScope.launch {
-            runCatching { repository.updateBookDetails(bookId, title, author, newCoverUri) }
-        }
-    }
-
     private val _importing = MutableStateFlow(false)
     val importing = _importing.asStateFlow()
 

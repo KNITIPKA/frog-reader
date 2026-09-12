@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.LibraryAdd
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
@@ -117,6 +118,7 @@ internal fun LibraryItemMenu(
     onAddToShelf: () -> Unit,
     onAddBooks: () -> Unit,
     onRemoveFromShelf: () -> Unit,
+    onInfo: () -> Unit,
     onEdit: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -136,16 +138,6 @@ internal fun LibraryItemMenu(
         containerColor = scheme.surfaceContainerHigh,
         modifier = Modifier.width(216.dp),
     ) {
-        // Filling a folder is the thing a folder is FOR, so for a folder it
-        // comes before everything else. A book has no such headline action and
-        // starts with Select, as it did.
-        if (target is MenuTarget.ShelfTarget) {
-            FrogMenuItem(
-                icon = Icons.Rounded.LibraryAdd,
-                label = stringResource(R.string.shelf_add_books),
-                onClick = onAddBooks,
-            )
-        }
         FrogMenuItem(
             icon = Icons.Rounded.CheckCircle,
             label = stringResource(R.string.library_menu_select),
@@ -175,14 +167,31 @@ internal fun LibraryItemMenu(
                     label = stringResource(R.string.library_menu_edit),
                     onClick = onEdit,
                 )
+                FrogMenuItem(
+                    icon = Icons.Rounded.Info,
+                    label = stringResource(R.string.library_menu_info),
+                    onClick = onInfo,
+                )
             }
 
-            is MenuTarget.ShelfTarget -> FrogMenuItem(
-                icon = Icons.Rounded.DriveFileRenameOutline,
-                label = stringResource(R.string.shelf_menu_rename),
-                onClick = onRename,
-            )
+            is MenuTarget.ShelfTarget -> {
+                FrogMenuItem(
+                    icon = Icons.Rounded.LibraryAdd,
+                    label = stringResource(R.string.shelf_add_books),
+                    onClick = onAddBooks,
+                )
+                FrogMenuItem(
+                    icon = Icons.Rounded.DriveFileRenameOutline,
+                    label = stringResource(R.string.shelf_menu_rename),
+                    onClick = onRename,
+                )
+            }
         }
+        androidx.compose.material3.HorizontalDivider(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            thickness = 1.dp,
+            color = scheme.outlineVariant.copy(alpha = 0.5f),
+        )
         FrogMenuItem(
             icon = Icons.Rounded.Delete,
             label = when (target) {

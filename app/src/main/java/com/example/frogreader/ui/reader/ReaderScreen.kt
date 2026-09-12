@@ -196,6 +196,7 @@ import com.example.frogreader.ui.reader.selection.range
 import com.example.frogreader.ui.reader.selection.readerHighlights
 import com.example.frogreader.ui.reader.selection.rememberReaderHighlights
 import com.example.frogreader.ui.reader.selection.rememberTextFragment
+import com.example.frogreader.data.effectiveTheme
 import com.example.frogreader.ui.theme.isDark
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -230,7 +231,9 @@ fun ReaderScreen(
     // leaving the status and navigation bars sitting through the whole opening
     // and then sliding out as a second, separate step.
     var chromeVisible by rememberSaveable { mutableStateOf(false) }
-    SystemBarsEffect(appSettings.theme, chromeVisible)
+    val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val readerTheme = appSettings.effectiveTheme(systemDark)
+    SystemBarsEffect(readerTheme, chromeVisible)
 
     when (val current = state) {
         ReaderState.Loading -> Box(

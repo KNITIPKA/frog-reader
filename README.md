@@ -65,6 +65,7 @@ Runs on **Android 8.0+ (minSdk 26)**.
 - **Reading progress** — progress is shown directly in the library.
 - **Live search** — search titles, authors, series and descriptions, including books inside shelves.
 - **Book details** — view cover art, metadata, description, format and file size before adding a book.
+- **Book metadata editor** — Edit opens a dedicated screen for title, authors, description, cover, genres, series, publisher, year, ISBN, translators and language. Saves update the actual imported book file and library search; export a copy to use the changes elsewhere. Supports EPUB, FB2 and MOBI/KF8, with format-specific limits explained in the editor. [Details](docs/BOOK_METADATA_EDITING.md).
 
 ### Search, Navigation & Notes
 
@@ -143,7 +144,6 @@ FrogReader uses its own parsing and rendering pipeline instead of relying on a g
 The following features and improvements are planned for upcoming releases:
 
 - [ ] **Enhanced Rendering Engine** — Further speed optimizations, smoother layout computation, and expanded typography/CSS capabilities.
-- [ ] **Redesigned Book Edit & Metadata Screen** — Complete UI overhaul with support for editing all metadata fields (title, author, series, tags, description, and custom cover images).
 - [ ] **Reader Screen Improvements & New Modes** — Polish and refinements for the existing reading screen, along with two new dedicated reading modes: Compact and Minimalist.
 - [ ] **Profile & Reading Hub**:
   - **Read Books Log** — Dedicated hub for finished books (both digital and physical) with 5-star ratings, personal reviews, reading start/end dates, and custom covers.

@@ -167,7 +167,7 @@ data class Book(
      * The app theme is global and intentionally not part of this.
      */
     val readerSettings: com.example.frogreader.data.ReaderSettings? = null,
-    // Extended metadata (shown in the "Book details" sheet; absent = hidden).
+    // Extended metadata shown on the book info screen.
     val genres: List<String> = emptyList(),
     val series: String? = null,
     val seriesNumber: Float? = null,

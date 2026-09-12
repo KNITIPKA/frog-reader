@@ -62,6 +62,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
@@ -211,6 +212,8 @@ fun LibraryScreen(
     contentPadding: PaddingValues = PaddingValues(),
     onOpenBook: (Book) -> Unit = {},
     onOpenSettings: () -> Unit = {},
+    onEditBook: (Book) -> Unit = {},
+    onBookInfo: (Book) -> Unit = {},
     /**
      * Whether the add-a-book button should be on screen. False while a folder
      * is open or a selection is running: the FAB belongs to the library behind
@@ -229,8 +232,6 @@ fun LibraryScreen(
     val resources = LocalResources.current
     val density = LocalDensity.current
 
-    var bookToEdit by remember { mutableStateOf<Book?>(null) }
-    var bookForDetails by remember { mutableStateOf<Book?>(null) }
     var openShelfId by rememberSaveable { mutableStateOf<String?>(null) }
     // The panel opens with the cursor already in the name field when the folder
     // was just made, or when the menu's Rename asked for it.
@@ -526,8 +527,8 @@ fun LibraryScreen(
                         heroBook = if (searching) null else heroBook,
                         heroCover = heroBook?.let { viewModel.coverFileFor(it) },
                         onOpenBook = onOpenBook,
-                        onHeroDetails = { bookForDetails = heroBook },
-                        onHeroEdit = { bookToEdit = heroBook },
+                        onHeroDetails = { heroBook?.let(onBookInfo) },
+                        onHeroEdit = { heroBook?.let(onEditBook) },
                         // Through the same sheet as every other delete, so there is
                         // one "remove a book" object in the app rather than two.
                         onHeroDelete = {
@@ -804,7 +805,11 @@ fun LibraryScreen(
                             menuRequest = null
                         },
                         onEdit = {
-                            bookToEdit = (target as? MenuTarget.BookTarget)?.bookId?.let(bookOf)
+                            (target as? MenuTarget.BookTarget)?.bookId?.let(bookOf)?.let(onEditBook)
+                            menuRequest = null
+                        },
+                        onInfo = {
+                            (target as? MenuTarget.BookTarget)?.bookId?.let(bookOf)?.let(onBookInfo)
                             menuRequest = null
                         },
                         onRename = {
@@ -834,27 +839,6 @@ fun LibraryScreen(
             }
         }
     }
-
-    bookToEdit?.let { book ->
-        EditBookDialog(
-            book = book,
-            coverFile = viewModel.coverFileFor(book),
-            onDismiss = { bookToEdit = null },
-            onSave = { title, author, coverUri ->
-                viewModel.updateBookDetails(book.id, title, author, coverUri)
-                bookToEdit = null
-            },
-        )
-    }
-
-    bookForDetails?.let { book ->
-        BookDetailsSheet(
-            book = book,
-            coverFile = viewModel.coverFileFor(book),
-            onDismiss = { bookForDetails = null },
-        )
-    }
-
 
     addToShelfFor?.let { request ->
         AddToShelfSheet(
@@ -1341,18 +1325,23 @@ private fun HeroMenu(
         modifier = Modifier.width(204.dp),
     ) {
         HeroMenuItem(
+            icon = Icons.Rounded.Edit,
+            label = stringResource(R.string.library_menu_edit),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            textColor = MaterialTheme.colorScheme.onSurface,
+            onClick = onEdit,
+        )
+        HeroMenuItem(
             icon = Icons.Rounded.Info,
             label = stringResource(R.string.library_menu_info),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             textColor = MaterialTheme.colorScheme.onSurface,
             onClick = onDetails,
         )
-        HeroMenuItem(
-            icon = Icons.Rounded.Edit,
-            label = stringResource(R.string.library_menu_edit),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            textColor = MaterialTheme.colorScheme.onSurface,
-            onClick = onEdit,
+        HorizontalDivider(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            thickness = 1.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
         )
         HeroMenuItem(
             icon = Icons.Rounded.Delete,
@@ -2148,94 +2137,6 @@ private fun NoSearchResults(modifier: Modifier = Modifier) {
 }
 
 // ----------------------------------------------------------------- dialogs
-
-@Composable
-private fun EditBookDialog(
-    book: Book,
-    coverFile: java.io.File?,
-    onDismiss: () -> Unit,
-    onSave: (title: String, author: String?, coverUri: Uri?) -> Unit,
-) {
-    var title by rememberSaveable(book.id) { mutableStateOf(book.title) }
-    var author by rememberSaveable(book.id) { mutableStateOf(book.author.orEmpty()) }
-    var pickedCover by remember(book.id) { mutableStateOf<Uri?>(null) }
-
-    val imagePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia(),
-    ) { uri -> if (uri != null) pickedCover = uri }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.edit_book_title)) },
-        text = {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .width(56.dp)
-                            .aspectRatio(2f / 3f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                    ) {
-                        val model: Any? = pickedCover ?: coverFile
-                        if (model != null) {
-                            AsyncImage(
-                                model = model,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop,
-                            )
-                        } else {
-                            Icon(
-                                Icons.Rounded.AutoStories,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.align(Alignment.Center),
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(16.dp))
-                    TextButton(
-                        onClick = {
-                            imagePicker.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
-                                ),
-                            )
-                        },
-                    ) { Text(stringResource(R.string.edit_change_cover)) }
-                }
-                Spacer(Modifier.height(16.dp))
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text(stringResource(R.string.edit_field_title)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = author,
-                    onValueChange = { author = it },
-                    label = { Text(stringResource(R.string.edit_field_author)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = title.isNotBlank(),
-                onClick = { onSave(title.trim(), author.trim().ifBlank { null }, pickedCover) },
-            ) { Text(stringResource(R.string.edit_save)) }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.library_delete_cancel))
-            }
-        },
-    )
-}
 
 // ----------------------------------------------------------------- helpers
 

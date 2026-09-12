@@ -65,6 +65,12 @@ object MobiParser {
             ?: doc.mobi6.mobi?.fullName
             ?: doc.pdb.name.takeIf { it.isNotBlank() }
         val authors = exthStrings(Exth.AUTHOR)
+        val extra = main.exth.string(MobiMetadataWriter.EXTRA_METADATA, Charsets.UTF_8)
+            ?: doc.mobi6.exth.string(MobiMetadataWriter.EXTRA_METADATA, Charsets.UTF_8)
+        val extended = extra?.let {
+            runCatching { kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                .decodeFromString(com.example.frogreader.data.model.MobiExtraMetadata.serializer(), it) }.getOrNull()
+        }
 
         BookMetadata(
             title = title,
@@ -75,6 +81,9 @@ object MobiParser {
                 .flatMap { it.split(';') }
                 .map { it.trim() }
                 .filter { it.isNotEmpty() },
+            series = extended?.series?.takeIf { it.isNotBlank() },
+            seriesNumber = extended?.seriesNumber?.toFloatOrNull(),
+            translators = extended?.translators.orEmpty(),
             publisher = exthString(Exth.PUBLISHER),
             year = exthString(Exth.PUBLISH_DATE)?.let { Regex("""\d{4}""").find(it)?.value },
             isbn = exthString(Exth.ISBN),
