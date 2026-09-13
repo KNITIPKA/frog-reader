@@ -48,31 +48,33 @@ Runs on **Android 8.0+ (minSdk 26)**.
 - **Paged and continuous modes** — read page-by-page or use continuous scrolling.
 - **Reader themes** — Light, Beige and Midnight.
 - **Typography controls** — font size, line spacing, margins, justification and hyphenation.
+- **Heading typography & centering** — shared H1–H6 font-relative hierarchy with asymmetric spacing; override heading alignment across books with the **Center headings** setting.
 - **Custom fonts** — use the bundled fonts or import your own `.ttf` / `.otf` files.
-- **Publisher Mode** — keep the book's original fonts, spacing and formatting when supported.
+- **Publisher Mode** — keep the book's original fonts, spacing, geometry and formatting when supported.
 - **Hardware controls** — turn pages with the device volume buttons.
-- **Footnotes** — open footnotes inline or hide footnote markers from the reading text.
+- **Footnotes** — rich footnotes supporting headings, lists, poems, tables, images, publisher styles and nested links.
 - **Decorated initials** — render publisher-defined drop caps.
 - **Right-to-left reading (preview)** — RTL-aware Arabic and Hebrew text, mixed-direction content, page progression and logical alignment; final physical-device validation is pending.
 - **Dark-mode image inversion** — automatically invert bright scans and diagrams in dark themes.
+- **Quick translation** — translate selected text directly with a remembered default translation app (configurable in settings).
 - **Chapter and book progress** — see reading progress and pages remaining.
 
 ### Library
 
-- **Grid and list views** — switch between a cover grid and compact list layout.
+- **Grid and list views** — switch between a cover grid and compact list layout (with RTL-aware progress bars matching the active theme).
 - **Shelves** — organize books into custom collections.
 - **Multi-select** — add or remove multiple books at once.
 - **Reading progress** — progress is shown directly in the library.
 - **Live search** — search titles, authors, series and descriptions, including books inside shelves.
-- **Book details** — view cover art, metadata, description, format and file size before adding a book.
-- **Book metadata editor** — Edit opens a dedicated screen for title, authors, description, cover, genres, series, publisher, year, ISBN, translators and language. Saves update the actual imported book file and library search; export a copy to use the changes elsewhere. Supports EPUB, FB2 and MOBI/KF8, with format-specific limits explained in the editor. [Details](docs/BOOK_METADATA_EDITING.md).
+- **Book info & sharing** — view complete metadata, reading stats, and share or export independent book copies via Android file intents.
+- **In-file metadata editor** — dedicated screen for title, authors, description, cover (replace or remove), genres, series, publisher, year, ISBN, translators and language. Safe copy-on-write rewriting updates the actual book file and search without touching your bookmarks, quotes or reading progress. Supports EPUB, FB2 and MOBI/KF8. [Details](docs/BOOK_METADATA_EDITING.md).
 
 ### Search, Navigation & Notes
 
 - **Full-text search** with live match previews.
-- **Table of contents** navigation.
-- **Smart return history** — return to the exact reading position after links, search, contents, bookmarks, progress scrubbing or a long continuous-scroll fling.
-- **Text selection** inside the reader.
+- **Hierarchical Table of contents** — expandable and collapsible nested chapters with stable navigation.
+- **Smart return history** — return to the exact reading position after links, search, contents, bookmarks, progress scrubbing or long continuous-scroll flings; includes an accessible 15-second auto-hide timeout (customizable in settings).
+- **Text selection** inside the reader with quick actions (quote, copy, translate).
 - **Quotes, bookmarks and notes** stored with your library.
 - **Custom pagination engine** with cached page layouts for fast navigation.
 
@@ -129,12 +131,24 @@ FrogReader uses its own parsing and rendering pipeline instead of relying on a g
 - MOBI header decoding.
 - KF8 section mapping and embedded resource extraction.
 
+### Plain Text & Markdown (TXT, MD)
+
+- Import `.txt`, `.md` and `.markdown` via the file picker, folder scans, or file intents.
+- Robust encoding detection: UTF-8 (with or without BOM), UTF-16 LE/BE (with BOM), and Windows-1251 fallback for legacy Cyrillic text.
+- 16 MiB size protection limit; empty or binary files are rejected.
+- TXT preserves line-oriented literal structure and groups paragraphs at blank lines.
+- Markdown supports CommonMark headings (H1–H6), emphasis, links, lists, blockquotes, inline and fenced code blocks, GFM tables and strikethrough via [commonmark-java](https://github.com/commonmark/commonmark-java/tree/commonmark-parent-0.24.0).
+- Automatic table of contents generated from Markdown headings; the first heading supplies the book title.
+- Original source bytes are strictly preserved for re-export and backups.
+
 ### Typography & Rich Content
 
 - CSS cascading and inheritance.
-- Relative units such as `em`, `rem` and `%`.
+- Relative units such as `em`, `rem`, `ch`, `ex` and `%`.
 - `calc()` expression parsing.
-- Publisher margins, indents and line spacing.
+- Publisher margins, indents, colors, backgrounds and line spacing.
+- Publisher line-box leading preserved at paragraph boundaries to maintain vertical rhythm.
+- Shared H1–H6 font-relative hierarchy with asymmetric spacing and customizable alignment.
 - Tables, inline images, quotes, sideboxes, drop caps and ruby annotations.
 
 ---
@@ -155,7 +169,8 @@ The following features and improvements are planned for upcoming releases:
 - [ ] **Physical Book Tracking** — Add physical/paper books to your library with an active reading timer that logs reading sessions directly into your statistics.
 - [ ] **Enhanced Home-Screen Widgets** — New Jetpack Glance widgets (streak counters, reading stats, quote of the day, shelf quick-access).
 - [ ] **Multilingual App Localization** — Community translations and multilingual UI support for additional languages.
-- [ ] **Extended Format Support** — Native **PDF** and **Markdown (`.md`)** parsing and rendering.
+- [x] **Extended Format Support (Markdown & TXT)** — Native **Markdown (`.md`, `.markdown`)** and **TXT** parsing and rendering (completed in Alpha 3).
+- [ ] **Extended Format Support (PDF)** — Native **PDF** parsing and rendering.
 - [ ] **Google Play Store Release** — Public release on Google Play for seamless automatic updates.
 
 ---
@@ -168,7 +183,7 @@ The following features and improvements are planned for upcoming releases:
 - **Persistence:** Jetpack DataStore + `kotlinx.serialization`
 - **Background work:** WorkManager
 - **Storage:** Android Storage Access Framework
-- **Parsing:** JSoup, XML Pull Parser, Brotli
+- **Parsing:** JSoup, XML Pull Parser, Brotli, commonmark-java (with GFM extensions)
 - **Images:** Coil Compose + Coil SVG
 - **Widgets:** Jetpack Glance
 
@@ -180,7 +195,7 @@ The following features and improvements are planned for upcoming releases:
 
 - Android Studio Ladybug (2024.2.1+) or newer
 - Android SDK with `minSdk 26`, `targetSdk 36`, `compileSdk 37`
-- JDK 11 or 17
+- JDK 17 or 21
 
 ### Build
 
@@ -217,13 +232,3 @@ Because FrogReader is still in alpha, **bug reports are especially useful** — 
 ## License
 
 FrogReader is licensed under the [MIT License](LICENSE).
-
-### Plain text and Markdown
-
-Import `.txt`, `.md` or `.markdown` from the file picker, a folder scan, or a file manager. Text uses the existing native reader, search, bookmarks and reading progress. Source bytes are preserved for export and backups.
-
-TXT preserves line breaks and groups paragraphs at blank lines. Markdown supports CommonMark headings, emphasis, links, lists, quotes and code, plus GFM tables and strikethrough through [commonmark-java](https://github.com/commonmark/commonmark-java/tree/commonmark-parent-0.24.0). Headings populate Contents and support fragment links. The first heading supplies the book title, falling back to the source filename.
-
-Supported encodings are UTF-8 (with or without BOM) and UTF-16 LE/BE with BOM, with Windows-1251 fallback for legacy Cyrillic text. Text files are limited to 16 MiB; empty or binary files are rejected. Raw HTML is displayed as text, and image descriptions are preserved without loading external or neighbouring files. Embedded metadata editing is unavailable for TXT/Markdown, which have no standard book-metadata container.
-
-Backups written by this version use format 2 because older apps cannot decode TXT/MD book records. Existing format 1 backups remain readable.
