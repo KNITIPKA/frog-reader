@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased — 2026-09-13
+## ALPHA 3 — 2026-09-13
 
-This section records the changes delivered after the Alpha 2 baseline.
+ALPHA 3 records the changes delivered after the Alpha 2 baseline.
 
 ### Book files and library data
 

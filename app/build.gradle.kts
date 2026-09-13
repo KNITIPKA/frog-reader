@@ -25,8 +25,8 @@ android {
         applicationId = "knitipka.frogreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = (versionProps.getProperty("code") ?: "2").toInt()
-        versionName = versionProps.getProperty("name") ?: "ALPHA 2"
+        versionCode = (versionProps.getProperty("code") ?: "3").toInt()
+        versionName = versionProps.getProperty("name") ?: "ALPHA 3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
