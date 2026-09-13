@@ -125,6 +125,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.foundation.combinedClickable
 import com.example.frogreader.data.model.bookOrderKey
 import androidx.compose.material.icons.rounded.LibraryAdd
@@ -776,6 +778,7 @@ fun LibraryScreen(
                 ) {
                     LibraryItemMenu(
                         target = target,
+                        canEdit = (target as? MenuTarget.BookTarget)?.bookId?.let(bookOf)?.format?.supportsMetadataEditing == true,
                         onSelect = {
                             val scope = when (target) {
                                 is MenuTarget.BookTarget -> target.shelfId
@@ -1260,6 +1263,7 @@ private fun HeroCard(
                         }
                         HeroMenu(
                             expanded = menuOpen,
+                            canEdit = book.format.supportsMetadataEditing,
                             onDismiss = { menuOpen = false },
                             onDetails = { menuOpen = false; onDetails() },
                             onEdit = { menuOpen = false; onEdit() },
@@ -1312,6 +1316,7 @@ private fun HeroCover(
 @Composable
 private fun HeroMenu(
     expanded: Boolean,
+    canEdit: Boolean,
     onDismiss: () -> Unit,
     onDetails: () -> Unit,
     onEdit: () -> Unit,
@@ -1324,7 +1329,7 @@ private fun HeroMenu(
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = Modifier.width(204.dp),
     ) {
-        HeroMenuItem(
+        if (canEdit) HeroMenuItem(
             icon = Icons.Rounded.Edit,
             label = stringResource(R.string.library_menu_edit),
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1842,7 +1847,7 @@ private fun BookListRow(
     val scheme = MaterialTheme.colorScheme
     val fraction = book.progress.fraction.let { if (it.isNaN()) 0f else it.coerceIn(0f, 1f) }
     val percent = (fraction * 100).roundToInt()
-    val fillWidth by animateFloatAsState(
+    val fillWidth = animateFloatAsState(
         targetValue = fraction,
         animationSpec = tween(400),
         label = "listProgressFill",
@@ -1858,17 +1863,23 @@ private fun BookListRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .background(scheme.surfaceContainer)
+            .drawBehind {
+                // Lazy list rows have no bounded height during measurement.
+                // Draw against the final row size instead of measuring an
+                // empty fillMaxHeight child, which can collapse to zero.
+                val width = size.width * fillWidth.value
+                drawRect(
+                    color = frog.folder,
+                    topLeft = Offset(
+                        x = if (layoutDirection == LayoutDirection.Rtl) size.width - width else 0f,
+                        y = 0f,
+                    ),
+                    size = Size(width, size.height),
+                )
+            }
             .combinedClickable(onLongClick = onLongClick, onClick = onClick)
             .selectionOverlay(selected, RoundedCornerShape(20.dp)),
     ) {
-        // Progress IS the row fill, not a separate bar.
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(fillWidth)
-                .background(frog.folder),
-        )
-
         Row(
             modifier = Modifier.padding(8.dp),
             verticalAlignment = Alignment.CenterVertically,

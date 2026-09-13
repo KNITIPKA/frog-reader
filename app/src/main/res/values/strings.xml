@@ -4,7 +4,7 @@
     <!-- Library screen -->
     <string name="library_title">Library</string>
     <string name="library_empty_title">No books yet</string>
-    <string name="library_empty_subtitle">Add your first EPUB, FB2 or MOBI book and it will appear here.</string>
+    <string name="library_empty_subtitle">Add your first EPUB, FB2, MOBI, TXT or Markdown book and it will appear here.</string>
     <string name="library_add_book">Add book</string>
     <string name="library_importing">Adding…</string>
     <!-- The two choices that rise above the plus button -->
@@ -14,7 +14,7 @@
     <string name="fab_add_book">Add a book</string>
     <string name="fab_scan_folder">Scan a folder</string>
     <string name="library_imported">“%1$s” added to your library</string>
-    <string name="library_import_failed">Couldn\'t add this book. It may be damaged or not an EPUB, FB2 or MOBI file.</string>
+    <string name="library_import_failed">Couldn\'t add this book. It may be damaged or not an EPUB, FB2, MOBI, TXT or Markdown file.</string>
     <string name="library_import_failed_drm">This book is copy-protected (DRM) and can\'t be opened.</string>
     <string name="library_replaced">“%1$s” was replaced</string>
     <string name="library_import_cancelled">Nothing was added</string>
@@ -224,6 +224,15 @@
     <string name="settings_section_appearance">Appearance</string>
     <string name="settings_app_theme">App theme</string>
     <string name="selection_translate">Translate</string>
+    <string name="settings_default_translator">Default translator</string>
+    <string name="translator_choose_description">Choose an app for selected text. Your choice will be used for future translations.</string>
+    <string name="translator_not_selected">Choose when you first translate</string>
+    <string name="translator_loading">Loading installed apps…</string>
+    <string name="translator_unavailable">Selected app unavailable — choose another</string>
+    <string name="translator_none_available">No compatible apps found. Install a translator that supports translating selected text, then return here.</string>
+    <string name="translator_reset">Reset choice</string>
+    <string name="translator_launch_failed">Could not open this translator. Choose another app.</string>
+    <string name="translator_save_failed">Could not save your translator. Please try again.</string>
     <string name="reader_track_chapter">Chapter</string>
     <string name="reader_track_book">Book</string>
     <string name="reader_percent_left">left</string>
@@ -386,6 +395,11 @@
     <string name="settings_theme_helper_manual">With system switching off, the chosen theme stays put day and night.</string>
 
     <string name="settings_while_reading">While you read</string>
+    <string name="settings_reading_behavior">Book display and navigation</string>
+    <string name="settings_center_headings">Center headings</string>
+    <string name="settings_center_headings_subtitle">Center all heading levels in every book, overriding the book’s alignment</string>
+    <string name="settings_auto_hide_return">Auto-hide the return button</string>
+    <string name="settings_auto_hide_return_subtitle">Forget the previous page 15 seconds after a jump, even with controls hidden. Accessibility settings may extend this time.</string>
     <string name="settings_startup_title">On opening the app</string>
     <string name="settings_startup_subtitle">Where FrogReader starts</string>
     <string name="settings_startup_last_book">Last book</string>
@@ -463,7 +477,7 @@
     <string name="scan_state_failed">Couldn\'t read this file</string>
     <string name="scan_retry">Try again</string>
     <string name="scan_empty">No books in this folder</string>
-    <string name="scan_empty_hint">Frog Reader looks for EPUB, FB2 and MOBI files, including in subfolders.</string>
+    <string name="scan_empty_hint">Frog Reader looks for EPUB, FB2, MOBI, TXT and Markdown files, including in subfolders.</string>
     <string name="scan_empty_search">No matching books</string>
     <string name="scan_access_lost">Lost access to this folder</string>
     <string name="scan_access_lost_hint">Pick it again to carry on.</string>

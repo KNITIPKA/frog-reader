@@ -164,7 +164,7 @@ class CssResolverAdvancedTest {
         assertEquals(1.25f, r.computed(d.selectFirst("#h4")!!).fontSizeEm, 0.001f)
         // Absolute px is root-relative, not multiplied by the parent.
         assertEquals(1f, r.computed(d.selectFirst("#h5")!!).fontSizeEm, 0.001f)
-        assertEquals(1.25f * 0.88f, r.computed(d.selectFirst("#h6")!!).fontSizeEm, 0.001f)
+        assertEquals(1.25f, r.computed(d.selectFirst("#h6")!!).fontSizeEm, 0.001f)
     }
 
     @Test

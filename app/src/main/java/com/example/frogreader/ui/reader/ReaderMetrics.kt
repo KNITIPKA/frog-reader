@@ -160,7 +160,7 @@ object ReaderMetrics {
                 else -> 6.dp
             }
 
-            is ContentElement.Heading -> if (element.level <= 2) 28.dp else 16.dp
+            is ContentElement.Heading -> 0.dp // asymmetric heading defaults below
             is ContentElement.Image -> 12.dp
             ContentElement.Divider -> 20.dp
             is ContentElement.Spacer -> 0.dp
@@ -171,9 +171,15 @@ object ReaderMetrics {
             (element as? ContentElement.Image)?.spaceBeforeSpecified == true
         val afterSpecified = block?.spaceAfterSpecified == true ||
             (element as? ContentElement.Image)?.spaceAfterSpecified == true
-        if (block == null && !beforeSpecified && !afterSpecified) return base to base
-        val baseTop = if (bookStyles && beforeSpecified) 0.dp else base
-        val baseBottom = if (bookStyles && afterSpecified) 0.dp else base
+        val defaultTop = if (element is ContentElement.Heading) {
+            (fontSize * HeadingDefaults.spaceBeforeEm(element.level)).dp
+        } else base
+        val defaultBottom = if (element is ContentElement.Heading) {
+            (fontSize * HeadingDefaults.spaceAfterEm(element.level)).dp
+        } else base
+        if (block == null && !beforeSpecified && !afterSpecified) return defaultTop to defaultBottom
+        val baseTop = if (bookStyles && beforeSpecified) 0.dp else defaultTop
+        val baseBottom = if (bookStyles && afterSpecified) 0.dp else defaultBottom
         // The book's own spacing wins when it asks for more than the default.
         val top = maxOf(baseTop, (fontSize * (block?.spaceBeforeEm ?: 0f)).dp)
         val bottom = maxOf(baseBottom, (fontSize * (block?.spaceAfterEm ?: 0f)).dp)
@@ -208,6 +214,18 @@ object ReaderMetrics {
         val base = TextStyle(
             fontSize = fontSize.sp,
             lineHeight = (fontSize * settings.lineHeight).sp,
+            // CSS line boxes include leading above the first and below the
+            // last line. Compose's default Trim.Both removes it at each Text
+            // boundary, squeezing zero-margin publisher paragraphs together.
+            platformStyle = if (settings.bookStyles) {
+                PlatformTextStyle(includeFontPadding = false)
+            } else null,
+            lineHeightStyle = if (settings.bookStyles) {
+                LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.None,
+                )
+            } else null,
             fontFamily = bookFamilyFor(block, settings, bookFonts)
                 ?: fontFamilyFor(settings.font, settings.customFontPath),
             hyphens = if (hyphenate) Hyphens.Auto else Hyphens.None,
@@ -330,12 +348,15 @@ object ReaderMetrics {
         // null means the publisher did not size the heading. An explicit
         // 1em is meaningful and must override the semantic H1-H6 default.
         val scale = block?.fontScale ?: headingScale(element.level)
-        val defaultAlign = if (element.level <= 2) TextAlign.Center else TextAlign.Start
-        val align = when (block?.align) {
+        val defaultAlign = if (HeadingDefaults.isOrnament(element.text)) {
+            TextAlign.Center
+        } else TextAlign.Start
+        // An explicit app-wide user preference overrides publication alignment.
+        val align = if (settings.centerHeadings) TextAlign.Center else when (block?.align) {
             BlockAlign.CENTER -> TextAlign.Center
             BlockAlign.END -> TextAlign.End
             BlockAlign.START -> TextAlign.Start
-            BlockAlign.JUSTIFY -> defaultAlign
+            BlockAlign.JUSTIFY -> TextAlign.Justify
             BlockAlign.LEFT -> TextAlign.Left
             BlockAlign.RIGHT -> TextAlign.Right
             null -> defaultAlign

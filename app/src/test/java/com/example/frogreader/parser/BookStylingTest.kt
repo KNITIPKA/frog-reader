@@ -235,7 +235,7 @@ class BookStylingTest {
             .chapters.single().elements
 
         val title = elements.filterIsInstance<ContentElement.Heading>().first()
-        assertEquals(BlockAlign.CENTER, title.block?.align)
+        assertEquals(null, title.block?.align)
 
         val paragraphs = elements.filterIsInstance<ContentElement.Paragraph>()
         val epigraph = paragraphs.single { it.text.text.startsWith("Мы перестали") }
@@ -250,7 +250,7 @@ class BookStylingTest {
 
         val subtitle = elements.filterIsInstance<ContentElement.Heading>()
             .single { it.text == "* * *" }
-        assertEquals(BlockAlign.CENTER, subtitle.block?.align)
+        assertEquals(null, subtitle.block?.align)
     }
 
     @Test

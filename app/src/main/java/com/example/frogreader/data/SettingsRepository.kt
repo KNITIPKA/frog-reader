@@ -90,6 +90,9 @@ data class ReaderSettings(
     val dropCaps: Boolean = false,
     /** Chosen page-turn animation (UI stub until animations are built). */
     val pageTurnAnimation: PageTurnAnimation = PageTurnAnimation.SLIDE,
+    /** Runtime projection of the app preference; never saved as a book override. */
+    @kotlinx.serialization.Transient
+    val centerHeadings: Boolean = false,
 )
 
 /** App-wide settings (theme, feedback, behavior, privacy). */
@@ -103,6 +106,10 @@ data class AppSettings(
     val haptics: Boolean = true,
     val keepScreenOn: Boolean = true,
     val volumeKeyPaging: Boolean = true,
+    val centerHeadings: Boolean = false,
+    val autoHideReturnButton: Boolean = true,
+    /** Flattened PROCESS_TEXT activity component; null means choose on first use. */
+    val defaultTranslator: String? = null,
     val appLock: Boolean = false,
     val appLockDelay: AppLockDelay = AppLockDelay.ONE_MINUTE,
     val backupMode: BackupMode = BackupMode.DATA,
@@ -154,6 +161,9 @@ class SettingsRepository(private val context: Context) {
         val haptics = booleanPreferencesKey("haptics")
         val keepScreenOn = booleanPreferencesKey("keep_screen_on")
         val volumeKeyPaging = booleanPreferencesKey("volume_key_paging")
+        val centerHeadings = booleanPreferencesKey("center_headings")
+        val autoHideReturnButton = booleanPreferencesKey("auto_hide_return_button")
+        val defaultTranslator = stringPreferencesKey("default_translator")
         val appLock = booleanPreferencesKey("app_lock")
         val appLockDelay = stringPreferencesKey("app_lock_delay")
         val backupMode = stringPreferencesKey("backup_scope")
@@ -261,6 +271,10 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.haptics] = updated.haptics
             prefs[Keys.keepScreenOn] = updated.keepScreenOn
             prefs[Keys.volumeKeyPaging] = updated.volumeKeyPaging
+            prefs[Keys.centerHeadings] = updated.centerHeadings
+            prefs[Keys.autoHideReturnButton] = updated.autoHideReturnButton
+            updated.defaultTranslator?.let { prefs[Keys.defaultTranslator] = it }
+                ?: prefs.remove(Keys.defaultTranslator)
             prefs[Keys.appLock] = updated.appLock
             prefs[Keys.appLockDelay] = updated.appLockDelay.name
             prefs[Keys.backupMode] = updated.backupMode.name
@@ -311,6 +325,9 @@ class SettingsRepository(private val context: Context) {
             haptics = this[Keys.haptics] ?: defaults.haptics,
             keepScreenOn = this[Keys.keepScreenOn] ?: defaults.keepScreenOn,
             volumeKeyPaging = this[Keys.volumeKeyPaging] ?: defaults.volumeKeyPaging,
+            centerHeadings = this[Keys.centerHeadings] ?: defaults.centerHeadings,
+            autoHideReturnButton = this[Keys.autoHideReturnButton] ?: defaults.autoHideReturnButton,
+            defaultTranslator = this[Keys.defaultTranslator],
             appLock = this[Keys.appLock] ?: defaults.appLock,
             appLockDelay = enumOrDefault(this[Keys.appLockDelay], defaults.appLockDelay),
             backupMode = enumOrDefault(this[Keys.backupMode], defaults.backupMode),

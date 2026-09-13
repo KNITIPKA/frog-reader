@@ -48,10 +48,6 @@ import java.nio.charset.Charset
  */
 object Fb2Parser {
 
-    /** Classic FB2 presentation: titles and subtitles are centered. */
-    private val TITLE_BLOCK = BlockStyle(align = BlockAlign.CENTER)
-    private val SUBTITLE_BLOCK = BlockStyle(align = BlockAlign.CENTER)
-
     /** Epigraphs sit in the right third of the page, in italics. */
     private val EPIGRAPH_BLOCK = BlockStyle(
         italic = true,
@@ -572,6 +568,7 @@ object Fb2Parser {
                         limits = limits,
                     )
                     "title" -> {
+                        val titleBlock = titleBlock(parser, stylesheet, sectionLanguage)
                         val title = collectTitle(
                             parser,
                             referencedImages,
@@ -582,7 +579,7 @@ object Fb2Parser {
                             elements += ContentElement.Heading(
                                 styledText = title,
                                 level = (4 + depth).coerceAtMost(6),
-                                block = withLanguage(TITLE_BLOCK, sectionLanguage),
+                                block = titleBlock,
                             )
                         }
                     }
@@ -793,6 +790,7 @@ object Fb2Parser {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "title" -> {
+                        val titleBlock = titleBlock(parser, stylesheet, inheritedLanguage)
                         val title = collectTitle(
                             parser,
                             referencedImages,
@@ -803,7 +801,7 @@ object Fb2Parser {
                             preamble += ContentElement.Heading(
                                 title,
                                 level = 1,
-                                block = withLanguage(TITLE_BLOCK, inheritedLanguage),
+                                block = titleBlock,
                             )
                         }
                     }
@@ -924,6 +922,7 @@ object Fb2Parser {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "title" -> {
+                        val titleBlock = titleBlock(parser, stylesheet, sectionLanguage)
                         val title = collectTitle(
                             parser,
                             referencedImages,
@@ -939,7 +938,7 @@ object Fb2Parser {
                             sink() += ContentElement.Heading(
                                 title,
                                 level = (2 + depth).coerceAtMost(6),
-                                block = withLanguage(TITLE_BLOCK, sectionLanguage),
+                                block = titleBlock,
                             )
                         }
                     }
@@ -1086,10 +1085,7 @@ object Fb2Parser {
                     out += ContentElement.Heading(
                         text,
                         level = 4,
-                        block = withLanguage(
-                            computed.applyTo(SUBTITLE_BLOCK),
-                            language,
-                        ),
+                        block = headingBlock(computed, language),
                     )
                 }
             }
@@ -1360,6 +1356,7 @@ object Fb2Parser {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "title" -> {
+                        val titleBlock = titleBlock(parser, stylesheet, poemLanguage)
                         val title = collectTitle(
                             parser,
                             referencedImages,
@@ -1370,7 +1367,7 @@ object Fb2Parser {
                             out += ContentElement.Heading(
                                 title,
                                 level = 4,
-                                block = withLanguage(SUBTITLE_BLOCK, poemLanguage),
+                                block = titleBlock,
                             )
                         }
                     }
@@ -1385,6 +1382,7 @@ object Fb2Parser {
                             when (parser.next()) {
                                 XmlPullParser.START_TAG -> when (parser.name) {
                                     "title" -> {
+                                        val titleBlock = titleBlock(parser, stylesheet, poemLanguage)
                                         val title = collectTitle(
                                             parser,
                                             referencedImages,
@@ -1395,10 +1393,7 @@ object Fb2Parser {
                                             out += ContentElement.Heading(
                                                 title,
                                                 level = 5,
-                                                block = withLanguage(
-                                                    SUBTITLE_BLOCK,
-                                                    poemLanguage,
-                                                ),
+                                                block = titleBlock,
                                             )
                                         }
                                     }
@@ -1648,6 +1643,26 @@ object Fb2Parser {
         else -> null
     }
 
+    private fun titleBlock(
+        parser: XmlPullParser,
+        stylesheet: Fb2Stylesheet,
+        inheritedLanguage: String?,
+    ): BlockStyle? = headingBlock(
+        stylesheet.computed("title", parser.getAttributeValue(null, "style")),
+        languageOf(parser) ?: inheritedLanguage,
+    )
+
+    private fun headingBlock(computed: Fb2Stylesheet.Computed, language: String?): BlockStyle? =
+        withLanguage(
+            computed.applyTo(BlockStyle())?.copy(
+                // FB2 keeps numerical margins on the leaf. Presence also
+                // preserves author zero/small margins against reader defaults.
+                spaceBeforeSpecified = computed.spaceBeforeEm != null,
+                spaceAfterSpecified = computed.spaceAfterEm != null,
+            ),
+            language,
+        )
+
     /**
      * Collects a FB2 `<title>` without flattening its legal inline markup.
      * Each `<p>` remains on its own line; `<empty-line/>` contributes an empty
@@ -1661,19 +1676,23 @@ object Fb2Parser {
         inheritedLanguage: String?,
     ): AnnotatedString {
         val parts = mutableListOf<AnnotatedString>()
+        val titleStyle = stylesheet.computed("title", parser.getAttributeValue(null, "style"))
+        val titleLanguage = languageOf(parser) ?: inheritedLanguage
         while (true) {
             when (parser.next()) {
                 XmlPullParser.START_TAG -> if (parser.name == "p") {
                     val computed = stylesheet.computed(
                         "p",
                         parser.getAttributeValue(null, "style"),
+                        inherited = titleStyle,
                     )
                     val inline = parseInline(
                         parser,
                         referencedImages,
                         stylesheet,
                         computed,
-                        inheritedLanguage,
+                        titleLanguage,
+                        relativeToStyle = titleStyle,
                     ).build()
                     if (inline.length > 0) parts += inline
                 } else if (parser.name == "empty-line") {

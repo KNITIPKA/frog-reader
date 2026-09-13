@@ -133,8 +133,10 @@ class ReaderViewModel(
      * "last used" ones until the user changes something in this book.
      */
     val settings: StateFlow<ReaderSettings> =
-        kotlinx.coroutines.flow.combine(settingsRepository.settings, book) { global, current ->
-            current?.readerSettings ?: global
+        kotlinx.coroutines.flow.combine(
+            settingsRepository.settings, book, settingsRepository.appSettings,
+        ) { global, current, app ->
+            (current?.readerSettings ?: global).copy(centerHeadings = app.centerHeadings)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, ReaderSettings())
 
     val appSettings: StateFlow<AppSettings> = settingsRepository.appSettings
@@ -180,25 +182,25 @@ class ReaderViewModel(
     var currentScrollOffset: Int = 0
         private set
 
-    // Bounded, session-only history. Chrome visibility owns presentation;
-    // timers must not remove the return action while someone is using it.
-    private val navigationHistory = ReaderNavigationHistory()
-    private val _navigationReturnLocation = MutableStateFlow<ReaderReturnLocation?>(null)
+    private val navigationSession = ReaderNavigationSession(
+        viewModelScope, android.os.SystemClock::elapsedRealtime,
+    )
+    private var returnTimeoutMillis = ReaderNavigationSession.DEFAULT_TIMEOUT_MILLIS
+    private var expirePageReturns = AppSettings().autoHideReturnButton
     /** The next return destination, also used to label the return control. */
-    val navigationReturnLocation = _navigationReturnLocation.asStateFlow()
+    val navigationReturnLocation = navigationSession.returnLocation
 
-    fun rememberNavigationOrigin(location: ReaderReturnLocation) {
-        navigationHistory.push(location)
-        _navigationReturnLocation.value = navigationHistory.peek()
+    fun rememberNavigationOrigin(location: ReaderReturnLocation, expires: Boolean = false) {
+        navigationSession.remember(location, expires)
     }
 
-    fun takeNavigationOrigin(): ReaderReturnLocation? = navigationHistory.pop().also {
-        _navigationReturnLocation.value = navigationHistory.peek()
-    }
+    fun takeNavigationOrigin(): ReaderReturnLocation? = navigationSession.take()
 
-    fun clearNavigationHistory() {
-        navigationHistory.clear()
-        _navigationReturnLocation.value = null
+    fun clearNavigationHistory() = navigationSession.clear()
+
+    fun setReturnTimeoutMillis(timeoutMillis: Long) {
+        returnTimeoutMillis = timeoutMillis
+        navigationSession.configureExpiry(returnTimeoutMillis.takeIf { expirePageReturns })
     }
 
     /** Updates the exact transient position without scheduling a disk write. */
@@ -560,7 +562,8 @@ class ReaderViewModel(
 
     fun updateSettings(transform: (ReaderSettings) -> ReaderSettings) {
         viewModelScope.launch {
-            val updated = transform(settings.value)
+            // App preferences are projected into layout, not owned by this book.
+            val updated = transform(settings.value).copy(centerHeadings = false)
             // The book keeps its own settings from now on; the global copy
             // becomes the "last used" default that NEW books start from.
             repository.saveReaderSettings(bookId, updated)
@@ -570,6 +573,10 @@ class ReaderViewModel(
 
     fun updateAppSettings(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch { settingsRepository.updateApp(transform) }
+    }
+
+    suspend fun setDefaultTranslator(component: String) {
+        settingsRepository.updateApp { it.copy(defaultTranslator = component) }
     }
 
     fun saveProgress(firstVisibleIndex: Int, scrollOffset: Int, charOffset: Int = 0) {
@@ -733,6 +740,13 @@ class ReaderViewModel(
      */
     init {
         load()
+        viewModelScope.launch {
+            settingsRepository.appSettings.map { it.autoHideReturnButton }.distinctUntilChanged()
+                .collect { enabled ->
+                    expirePageReturns = enabled
+                    navigationSession.configureExpiry(returnTimeoutMillis.takeIf { enabled })
+                }
+        }
         // Re-render the book when the footnote visibility setting changes.
         viewModelScope.launch {
             settings

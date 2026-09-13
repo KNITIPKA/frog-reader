@@ -13,7 +13,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Login
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Fingerprint
+import androidx.compose.material.icons.rounded.FormatAlignCenter
 import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.runtime.Composable
@@ -34,6 +36,8 @@ import com.example.frogreader.data.AppLockDelay
 import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.StartupDestination
 import com.example.frogreader.ui.lock.canUseAppLock
+import com.example.frogreader.ui.translation.TranslatorPickerDialog
+import com.example.frogreader.ui.translation.rememberTranslatorApps
 
 @Composable
 internal fun ReadingSettingsPage(
@@ -41,6 +45,23 @@ internal fun ReadingSettingsPage(
     onUpdate: ((AppSettings) -> AppSettings) -> Unit,
     onBack: () -> Unit,
 ) {
+    var chooseTranslator by remember { mutableStateOf(false) }
+    val translators = rememberTranslatorApps()
+    val selectedTranslator = translators?.firstOrNull { it.id == settings.defaultTranslator }
+    if (chooseTranslator) {
+        TranslatorPickerDialog(
+            selected = settings.defaultTranslator,
+            onChoose = { app ->
+                onUpdate { it.copy(defaultTranslator = app.id) }
+                chooseTranslator = false
+            },
+            onReset = {
+                onUpdate { it.copy(defaultTranslator = null) }
+                chooseTranslator = false
+            },
+            onDismiss = { chooseTranslator = false },
+        )
+    }
     SettingsPageScaffold(
         title = stringResource(R.string.settings_reading_title),
         onBack = onBack,
@@ -79,6 +100,39 @@ internal fun ReadingSettingsPage(
                 onCheckedChange = { checked ->
                     onUpdate { it.copy(volumeKeyPaging = checked) }
                 },
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
+        SettingsSectionLabel(stringResource(R.string.settings_reading_behavior))
+        SettingsCard {
+            SettingsSwitchRow(
+                icon = Icons.Rounded.FormatAlignCenter,
+                title = stringResource(R.string.settings_center_headings),
+                subtitle = stringResource(R.string.settings_center_headings_subtitle),
+                checked = settings.centerHeadings,
+                onCheckedChange = { checked -> onUpdate { it.copy(centerHeadings = checked) } },
+            )
+            SettingsDivider()
+            SettingsSwitchRow(
+                icon = Icons.Rounded.Timer,
+                title = stringResource(R.string.settings_auto_hide_return),
+                subtitle = stringResource(R.string.settings_auto_hide_return_subtitle),
+                checked = settings.autoHideReturnButton,
+                onCheckedChange = { checked -> onUpdate { it.copy(autoHideReturnButton = checked) } },
+            )
+            SettingsDivider()
+            SettingsNavigationRow(
+                icon = Icons.Rounded.Translate,
+                title = stringResource(R.string.settings_default_translator),
+                subtitle = selectedTranslator?.label ?: stringResource(
+                    when {
+                        settings.defaultTranslator == null -> R.string.translator_not_selected
+                        translators == null -> R.string.translator_loading
+                        else -> R.string.translator_unavailable
+                    },
+                ),
+                onClick = { chooseTranslator = true },
             )
         }
 

@@ -63,7 +63,7 @@ class BookPage(
  * Bumped whenever pagination decisions or parser output that affects layout
  * change — stale disk caches then miss on the key and are recomputed.
  */
-const val LAYOUT_ENGINE_VERSION = 11
+const val LAYOUT_ENGINE_VERSION = 13
 
 class PaginationSpec(
     val contentWidthPx: Int,
@@ -84,7 +84,7 @@ class PaginationSpec(
             "$fontSize | ${settings.lineHeight} | " +
             "density=${density.density.toBits()}/${density.fontScale.toBits()} | " +
             "${settings.font} | ${settings.customFontPath} | " +
-            "${settings.justify} | ${settings.hyphenation} | " +
+            "${settings.justify} | ${settings.hyphenation} | centerHeadings=${settings.centerHeadings} | " +
             "${settings.startChaptersOnNewPage} | ${settings.hideFootnotes} | " +
             "${settings.bookStyles} | ${settings.dropCaps} | lang=$language | " +
             "embeddedFonts=$embeddedFontSignature"

@@ -1,6 +1,6 @@
 package com.example.frogreader.ui.reader
 
-import android.content.Intent
+import com.example.frogreader.ui.translation.rememberTranslationAction
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -123,6 +123,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -486,7 +487,18 @@ private fun ReaderContent(
     // Tappable footnote references ([53] → bottom sheet with the note).
     var noteToShow by remember { mutableStateOf<VisibleNote?>(null) }
     val navigationReturnLocation by viewModel.navigationReturnLocation.collectAsStateWithLifecycle()
+    val returnTimeout = LocalAccessibilityManager.current?.calculateRecommendedTimeoutMillis(
+        originalTimeoutMillis = ReaderNavigationSession.DEFAULT_TIMEOUT_MILLIS,
+        containsIcons = true,
+        containsText = true,
+        containsControls = true,
+    ) ?: ReaderNavigationSession.DEFAULT_TIMEOUT_MILLIS
+    LaunchedEffect(returnTimeout) { viewModel.setReturnTimeoutMillis(returnTimeout) }
     val navigationBackAvailable = navigationReturnLocation != null
+    val translateSelection = rememberTranslationAction(
+        defaultTranslator = appSettings.defaultTranslator,
+        saveDefault = viewModel::setDefaultTranslator,
+    )
     val pagination by viewModel.pagination.collectAsStateWithLifecycle()
     val returnPageNumber = if (settings.readingMode == ReadingMode.PAGES) {
         val origin = navigationReturnLocation as? ReaderReturnLocation.Main
@@ -597,7 +609,9 @@ private fun ReaderContent(
     fun navigateWithHistory(target: ReaderReturnLocation) {
         val origin = currentReturnLocation()
         if (origin == target) return
-        viewModel.rememberNavigationOrigin(origin)
+        viewModel.rememberNavigationOrigin(
+            origin, expires = origin is ReaderReturnLocation.Main && target is ReaderReturnLocation.Main,
+        )
         restoreReturnLocation(target)
         if (target is ReaderReturnLocation.Main) onShowChrome()
     }
@@ -787,14 +801,7 @@ private fun ReaderContent(
             onTranslate = {
                 val selected = selectedText()
                 if (selected.isNotEmpty()) {
-                    val intent = Intent(Intent.ACTION_PROCESS_TEXT).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_PROCESS_TEXT, selected)
-                        putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, true)
-                    }
-                    runCatching {
-                        context.startActivity(Intent.createChooser(intent, null))
-                    }
+                    translateSelection(selected)
                 }
                 selection.clear()
             },
@@ -933,7 +940,7 @@ private fun ReaderContent(
             // Capture the exact reading origin immediately before the jump is
             // committed. Starting or cancelling a thumb gesture must not add
             // a phantom browser-history entry.
-            viewModel.rememberNavigationOrigin(currentReturnLocation())
+            viewModel.rememberNavigationOrigin(currentReturnLocation(), expires = true)
             seek()
             return true
         }
@@ -1748,7 +1755,7 @@ private fun ScrollReader(
                     ReaderNavigationPolicy.isLargeScrollJump(travelledPx, viewportPx)
                 ) {
                     val end = currentScrollLocation()
-                    if (end != start) viewModel.rememberNavigationOrigin(start)
+                    if (end != start) viewModel.rememberNavigationOrigin(start, expires = true)
                 }
                 origin = null
                 travelledPx = 0f

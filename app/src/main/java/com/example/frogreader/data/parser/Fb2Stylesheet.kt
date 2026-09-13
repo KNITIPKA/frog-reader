@@ -497,7 +497,7 @@ internal class Fb2Stylesheet private constructor(
         )
 
         private val ELEMENT_CLASS_ALIASES = setOf(
-            "p", "subtitle", "v", "text-author", "table", "tr", "td", "th",
+            "p", "title", "subtitle", "v", "text-author", "table", "tr", "td", "th",
         )
 
         private val SUPPORTED_PROPERTIES = setOf(

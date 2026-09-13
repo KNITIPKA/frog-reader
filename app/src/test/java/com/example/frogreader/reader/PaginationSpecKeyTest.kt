@@ -11,6 +11,15 @@ import org.junit.rules.TemporaryFolder
 
 class PaginationSpecKeyTest {
 
+    @Test
+    fun `app heading preference invalidates cached pagination`() {
+        fun key(centered: Boolean) = PaginationSpec(
+            contentWidthPx = 800, contentHeightPx = 1_200,
+            density = Density(2f), settings = ReaderSettings(centerHeadings = centered), fontSize = 18f,
+        ).key
+        assertNotEquals(key(false), key(true))
+    }
+
     @get:Rule
     val temp = TemporaryFolder()
 

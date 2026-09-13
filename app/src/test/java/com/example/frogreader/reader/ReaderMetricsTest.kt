@@ -18,6 +18,69 @@ class ReaderMetricsTest {
     private val settings = ReaderSettings(font = ReaderFont.SERIF)
 
     @Test
+    fun `publisher paragraphs preserve full line boxes without adding margins`() {
+        for (fontSize in listOf(12f, 18f, 32f)) {
+            for (lineHeight in listOf(1.2f, 1.5f, 1.8f)) {
+                val paragraph = ContentElement.Paragraph(
+                    androidx.compose.ui.text.AnnotatedString("A paragraph with zero author margins."),
+                    block = BlockStyle(spaceBeforeSpecified = true, spaceAfterSpecified = true),
+                )
+                val publisher = settings.copy(bookStyles = true, lineHeight = lineHeight)
+                for (firstFragment in listOf(true, false)) {
+                    val style = ReaderMetrics.textStyle(paragraph, publisher, fontSize, firstFragment)
+                    assertEquals(androidx.compose.ui.text.style.LineHeightStyle.Trim.None, style.lineHeightStyle?.trim)
+                    assertEquals(androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center, style.lineHeightStyle?.alignment)
+                    assertEquals(false, style.platformStyle?.paragraphStyle?.includeFontPadding)
+                    assertEquals(fontSize * lineHeight, style.lineHeight.value, 0.001f)
+                }
+                val (top, bottom) = ReaderMetrics.verticalPaddings(paragraph, fontSize, bookStyles = true)
+                assertEquals(0f, top.value, 0f)
+                assertEquals(0f, bottom.value, 0f)
+                // The user's existing non-publisher layout is unchanged.
+                org.junit.Assert.assertNull(
+                    ReaderMetrics.textStyle(paragraph, publisher.copy(bookStyles = false), fontSize).lineHeightStyle,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `explicit publisher line height retains leading at paragraph boundaries`() {
+        val paragraph = ContentElement.Paragraph(
+            androidx.compose.ui.text.AnnotatedString("Text"),
+            block = BlockStyle(fontScale = 0.95f, lineHeightMult = 1.4f),
+        )
+        val style = ReaderMetrics.textStyle(paragraph, settings.copy(bookStyles = true), 20f)
+        assertEquals(26.6f, style.lineHeight.value, 0.001f)
+        assertEquals(androidx.compose.ui.text.style.LineHeightStyle.Trim.None, style.lineHeightStyle?.trim)
+    }
+
+    @Test
+    fun `app centering overrides every heading alignment but leaves paragraphs alone`() {
+        for (publisherStyles in listOf(false, true)) {
+            val centered = settings.copy(centerHeadings = true, bookStyles = publisherStyles)
+            for (level in 1..6) {
+                for (align in com.example.frogreader.data.model.BlockAlign.entries) {
+                    val heading = ContentElement.Heading("Heading", level, block = BlockStyle(align = align))
+                    assertEquals(
+                        androidx.compose.ui.text.style.TextAlign.Center,
+                        ReaderMetrics.textStyle(heading, centered, 20f).textAlign,
+                    )
+                    assertEquals(
+                        ReaderMetrics.textStyle(heading, settings.copy(bookStyles = publisherStyles), 20f).fontSize,
+                        ReaderMetrics.textStyle(heading, centered, 20f).fontSize,
+                    )
+                }
+            }
+            val paragraph = ContentElement.Paragraph(androidx.compose.ui.text.AnnotatedString("Body"))
+            assertEquals(
+                ReaderMetrics.textStyle(paragraph, settings.copy(bookStyles = publisherStyles), 20f),
+                ReaderMetrics.textStyle(paragraph, centered, 20f),
+            )
+        }
+    }
+
+    @Test
     fun `all six default heading levels have distinct descending sizes`() {
         val baseFontSize = 20f
         val sizes = (1..6).map { level ->
@@ -57,6 +120,64 @@ class ReaderMetricsTest {
     }
 
     @Test
+    fun `heading defaults respect text direction and never reduce readable body size`() {
+        for (level in 1..6) {
+            for (language in listOf("ru", "uk", "en", "ar", "he")) {
+                val style = ReaderMetrics.textStyle(
+                    ContentElement.Heading("Heading", level), settings, 20f, language = language,
+                )
+                assertEquals(androidx.compose.ui.text.style.TextAlign.Start, style.textAlign)
+                assertTrue(style.fontSize.value >= 20f)
+                assertEquals(androidx.compose.ui.text.style.Hyphens.None, style.hyphens)
+            }
+        }
+    }
+
+    @Test
+    fun `scene ornaments stay centered but author alignment still wins`() {
+        for (text in listOf("* * *", "⁂", "❦")) {
+            val ornament = ContentElement.Heading(text, 4)
+            assertEquals(androidx.compose.ui.text.style.TextAlign.Center,
+                ReaderMetrics.textStyle(ornament, settings, 20f).textAlign)
+            assertEquals(androidx.compose.ui.text.style.TextAlign.Left,
+                ReaderMetrics.textStyle(ornament.copy(block = BlockStyle(align = com.example.frogreader.data.model.BlockAlign.LEFT)), settings, 20f).textAlign)
+        }
+        assertEquals(androidx.compose.ui.text.style.TextAlign.Start,
+            ReaderMetrics.textStyle(ContentElement.Heading("Chapter *", 1), settings, 20f).textAlign)
+    }
+
+    @Test
+    fun `heading spacing follows font size and keeps heading closer to its content`() {
+        for (level in 1..6) {
+            val heading = ContentElement.Heading("Heading", level)
+            val small = ReaderMetrics.verticalPaddings(heading, 16f)
+            val large = ReaderMetrics.verticalPaddings(heading, 32f)
+            assertTrue(small.first > small.second)
+            assertTrue(small.second.value > 0f)
+            assertEquals(small.first.value * 2f, large.first.value, 0.001f)
+            assertEquals(small.second.value * 2f, large.second.value, 0.001f)
+        }
+        val h2 = ReaderMetrics.verticalPaddings(ContentElement.Heading("Section", 2), 20f)
+        assertTrue("Compact spacing replaces the old 28dp on each side", h2.first.value + h2.second.value < 56f)
+    }
+
+    @Test
+    fun `explicit publisher heading alignment wins for every level`() {
+        val alignments = listOf(
+            com.example.frogreader.data.model.BlockAlign.CENTER to androidx.compose.ui.text.style.TextAlign.Center,
+            com.example.frogreader.data.model.BlockAlign.LEFT to androidx.compose.ui.text.style.TextAlign.Left,
+            com.example.frogreader.data.model.BlockAlign.RIGHT to androidx.compose.ui.text.style.TextAlign.Right,
+            com.example.frogreader.data.model.BlockAlign.START to androidx.compose.ui.text.style.TextAlign.Start,
+            com.example.frogreader.data.model.BlockAlign.END to androidx.compose.ui.text.style.TextAlign.End,
+            com.example.frogreader.data.model.BlockAlign.JUSTIFY to androidx.compose.ui.text.style.TextAlign.Justify,
+        )
+        for (level in 1..6) for ((author, expected) in alignments) {
+            val heading = ContentElement.Heading("Heading", level, BlockStyle(align = author))
+            assertEquals(expected, ReaderMetrics.textStyle(heading, settings.copy(bookStyles = true), 20f).textAlign)
+        }
+    }
+
+    @Test
     fun `publisher heading scale overrides the level default relative to user base`() {
         val baseFontSize = 18f
         val publisherScale = 1.72f
@@ -77,15 +198,15 @@ class ReaderMetricsTest {
     fun `explicit one em heading size overrides semantic level default`() {
         val baseFontSize = 18f
         val heading = ContentElement.Heading(
-            text = "Author-sized H6",
-            level = 6,
+            text = "Author-sized H1",
+            level = 1,
             block = BlockStyle(fontScale = 1f),
         )
 
         val style = ReaderMetrics.textStyle(heading, settings, baseFontSize)
 
         assertEquals(baseFontSize, style.fontSize.value, 0.001f)
-        assertTrue(style.fontSize.value > baseFontSize * ReaderMetrics.headingScale(6))
+        assertTrue(style.fontSize.value < baseFontSize * ReaderMetrics.headingScale(1))
     }
 
     @Test
@@ -128,7 +249,7 @@ class ReaderMetricsTest {
             bookStyles = true,
         )
         assertEquals(0f, authored.first.value, 0.001f)
-        assertEquals(28f, authored.second.value, 0.001f)
+        assertEquals(10f, authored.second.value, 0.001f)
 
         val legacySemanticSpacing = ContentElement.Paragraph(
             androidx.compose.ui.text.AnnotatedString("Legacy spacing"),

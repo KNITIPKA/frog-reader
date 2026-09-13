@@ -24,9 +24,14 @@
     <init>(...);
 }
 
-# kotlinx.serialization looks the generated serializer up by name. The library
-# ships consumer rules, but library.json holds OUR model classes; losing their
-# serializers would be a far worse failure than a stale widget.
+# Additional project-level safeguard for the persisted model entry points.
+# This is NOT the complete serialization configuration: kotlinx-serialization-
+# core supplies annotation-based consumer rules for retained @Serializable
+# classes in every package, including data.ReaderSettings, data.AppSettings
+# and data.ReadingStats. Direct Foo.serializer() calls are also visible to R8.
+# Do not broaden this rule just because a serializable type is outside model;
+# check the merged release configuration and actual lookup path first.
+# https://github.com/Kotlin/kotlinx.serialization#android
 -keepclassmembers class com.example.frogreader.data.model.** {
     *** Companion;
     kotlinx.serialization.KSerializer serializer(...);

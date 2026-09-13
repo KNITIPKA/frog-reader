@@ -526,20 +526,22 @@ class MainActivity : ComponentActivity() {
             // Scaffold adding either again would double it.
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
-                // The Box measures to the bar, so the slot's height —
-                // and with it every screen's bottom content padding —
-                // is exactly what it was.
-                Box {
-                    FrogNavigationBar(
-                        visible = onTopLevel,
-                        selectedTab = selectedTab,
-                        onTabSelected = onTabSelected,
-                    )
-                    FabMenuScrim(
-                        visible = fabMenuExpanded,
-                        onDismiss = { fabMenuExpanded = false },
-                        modifier = Modifier.matchParentSize(),
-                    )
+                if (ShowBottomBar) {
+                    // The Box measures to the bar, so the slot's height —
+                    // and with it every screen's bottom content padding —
+                    // is exactly what it was.
+                    Box {
+                        FrogNavigationBar(
+                            visible = onTopLevel,
+                            selectedTab = selectedTab,
+                            onTabSelected = onTabSelected,
+                        )
+                        FabMenuScrim(
+                            visible = fabMenuExpanded,
+                            onDismiss = { fabMenuExpanded = false },
+                            modifier = Modifier.matchParentSize(),
+                        )
+                    }
                 }
             },
             floatingActionButton = {
@@ -798,6 +800,12 @@ class MainActivity : ComponentActivity() {
 /** How long the splash takes to lift away, and how far it grows doing it. */
 private const val SplashExitMillis = 260L
 private const val SplashExitScale = 1.08f
+
+/**
+ * Flag to control the visibility of the bottom navigation bar (Library & Profile tabs).
+ * Set to false temporarily per user request. Set back to true in the next update to restore.
+ */
+private const val ShowBottomBar = false
 
 // ------------------------------------------------------------------ chrome
 
