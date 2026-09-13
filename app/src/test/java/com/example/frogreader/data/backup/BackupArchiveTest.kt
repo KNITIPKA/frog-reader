@@ -78,7 +78,11 @@ class BackupArchiveTest {
     private val stats = ReadingStats(mapOf("2026-08-09" to 3_600L))
     private val settings = BackupSettings(
         reader = ReaderSettings(fontSizeSp = 21f),
-        app = AppSettings(theme = AppTheme.OLED, dailyGoalMinutes = 45),
+        app = AppSettings(
+            theme = AppTheme.OLED, dailyGoalMinutes = 45,
+            centerHeadings = true, autoHideReturnButton = false,
+            defaultTranslator = "translator.app/translator.app.ProcessText",
+        ),
     )
 
     private fun writeArchive(
@@ -98,6 +102,25 @@ class BackupArchiveTest {
             coverFile = { b -> b.coverFileName?.let { File(sourceDir, it) }?.takeIf { it.exists() } },
         )
         return out.toByteArray()
+    }
+
+    @Test
+    fun `text formats and user data survive full backup with exact source bytes`() {
+        val textBooks = listOf(BookFormat.TXT, BookFormat.MD).map { format ->
+            val id = format.name.lowercase()
+            val fileName = "$id.$id"
+            File(sourceDir, fileName).writeText("# Українська книжка\r\n\r\nLiteral **text**")
+            book(id, fileName).copy(format = format, coverFileName = null)
+        }
+        val bytes = writeArchive(document(*textBooks.toTypedArray()), BackupMode.FULL)
+        val contents = BackupArchive.read(ByteArrayInputStream(bytes), booksDir, coversDir)
+        assertEquals(2, contents.manifest.formatVersion)
+        for (original in textBooks) {
+            val restored = contents.document.books.single { it.id == original.id }
+            assertEquals(original, restored)
+            val restoredName = contents.restoredBookFiles.getValue(original.id)
+            assertTrue(File(sourceDir, original.fileName!!).readBytes().contentEquals(File(booksDir, restoredName).readBytes()))
+        }
     }
 
     // ------------------------------------------------------------ round trip
@@ -125,6 +148,9 @@ class BackupArchiveTest {
         assertEquals(21f, contents.settings?.reader?.fontSizeSp)
         assertEquals(AppTheme.OLED, contents.settings?.app?.theme)
         assertEquals(45, contents.settings?.app?.dailyGoalMinutes)
+        assertEquals(true, contents.settings?.app?.centerHeadings)
+        assertEquals(false, contents.settings?.app?.autoHideReturnButton)
+        assertEquals(settings.app.defaultTranslator, contents.settings?.app?.defaultTranslator)
     }
 
     @Test
@@ -212,6 +238,36 @@ class BackupArchiveTest {
                 "should be a format error, was ${e::class.simpleName}",
                 e is BackupFormatException || e is java.io.IOException,
             )
+        }
+    }
+
+    @Test
+    fun `physical truncation in optional settings or stats is not swallowed`() {
+        for (name in listOf("settings.json", "stats.json")) {
+            val out = ByteArrayOutputStream()
+            var payloadStart = 0
+            val payload = (" ".repeat(2048) + "{}").toByteArray()
+            ZipOutputStream(out).use { zip ->
+                zip.putNextEntry(ZipEntry("manifest.json"))
+                zip.write("""{"formatVersion":1,"bookCount":0}""".toByteArray())
+                zip.closeEntry()
+                zip.putNextEntry(ZipEntry("library.json"))
+                zip.write("""{"books":[],"shelves":[]}""".toByteArray())
+                zip.closeEntry()
+                zip.putNextEntry(ZipEntry(name).apply {
+                    method = ZipEntry.STORED
+                    size = payload.size.toLong()
+                    compressedSize = size
+                    crc = java.util.zip.CRC32().apply { update(payload) }.value
+                })
+                payloadStart = out.size()
+                zip.write(payload)
+                zip.closeEntry()
+            }
+            val truncated = out.toByteArray().copyOf(payloadStart + payload.size / 2)
+            org.junit.Assert.assertThrows(java.io.IOException::class.java) {
+                BackupArchive.read(ByteArrayInputStream(truncated), booksDir, coversDir)
+            }
         }
     }
 

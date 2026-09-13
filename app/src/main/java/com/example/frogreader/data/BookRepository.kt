@@ -241,11 +241,13 @@ open class BookRepository(private val context: Context? = null) {
                 temp.outputStream().use { input.copyTo(it) }
             }
 
-            val (format, stored) = BookParsers.detectAndStore(temp, stagingDir, stagingId)
+            val originalName = displayNameFor(uri)
+            val mimeType = runCatching { context?.contentResolver?.getType(uri) }.getOrNull()
+            val (format, stored) = BookParsers.detectAndStore(temp, stagingDir, stagingId, originalName, mimeType)
             try {
                 val metadata = BookParsers.parseMetadata(stored, format)
                 val title = metadata.title?.takeIf { it.isNotBlank() }
-                    ?: displayNameFor(uri)?.substringBeforeLast('.')?.takeIf { it.isNotBlank() }
+                    ?: originalName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() }
                     ?: UNTITLED
                 val author = metadata.authors.takeIf { it.isNotEmpty() }?.joinToString(", ")
                     ?: metadata.author
@@ -1469,7 +1471,7 @@ open class BookRepository(private val context: Context? = null) {
             }
         }
 
-    private fun displayNameFor(uri: Uri): String? = runCatching {
+    internal open fun displayNameFor(uri: Uri): String? = runCatching {
         context?.contentResolver?.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { cursor ->
                 if (cursor.moveToFirst()) cursor.getString(0) else null

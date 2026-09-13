@@ -34,6 +34,7 @@ class BookRepositoryImportTest {
     /** Feeds [stageImport] from a real file instead of a ContentResolver. */
     private class ImportRepository(private val pick: () -> File) : BookRepository(null) {
         override fun openStream(uri: Uri): InputStream = pick().inputStream()
+        override fun displayNameFor(uri: Uri): String = pick().name
     }
 
     private var picked: File = File("unset")
@@ -70,6 +71,30 @@ class BookRepositoryImportTest {
             </FictionBook>
         """.trimIndent()
         return File(testDir, name).apply { writeText(xml) }
+    }
+
+    @Test
+    fun `text imports preserve names bytes and format after library reload`() = runTest {
+        data class TextCase(val name: String, val body: String, val title: String, val format: BookFormat)
+        for ((name, body, expectedTitle, format) in listOf(
+            TextCase("My Notes.TXT", "Literal **text**", "My Notes", BookFormat.TXT),
+            TextCase("notes.md", "# Книжка\n\nТекст", "Книжка", BookFormat.MD),
+            TextCase("No heading.md", "Just text", "No heading", BookFormat.MD),
+        )) {
+            picked = File(testDir, name).apply { writeText(body) }
+            val original = picked.readBytes()
+            val repository = repository()
+            val staged = repository.stageImport(anyUri)
+            assertEquals(format, staged.format)
+            assertEquals(expectedTitle, staged.title)
+            val book = repository.commitImport(staged, ImportMode.New)
+            val reloaded = repository().books.value.single { it.id == book.id }
+            assertEquals(format, reloaded.format)
+            assertEquals(expectedTitle, reloaded.title)
+            assertTrue(repository.loadContent(book).chapters.isNotEmpty())
+            assertTrue(original.contentEquals(repository.bookFileFor(reloaded)!!.readBytes()))
+            assertEquals(book.contentHash, reloaded.contentHash)
+        }
     }
 
     // ------------------------------------------------------------- staging

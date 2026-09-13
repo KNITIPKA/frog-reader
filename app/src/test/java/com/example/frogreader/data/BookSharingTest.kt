@@ -65,6 +65,7 @@ class BookSharingTest {
 
     @Test fun `transfer names preserve native format extensions and valid Unicode within filesystem limits`() {
         val formats = listOf(
+            Triple(BookFormat.TXT, "TXT", "txt"), Triple(BookFormat.MD, "MD", "md"),
             Triple(BookFormat.EPUB, "EPUB", "epub"), Triple(BookFormat.FB2, "FB2", "fb2"),
             Triple(BookFormat.MOBI, "MOBI", "mobi"), Triple(BookFormat.MOBI, "MOBI + KF8", "mobi"),
             Triple(BookFormat.MOBI, "AZW3", "azw3"), Triple(BookFormat.MOBI, "PalmDOC", "prc"),
@@ -72,7 +73,11 @@ class BookSharingTest {
         for ((format, label, extension) in formats) {
             val descriptor = bookTransferFormat(format, label)
             assertEquals("Title.$extension", bookTransferName("Title", descriptor))
-            assertTrue(descriptor.mimeType.startsWith("application/"))
+            when (format) {
+                BookFormat.TXT -> assertEquals("text/plain", descriptor.mimeType)
+                BookFormat.MD -> assertEquals("text/markdown", descriptor.mimeType)
+                else -> assertTrue(descriptor.mimeType.startsWith("application/"))
+            }
             val longName = bookTransferName(".. /\\\"\n" + "📚Книга".repeat(80), descriptor)
             assertFalse(longName.contains('/'))
             assertFalse(longName.contains('\\'))

@@ -96,7 +96,7 @@ internal fun BookInfoContent(state: BookInfoState, onBack: () -> Unit, onEdit: (
             Text(stringResource(R.string.book_info_title), style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             TextButton(
                 onClick = { if (!state.sharing) onEdit() },
-                enabled = state.fileAvailable && !showShareProgress,
+                enabled = state.fileAvailable && state.book?.format?.supportsMetadataEditing == true && !showShareProgress,
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
             ) {
                 Icon(Icons.Rounded.Edit, null, Modifier.size(18.dp))

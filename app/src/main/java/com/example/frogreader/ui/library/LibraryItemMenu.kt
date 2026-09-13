@@ -120,6 +120,7 @@ internal fun LibraryItemMenu(
     onRemoveFromShelf: () -> Unit,
     onInfo: () -> Unit,
     onEdit: () -> Unit,
+    canEdit: Boolean = true,
     onRename: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
@@ -162,7 +163,7 @@ internal fun LibraryItemMenu(
                         onClick = onAddToShelf,
                     )
                 }
-                FrogMenuItem(
+                if (canEdit) FrogMenuItem(
                     icon = Icons.Rounded.Edit,
                     label = stringResource(R.string.library_menu_edit),
                     onClick = onEdit,

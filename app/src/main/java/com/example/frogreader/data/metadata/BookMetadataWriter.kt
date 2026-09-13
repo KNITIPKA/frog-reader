@@ -31,6 +31,7 @@ object BookMetadataWriter {
     }
 
     fun write(source: File, target: File, format: BookFormat, metadata: EditableBookMetadata, cover: CoverEdit): BookMetadata {
+        require(format.supportsMetadataEditing) { "TXT and Markdown do not support embedded book metadata editing." }
         require(source.canonicalFile != target.canonicalFile) { "A separate output file is required." }
         val desired = metadata.normalized().let { if (format == BookFormat.EPUB && it.language.isBlank()) it.copy(language = "und") else it }
         desired.validate()
@@ -40,6 +41,7 @@ object BookMetadataWriter {
                 BookFormat.EPUB -> XmlMetadataWriter.epub(source, target, original, desired, cover)
                 BookFormat.FB2 -> XmlMetadataWriter.fb2(source, target, original, desired, cover)
                 BookFormat.MOBI -> MobiMetadataWriter.write(source, target, original, desired, cover)
+                BookFormat.TXT, BookFormat.MD -> error("Unsupported metadata format")
             }
             FileOutputStream(target, true).use { it.fd.sync() }
             val actual = BookParsers.parseMetadata(target, format)

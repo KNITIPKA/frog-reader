@@ -40,7 +40,8 @@ data class BackupManifest(
     val quoteCount: Int = 0,
 ) {
     companion object {
-        const val FORMAT_VERSION = 1
+        // Version 2 adds TXT/MD enum values that version 1 readers cannot decode.
+        const val FORMAT_VERSION = 2
     }
 }
 

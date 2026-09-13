@@ -3,7 +3,12 @@ package com.example.frogreader.data.model
 import kotlinx.serialization.Serializable
 
 @Serializable
-enum class BookFormat { EPUB, FB2, MOBI }
+enum class BookFormat {
+    EPUB, FB2, MOBI, TXT, MD;
+
+    /** Plain text formats have no standard embedded book-metadata container. */
+    val supportsMetadataEditing: Boolean get() = this != TXT && this != MD
+}
 
 /** Where the user stopped reading, plus an overall 0..1 fraction for the library card. */
 @Serializable

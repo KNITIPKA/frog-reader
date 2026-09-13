@@ -37,6 +37,9 @@ object BookParsers {
         "application/vnd.amazon.mobi8-ebook",
         "application/xml",
         "text/xml",
+        "text/plain",
+        "text/markdown",
+        "text/x-markdown",
         // The two catch-alls that actually carry most books.
         "application/zip",
         "application/octet-stream",
@@ -45,18 +48,31 @@ object BookParsers {
     /**
      * Detects the format of a freshly copied file and moves it into [targetDir]
      * under a normalized name. Zipped FB2 files (`.fb2.zip`) are unpacked so the
-     * stored file is always a plain `.fb2` or `.epub`.
+     * stored file keeps the detected format extension.
      */
-    fun detectAndStore(source: File, targetDir: File, id: String): Pair<BookFormat, File> =
-        detectAndStore(source, targetDir, id, ReaderResourceLimits.DEFAULT)
+    fun detectAndStore(
+        source: File,
+        targetDir: File,
+        id: String,
+        originalName: String? = source.name,
+        mimeType: String? = null,
+    ): Pair<BookFormat, File> =
+        detectAndStore(source, targetDir, id, ReaderResourceLimits.DEFAULT, originalName, mimeType)
 
     internal fun detectAndStore(
         source: File,
         targetDir: File,
         id: String,
         limits: ReaderResourceLimits,
+        originalName: String? = source.name,
+        mimeType: String? = null,
     ): Pair<BookFormat, File> {
         targetDir.mkdirs()
+        // Text can legitimately start with "PK" or contain an XML example.
+        // An explicit text extension takes precedence over container heuristics.
+        TextBookParser.inferFormat(originalName, null)?.let { format ->
+            return storeText(source, targetDir, id, format, limits)
+        }
         val header = source.inputStream().use { readPrefix(it, 68) }
 
         // Mobipocket/Kindle PDB container (.mobi/.azw/.azw3/.prc).
@@ -110,6 +126,11 @@ object BookParsers {
             return BookFormat.FB2 to target
         }
 
+        val textFormat = TextBookParser.inferFormat(originalName, mimeType)
+        if (textFormat != null) {
+            return storeText(source, targetDir, id, textFormat, limits)
+        }
+
         throw IOException("Unsupported file format")
     }
 
@@ -117,12 +138,28 @@ object BookParsers {
         BookFormat.EPUB -> EpubParser.parseMetadata(file)
         BookFormat.FB2 -> Fb2Parser.parseMetadata(streamOf(file))
         BookFormat.MOBI -> MobiParser.parseMetadata(file)
+        BookFormat.TXT, BookFormat.MD -> TextBookParser.parseMetadata(file, format)
     }
 
     fun parseContent(file: File, format: BookFormat, imagesDir: File): BookContent = when (format) {
         BookFormat.EPUB -> EpubParser.parseContent(file, imagesDir)
         BookFormat.FB2 -> Fb2Parser.parseContent(streamOf(file), imagesDir)
         BookFormat.MOBI -> MobiParser.parseContent(file, imagesDir)
+        BookFormat.TXT, BookFormat.MD -> TextBookParser.parseContent(file, format)
+    }
+
+    private fun storeText(
+        source: File,
+        targetDir: File,
+        id: String,
+        format: BookFormat,
+        limits: ReaderResourceLimits,
+    ): Pair<BookFormat, File> {
+        // Extensions/MIME only nominate text: decode and reject binary content first.
+        TextBookParser.readText(source, limits.maxTextBytes)
+        val target = File(targetDir, "$id.${format.name.lowercase(java.util.Locale.ROOT)}")
+        moveFile(source, target)
+        return format to target
     }
 
     private fun streamOf(file: File): () -> InputStream = { file.inputStream().buffered() }

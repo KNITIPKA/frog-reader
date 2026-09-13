@@ -79,6 +79,9 @@ dependencies {
 
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.jsoup)
+    implementation(libs.commonmark)
+    implementation(libs.commonmark.tables)
+    implementation(libs.commonmark.strikethrough)
     implementation(libs.brotli.dec)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.coil.compose)

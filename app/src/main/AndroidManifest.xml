@@ -5,6 +5,14 @@
     <!-- Unlocking the app. A normal permission: granted at install, never asked for. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
+    <!-- Discover only activities that can process selected text (Android 11+). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT" />
+            <data android:mimeType="text/plain" />
+        </intent>
+    </queries>
+
     <!--
         READ_EXTERNAL_STORAGE is deliberately absent, and must stay absent.
 
@@ -51,7 +59,7 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Open EPUB/FB2/MOBI files from file managers -->
+            <!-- Open supported book and text files from file managers -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -61,6 +69,9 @@
                 <data android:mimeType="application/zip" />
                 <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="text/xml" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="text/markdown" />
+                <data android:mimeType="text/x-markdown" />
                 <data android:mimeType="application/xml" />
                 <data android:mimeType="application/x-mobipocket-ebook" />
                 <data android:mimeType="application/vnd.amazon.ebook" />

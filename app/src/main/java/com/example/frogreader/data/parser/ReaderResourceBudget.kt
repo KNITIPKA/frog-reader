@@ -24,6 +24,7 @@ internal data class ReaderResourceLimits(
     val maxCompressionRatio: Long = 2_000,
     val compressionRatioCheckFromBytes: Long = 8L * 1024 * 1024,
     val maxPackageXmlBytes: Long = 16L * 1024 * 1024,
+    val maxTextBytes: Long = 16L * 1024 * 1024,
     val maxChapterBytes: Long = 32L * 1024 * 1024,
     val maxStylesheetBytes: Long = 8L * 1024 * 1024,
     val maxCoverBytes: Long = 32L * 1024 * 1024,
@@ -75,6 +76,7 @@ internal data class ReaderResourceLimits(
         require(maxCompressionRatio > 0)
         require(compressionRatioCheckFromBytes >= 0)
         require(maxPackageXmlBytes in 1..Int.MAX_VALUE.toLong())
+        require(maxTextBytes in 1..Int.MAX_VALUE.toLong())
         require(maxChapterBytes in 1..Int.MAX_VALUE.toLong())
         require(maxStylesheetBytes in 1..Int.MAX_VALUE.toLong())
         require(maxCoverBytes in 1..Int.MAX_VALUE.toLong())

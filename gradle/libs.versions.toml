@@ -13,6 +13,7 @@ lifecycle = "2.10.0"
 iconsExtended = "1.7.8"
 kotlinxSerializationJson = "1.9.0"
 jsoup = "1.21.1"
+commonmark = "0.24.0"
 coil = "3.2.0"
 coreSplashscreen = "1.0.1"
 navigationCompose = "2.9.0"
@@ -37,6 +38,9 @@ androidx-compose-material3 = { group = "androidx.compose.material3", name = "mat
 androidx-compose-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "iconsExtended" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
+commonmark = { group = "org.commonmark", name = "commonmark", version.ref = "commonmark" }
+commonmark-tables = { group = "org.commonmark", name = "commonmark-ext-gfm-tables", version.ref = "commonmark" }
+commonmark-strikethrough = { group = "org.commonmark", name = "commonmark-ext-gfm-strikethrough", version.ref = "commonmark" }
 # Pure-Java Brotli decoder (Google) — needed for WOFF2 fonts inside EPUB/AZW3.
 brotli-dec = { group = "org.brotli", name = "dec", version = "0.1.2" }
 androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "coreSplashscreen" }

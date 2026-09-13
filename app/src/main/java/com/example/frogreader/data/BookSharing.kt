@@ -14,6 +14,8 @@ import java.util.UUID
 internal data class BookTransferFormat(val extension: String, val mimeType: String)
 
 internal fun bookTransferFormat(format: BookFormat, nativeLabel: String?): BookTransferFormat = when (format) {
+    BookFormat.TXT -> BookTransferFormat("txt", "text/plain")
+    BookFormat.MD -> BookTransferFormat("md", "text/markdown")
     BookFormat.EPUB -> BookTransferFormat("epub", "application/epub+zip")
     BookFormat.FB2 -> BookTransferFormat("fb2", "application/x-fictionbook+xml")
     BookFormat.MOBI -> when (nativeLabel) {

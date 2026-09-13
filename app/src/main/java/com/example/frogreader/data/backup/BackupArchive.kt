@@ -141,7 +141,8 @@ object BackupArchive {
         val bookFiles = LinkedHashMap<String, String>()
         val covers = LinkedHashSet<String>()
 
-        ZipInputStream(input.buffered()).use { zip ->
+        val checkedInput = BackupZipInputStream(input.buffered())
+        ZipInputStream(checkedInput).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
                 if (entry.isDirectory) continue
@@ -154,12 +155,20 @@ object BackupArchive {
                     )
                     // Settings and stats are conveniences, not the point of a
                     // backup. A damaged one must not cost the user their quotes.
-                    name == STATS -> stats = runCatching {
-                        json.decodeFromString(ReadingStats.serializer(), zip.readBytes().decodeToString())
-                    }.getOrNull()
-                    name == SETTINGS -> settings = runCatching {
-                        json.decodeFromString(BackupSettings.serializer(), zip.readBytes().decodeToString())
-                    }.getOrNull()
+                    name == STATS -> {
+                        // Tolerate invalid optional JSON, but propagate ZIP I/O
+                        // errors: a truncated archive may also be missing books.
+                        val text = zip.readBytes().decodeToString()
+                        stats = runCatching {
+                            json.decodeFromString(ReadingStats.serializer(), text)
+                        }.getOrNull()
+                    }
+                    name == SETTINGS -> {
+                        val text = zip.readBytes().decodeToString()
+                        settings = runCatching {
+                            json.decodeFromString(BackupSettings.serializer(), text)
+                        }.getOrNull()
+                    }
 
                     name.startsWith(BOOKS_DIR) && booksDir != null -> {
                         // An unusable name is skipped, not fatal: one odd entry
@@ -179,6 +188,7 @@ object BackupArchive {
                     }
                 }
             }
+            checkedInput.requireCompleteArchive()
         }
 
         val readManifest = manifest

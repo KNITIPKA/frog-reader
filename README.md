@@ -9,7 +9,7 @@
 
 **FrogReader** is a free and open-source e-book reader for Android, built entirely with Kotlin and Jetpack Compose.
 
-It supports **EPUB, FB2 and MOBI/KF8/PalmDoc**, with paged and continuous reading, shelves, full-text search, custom typography, publisher styling, local backups and more.
+It supports **EPUB, FB2, MOBI/KF8/PalmDoc, TXT and Markdown**, with paged and continuous reading, shelves, full-text search, custom typography, publisher styling, local backups and more.
 
 > [!WARNING]
 > FrogReader is currently in **alpha**. Expect bugs, unfinished UI and breaking changes between versions. Builds are not published on Google Play yet.
@@ -217,3 +217,13 @@ Because FrogReader is still in alpha, **bug reports are especially useful** — 
 ## License
 
 FrogReader is licensed under the [MIT License](LICENSE).
+
+### Plain text and Markdown
+
+Import `.txt`, `.md` or `.markdown` from the file picker, a folder scan, or a file manager. Text uses the existing native reader, search, bookmarks and reading progress. Source bytes are preserved for export and backups.
+
+TXT preserves line breaks and groups paragraphs at blank lines. Markdown supports CommonMark headings, emphasis, links, lists, quotes and code, plus GFM tables and strikethrough through [commonmark-java](https://github.com/commonmark/commonmark-java/tree/commonmark-parent-0.24.0). Headings populate Contents and support fragment links. The first heading supplies the book title, falling back to the source filename.
+
+Supported encodings are UTF-8 (with or without BOM) and UTF-16 LE/BE with BOM, with Windows-1251 fallback for legacy Cyrillic text. Text files are limited to 16 MiB; empty or binary files are rejected. Raw HTML is displayed as text, and image descriptions are preserved without loading external or neighbouring files. Embedded metadata editing is unavailable for TXT/Markdown, which have no standard book-metadata container.
+
+Backups written by this version use format 2 because older apps cannot decode TXT/MD book records. Existing format 1 backups remain readable.
