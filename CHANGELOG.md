@@ -1,5 +1,95 @@
 # Changelog
 
+## Unreleased — 2026-09-13
+
+This section records the changes delivered after the Alpha 2 baseline.
+
+### Book files and library data
+
+- Added native `.txt`, `.md` and `.markdown` import through the file picker,
+  folder scan and Android file intents.
+- Added UTF-8 and BOM-marked UTF-16 decoding, with a Windows-1251 fallback for
+  legacy Cyrillic files. Text files are bounded to 16 MiB and binary, empty or
+  oversized inputs are rejected.
+- TXT keeps source text literal, line-oriented and lossless. Markdown renders
+  headings, emphasis, links, lists, quotes, code, GFM tables and strikethrough.
+  Headings populate Contents and fragment navigation; the first heading becomes
+  the title when one is available.
+- Preserved the original bytes of TXT and Markdown books through import,
+  reload, sharing, export and backup. Added format-aware MIME labels and
+  disabled embedded metadata editing where the format has no metadata
+  container.
+- Increased the backup format version for the new book formats and made ZIP
+  import detect physical truncation instead of silently accepting a partial
+  archive. Optional settings/statistics JSON remains tolerant of malformed
+  content when the archive itself is complete.
+- Fixed list-mode library progress so the row background fills to the actual
+  reading percentage, respects RTL layout, and uses the active theme palette.
+
+### Metadata editing and sharing
+
+- Added a complete in-file metadata editor for EPUB, FB2 and MOBI/KF8,
+  including title, authors, description, genres, series, publisher, year,
+  ISBN, translators, language and cover actions.
+- Added book information pages, safe copy-on-write rewrites, generation
+  checks, reread verification, cover replacement/removal, search refresh and
+  Android sharing/export of an independent copy.
+- Preserved unrelated book records, reading progress, quotes, bookmarks,
+  ratings, reviews and embedded font resources during metadata edits.
+
+### Reader layout and typography
+
+- Reworked publisher geometry and native layout handling for margins, colors,
+  backgrounds, alignment, line spacing, inline/replaced images, SVG, tables,
+  drop caps, embedded fonts and legacy presentation attributes.
+- Added shared H1–H6 defaults with font-relative sizes and asymmetric spacing.
+  Headings use logical start alignment by default; explicit book alignment is
+  respected, while ornament-only headings receive a centered default.
+- Added the application setting **Center headings**, which overrides heading
+  alignment across books without writing an app preference into individual book
+  settings. Pagination keys include this preference, and old page maps are
+  invalidated after layout changes.
+- Fixed FB2 title/subtitle style inheritance and stopped the parser from
+  forcing every title into the same centered style.
+- Preserved publisher line-box leading at paragraph boundaries so zero-margin
+  paragraphs keep their expected vertical rhythm.
+- Added regression coverage for the supplied *Irresistible* EPUB and the
+  heading cases across EPUB, FB2, MOBI6, KF8 and Markdown.
+
+### Navigation and reading controls
+
+- Added structured Contents hierarchy with collapse/expand behavior and stable
+  navigation for nested entries.
+- Refined the return-to-origin history for links, search, Contents, bookmarks,
+  quotes, progress jumps and long continuous-mode scrolls.
+- Page-origin entries from large jumps now expire after 15 seconds by default;
+  the timeout honors accessibility recommendations and can be disabled in
+  **Application settings → Reading → Auto-hide the return button**. Document
+  and note navigation remains available as session history.
+- Improved pagination metrics, exact position restoration, large-scroll
+  detection and progress seeking. The bottom navigation bar can be controlled
+  centrally while reader chrome remains independent.
+
+### Translation selection
+
+- Replaced the repeated generic text-processing chooser with a remembered
+  selected-text handler. The first Translate action lists compatible installed
+  apps; later actions launch the saved activity directly.
+- Added **Application settings → Reading → Default translator** to change or
+  reset the saved handler. Removed or unavailable handlers trigger selection
+  again instead of sending text to an arbitrary application.
+- Added tests for first-use selection, exact component validation, persistence,
+  reset, removed handlers, save failures and Unicode selected text.
+
+### Build, compatibility and verification
+
+- Updated Android Gradle Plugin and Gradle versions used by the project.
+- Kept Android 8.0/API 26 compatibility in the import and text-processing
+  paths, and documented the narrow serialization keep-rule rationale.
+- Added focused parser, backup, metadata, navigation, typography, settings,
+  sharing and translation tests. The final local run completed successfully:
+  920 unit tests, 0 failures, 5 skipped, and no Android Lint errors.
+
 ## ALPHA 2
 
 ALPHA 2 is a major update to FrogReader's reading engine, navigation, and
