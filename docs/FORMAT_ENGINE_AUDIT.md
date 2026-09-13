@@ -1,654 +1,620 @@
-# Аудит движка форматов FrogReader
+# FrogReader Format Engine Audit
 
-Дата среза: 2026-08-31. Область: FB2 2.x, EPUB 2 / EPUB 3.3,
-legacy MOBI6/7 и Kindle Format 8 (KF8/AZW3). Аудио и видео EPUB/KF8
-намеренно отложены по решению владельца продукта.
+Snapshot date: 2026-08-31. Scope: FB2 2.x, EPUB 2 / EPUB 3.3,
+legacy MOBI6/7, and Kindle Format 8 (KF8/AZW3). Audio and video in EPUB/KF8
+are intentionally deferred per product owner decision.
 
-## Что именно считается четырьмя форматами
+## What Exactly Constitutes the Four Formats
 
-Расширение файла не всегда называет внутренний формат. `.mobi` может содержать
-только legacy MOBI6/7 или быть combo-контейнером с MOBI6 и KF8; `.azw3` обычно
-содержит только KF8. FrogReader поэтому должен определять секцию по заголовкам
-PDB/MOBI, а не выбирать движок только по расширению.
+A file extension does not always identify the internal format. A `.mobi` file may contain
+only legacy MOBI6/7 or be a combo-container holding both MOBI6 and KF8; `.azw3` usually
+contains KF8 only. Therefore, FrogReader must identify the section using PDB/MOBI headers
+rather than choosing the engine based solely on the file extension.
 
-В этом аудите четыре независимых пути проверки:
+This audit covers four independent verification pipelines:
 
-1. FB2 2.x — XML-семантика FictionBook.
+1. FB2 2.x — FictionBook XML semantics.
 2. EPUB 2/3 — OPF + XHTML/SVG + CSS.
 3. MOBI6/7 — PalmDOC/PDB + legacy HTML/filepos.
 4. KF8/AZW3 — PDB/KF8 + HTML5/CSS/FDST/INDX.
 
-KFX не является синонимом KF8. Это отдельный современный закрытый формат
-Amazon; текущий импорт FrogReader его не заявляет и этот аудит не засчитывает
-его как «четвёртый» формат.
+KFX is not synonymous with KF8. It is a separate, modern proprietary Amazon format;
+FrogReader's current import does not claim support for it, and this audit does not count
+it as the "fourth" format.
 
-## Методика и критерий паритета
+## Methodology and Parity Criteria
 
-Проверка идёт в пять слоёв: нормативные возможности формата, распаковка и
-структура пакета, преобразование в общую модель `BookContent`, измерение и
-рисование Jetpack Compose, затем ручная проверка на реальном устройстве.
-Зелёный parser test не считается доказательством, если общая модель или
-renderer затем теряет результат; наличие decoder dependency не считается
-доказательством реальной анимации на телефоне.
+Verification spans five layers: normative format capabilities, container unpacking and
+package structure, transformation into the shared `BookContent` model, Jetpack Compose
+measurement and rendering, followed by manual verification on a physical device.
+A passing parser test is not considered proof if the shared model or renderer subsequently
+drops the result; having a decoder dependency is not considered proof of actual animation
+on a phone.
 
-Уровни доказательства в этом документе:
+Evidence levels in this document:
 
-1. **Spec** — возможность подтверждена нормативной документацией формата.
-2. **Parser/model** — fixture доказывает, что смысл и данные дошли до
-   `BookContent` без ложной нормализации.
-3. **Measure/render** — тест доказывает, что пагинация и отрисовка используют
-   одинаковые метрики и не теряют сохранённое оформление.
-4. **Device** — реальная книга вручную проверена владельцем на Pixel 9a.
+1. **Spec** — feature is confirmed by the format's normative specification.
+2. **Parser/model** — fixture proves that semantics and data reached `BookContent`
+   without spurious normalization.
+3. **Measure/render** — test proves that pagination and rendering share identical
+   metrics and do not discard preserved styling.
+4. **Device** — a real book manually verified by the owner on a Pixel 9a.
 
-Матрица ниже отражает реализованный код и автоматические доказательства.
-Возможности, которым ещё нужен device-gate (в первую очередь GIF, сложные SVG,
-embedded fonts и очень широкие таблицы), явно не выдаются за полностью
-подтверждённые визуально.
+The matrix below reflects implemented code and automated evidence. Capabilities that
+still require a device-gate (primarily GIF, complex SVG, embedded fonts, and very wide
+tables) are explicitly not claimed as fully visually verified.
 
-Для каждой возможности используется одна классификация:
+Each capability uses one classification marker:
 
-- ✅ — формат умеет, текущий путь FrogReader сохраняет и рисует;
-- ◐ — формат умеет, поддержка частичная или есть намеренная деградация;
-- ❌ — формат умеет, читалка пока не поддерживает;
-- Ø — формат так не умеет или элемент не существует в его стандарте;
-- ⚠ — зависит от недокументированной/вариативной реализации и требует
-  отдельной реальной книги.
+- ✅ — supported by format, current FrogReader pipeline preserves and renders;
+- ◐ — supported by format, support is partial or includes intentional degradation;
+- ❌ — supported by format, not yet supported by the reader;
+- Ø — unsupported by format, or the element does not exist in its standard;
+- ⚠ — depends on undocumented/variable implementations and requires an actual book to verify.
 
-«Паритет» не означает выдумывать CSS для FB2 или MathML для MOBI6. Цель — одна
-авторская книга, корректно экспортированная во все четыре формата, должна
-сохранить одинаковые смысловые блоки, порядок, навигацию, изображения и
-максимально близкую типографику в пределах возможностей каждого формата.
+"Parity" does not mean inventing CSS for FB2 or MathML for MOBI6. The goal is that a single
+authored book, properly exported to all four formats, must preserve identical semantic blocks,
+ordering, navigation, images, and as close typography as possible within the capabilities of
+each format.
 
-## Архитектурный вывод
+## Architectural Conclusion
 
-Сейчас FrogReader — нормализующий reflow-движок. Его семантические
-paragraph/heading/image/table/spacer остаются плоскими, что даёт единую
-пагинацию, поиск, выделение, темы и закладки. Теперь параллельно им
-хранится иерархия `PublisherBoxSpan`: вложенные авторские контейнеры могут
-сохранить background, физические margin/padding/border, width/alignment,
-`break-inside:avoid`, float/clear и границы продолжения при разрезании главы,
-не ломая стабильные leaf coordinates.
+Currently, FrogReader is a normalizing reflow engine. Its semantic paragraph, heading,
+image, table, and spacer elements remain flat, providing unified pagination, search,
+selection, theming, and bookmarks. In parallel, a hierarchy of `PublisherBoxSpan`
+structures is now maintained: nested authored containers can preserve background,
+physical margin/padding/border, width/alignment, `break-inside:avoid`, float/clear,
+and continuation boundaries when splitting chapters, without breaking stable leaf coordinates.
 
-Это bounded native CSS box model, а не браузер. Он по-прежнему не может выразить
-fixed-layout, полноценную двумерную MathML-вёрстку, вертикальное письмо,
-абсолютное позиционирование и сложные SVG/HTML accessibility trees. Для MathML
-есть bounded native fallback, который сохраняет формулу читаемой и стилизованной,
-но не притворяется браузерной математической версткой.
+This is a bounded native CSS box model, not a browser engine. It still cannot express
+fixed-layout, full two-dimensional MathML layout, vertical writing, absolute positioning,
+or complex SVG/HTML accessibility trees. For MathML, a bounded native fallback keeps
+formulas readable and styled without pretending to be a browser math layout engine.
 
-Поэтому путь к действительно лучшему движку двухконтурный:
+Therefore, the path toward a truly best-in-class engine is dual-track:
 
-1. Сохранить Compose-reflow как основной быстрый и удобный путь для прозы.
-2. Добавить publisher-layout surface для fixed-layout, полной MathML fidelity и
-   документов, которые требуют web/SVG layout; выбор должен делаться по package
-   metadata и фактически используемым возможностям, а не по расширению файла.
+1. Maintain Compose-reflow as the primary fast and responsive pipeline for prose.
+2. Add a publisher-layout surface for fixed-layout, full MathML fidelity, and documents
+   requiring web/SVG layout; selection must be driven by package metadata and actual
+   capabilities used, rather than file extension.
 
-Без второго контура обещание полного EPUB/KF8-паритета было бы технически
-нечестным. Исправления этого прохода максимально расширяют безопасную общую
-часть и явно фиксируют оставшуюся границу.
+Without the second track, promising full EPUB/KF8 parity would be technically disingenuous.
+The fixes in this pass maximize the safe shared core and explicitly establish the remaining boundary.
 
-## Исправления, внесённые по результатам аудита
+## Fixes Introduced Based on Audit Findings
 
-- Заголовок теперь хранит `AnnotatedString`: strong/emphasis, ссылки,
-  superscript/subscript и inline-изображения больше не уплощаются в строку.
-- Пагинация и renderer измеряют и рисуют rich heading с теми же placeholders,
-  что и абзацы.
-- H1–H6 имеют шесть разных размеров в общем renderer; FB2 structural depth,
-  EPUB/KF8 `<h1>`…`<h6>` и legacy MOBI проходят один и тот же metric path.
-- Обычные fragment-ссылки отделены от настоящих `noteref`; popup-сноски больше
-  не поглощают содержание и перекрёстные ссылки.
-- Inline `<img>` остаётся в исходной позиции текста; крупные и float-images
-  остаются блочными/обтекаемыми без дублирования. Если крупная inline-картинка
-  вынесена в отдельный native leaf, `text-align` содержащего блока продолжает
-  задавать её физическое положение; явный `display:block`, float и auto margins
-  сохраняют собственную CSS-семантику.
-- Embedded SVG сохраняется целиком, включая одновременные vector shapes, text
-  и raster `<image>`; локальный raster в сериализованном SVG встраивается как
-  data URI.
-- Standalone SVG в EPUB spine открывается как полноценная страница-картинка.
-- `<pre>` сохраняет пробелы и переводы строк и использует monospace.
-- GIF decoder подключён для API 26+ и parser сохраняет GIF как GIF; реальное
-  воспроизведение анимации остаётся обязательным ручным device-gate.
-- `alt`, `aria-label` и `title` доходят до block-image accessibility; при
-  отсутствующем ресурсе текстовый fallback остаётся видимым.
-- CSS `@import` в EPUB разрешается рекурсивно относительно импортирующего
-  файла, с защитой от циклов.
-- KF8 `kindle:flow` `@import` обрабатывается отдельно от MOBI6, с Kindle media
-  queries, source order, повторными импортами, защитой от циклов и враждебных
-  графов ресурсов.
-- Inline `style=` работает даже в XHTML/KF8-документе без отдельного
-  `<link rel="stylesheet">` или `<style>` блока.
-- Явный короткий leading text span с `float:left/right` преобразуется в тот же
-  SideBox, что и `::first-letter`: EPUB/MOBI6/KF8 сохраняют точный glyph,
-  сторону, scale, font, color, language/direction и не дублируют букву. Это
-  даёт KF8 переносимую буквицу без неподдерживаемого им `::first-letter`.
-- CSS media types теперь различают screen/print/speech, `not screen`,
-  `not print` и comma alternatives; print-правила не протекают в reader.
-- EPUB проходит manifest fallback chain, уважает объявленный `spine@toc` NCX,
-  tokenized `properties`, literal `+` в ZIP path и standalone SVG spine.
-- Несколько EPUB nav/NCX targets внутри одного XHTML становятся отдельными
-  главами; percent-encoded Unicode fragments разрешаются в реальные XML ids.
-- EPUB `spine itemref linear="no"` хранится вне reading order и открывается
-  только через typed hyperlink/TOC target в отдельной transient surface;
-  обычный прогресс, поиск, пагинация и завершение книги не меняются.
-- Legacy FB2EPUB notes распознаются только по совокупности converter metadata,
-  bracketed marker, `ch2-N.xhtml` и fragment — без глобальной ложной эвристики.
-- FB2 исправляет first-body semantics, полный poem/stanza/subtitle/date,
-  rich titles, inline images в стихах/таблицах, SVG/GIF MIME extraction,
-  image alt fallback, обычные anchors и разделение link/noteref.
-- FB2 root `text/css` stylesheets, literal `style=` и named `<style name>`
-  проходят ограниченный XML-aware cascade; `xml:lang` наследуется от body и
-  section до блоков и отдельных inline runs.
-- Reflow bidi теперь проходит единый путь для FB2/EPUB/MOBI6/KF8: наследуемые
-  HTML `dir=ltr/rtl/auto`, CSS `direction`/`unicode-bidi`, `bdi`/`bdo`,
-  заголовки, списки и ячейки таблиц доходят до Compose layout. Служебные UBA
-  controls создаются только во временной layout-строке с явной картой offsets;
-  исходный текст поиска, копирования, ссылок и сносок остаётся неизменным.
-  Логические `start/end` и физические `left/right` не смешиваются; их cascade
-  не удваивает один и тот же отступ. Горизонтальная геометрия книги не зависит
-  от языка Android UI, а первая авторская колонка RTL-таблицы рисуется справа.
-- MOBI6 и KF8 отдельно фильтруют `amzn-mobi`/`amzn-kf8`, сохраняют legacy CSS,
-  NCX/INDX navigation и разделяют filepos navigation от реальных note markers.
-- Legacy HTML `align=` и `<center>` наследуются блоками; CSS остаётся сильнее.
-- Legacy `<font size/face>` больше не теряет размер и generic font family.
-- Typography таблицы (scale/family/line-height/bold/italic/lang/direction)
-  теперь участвует и в измерении, и в drawing, а не только в outer margins.
-- Inline-изображение в ячейке участвует в min/max intrinsic measurement и
-  рисуется тем же rich-text path; широкая картинка больше не сжимается до ширины
-  символа U+FFFC и не обрезается распределителем колонок.
-- Семантические сноски теперь хранят полный `NoteDocument`, а не первые три
-  абзаца/700 символов: popup использует общий renderer для заголовков, списков,
-  цитат, стихов, таблиц, block/inline images, CSS и ссылок note-to-note.
-- EPUB 2 DTBook (`application/x-dtbook+xml`) проходит реальный
-  manifest/spine/NCX path: levels, lists, poems, tables, SVG, anchors и CSS не
-  требуют ложного XHTML media type.
-- Presentation MathML имеет ограниченный native formatter для scripts,
-  fractions, roots, fences, limits, matrices, semantics/accessibility fallback,
-  anchors и links; inline/display placement сохраняется.
-- CSS cascade теперь корректно разрешает margin/font shorthands, relative
-  line-height, nested imports/media, selector work limits и повторные aliases;
-  FB2 compatibility profile использует те же ключевые правила каскада.
-- На API 26–32 sniffing книги больше не вызывает API 33-only
-  `InputStream.readNBytes`; добавлен совместимый bounded prefix reader.
-- Введены publication-wide budgets для ZIP/FB2/PDB records, decompression,
-  CSS/import expansion, DOM/generated content, fonts/WOFF, HUFF dictionaries,
-  KF8 assembly/index/markers и SVG resources. Повреждённый декоративный ресурс
-  деградирует локально, а обязательный content даёт контролируемую ошибку.
-- CSS `color`/`background-color`, legacy `color`/`text`/`bgcolor` и FB2 styles
-  сохраняются в блоках, inline runs, headings, first-letter, tables/cells и
-  rich notes. Publisher toggle полностью снимает их; одиночная авторская
-  сторона получает contrast-safe пару, полная foreground/background пара
-  сохраняется без самовольной перекраски.
-- HTML containers теперь остаются плоскими для семантического reader API,
-  но их вложенная геометрия хранится отдельными half-open
-  `PublisherBoxSpan`. Background родителя больше не копируется на каждый
-  дочерний paragraph, а рисуется один раз вокруг диапазона.
-- Прямой текст структурного `div`/`section` создаёт анонимный CSS block, а не
-  обычный reader paragraph: ему не добавляются выдуманные first-line indent и
-  paragraph gaps, при этом явный или унаследованный `text-indent` сохраняется.
-- Native publisher-box planner сохраняет вложенные background, margin/padding,
-  базовые solid/dashed/dotted/double borders, процентную/шрифтовую ширину,
-  центрирование и `break-inside:avoid`; измерение, pagination cache и painting
-  используют одну и ту же модель.
-- Базовый `float:left/right` теперь относится не только к одной буквице или
-  картинке: безопасный короткий container/figure может обтекаться соседним
-  текстом. `clear:left/right/both` заканчивает такое обтекание, а небезопасная
-  комбинация честно возвращается в normal flow вместо потери контента.
-- Авторская геометрия ячейки таблицы хранится рядом с её текстовым стилем:
-  разделяются padding и border, включая явные `padding:0` и `border:none`;
-  intrinsic measurement, split по страницам и drawing учитывают эту геометрию.
-  Неразрывная row/rowspan-группа выше доступной страницы не обрезается:
-  конкретная страница получает локальный вертикальный scroll как аварийный
-  fallback, сохраняя весь контент и остальные страницы обычными.
+- Headings now store `AnnotatedString`: strong/emphasis, hyperlinks,
+  superscript/subscript, and inline images are no longer flattened to plain strings.
+- Pagination and renderer measure and draw rich headings with the same placeholders
+  as paragraphs.
+- H1–H6 have six distinct sizes in the shared renderer; FB2 structural depth,
+  EPUB/KF8 `<h1>`…`<h6>`, and legacy MOBI pass through the exact same metric path.
+- Regular fragment links are decoupled from true `noteref`; popup footnotes no
+  longer swallow table of contents entries or cross-references.
+- Inline `<img>` stays in its original text position; large and floating images
+  remain block/floated without duplication. When a large inline image is split into
+  its own native leaf, the containing block's `text-align` continues to dictate its
+  physical placement; explicit `display:block`, float, and auto margins preserve
+  their own CSS semantics.
+- Embedded SVG is preserved in full, including concurrent vector shapes, text,
+  and raster `<image>`; local raster images inside serialized SVG are embedded as
+  data URIs.
+- Standalone SVG items in the EPUB spine open as full image content pages.
+- `<pre>` preserves whitespace and line breaks, using monospace typography.
+- GIF decoder is integrated for API 26+, and the parser retains GIF assets as GIF; actual
+  animation playback remains a mandatory manual device-gate check.
+- `alt`, `aria-label`, and `title` reach block-image accessibility; for missing
+  resources, text fallbacks remain visible.
+- CSS `@import` in EPUB is resolved recursively relative to the importing file,
+  with cycle protection.
+- KF8 `kindle:flow` `@import` is processed separately from MOBI6, supporting Kindle media
+  queries, source order, repeated imports, cycle protection, and safeguards against
+  adversarial resource graphs.
+- Inline `style=` attributes work even in XHTML/KF8 documents without a separate
+  `<link rel="stylesheet">` or `<style>` block.
+- An explicit short leading text span with `float:left/right` converts to the same
+  SideBox structure as `::first-letter`: EPUB/MOBI6/KF8 preserve exact glyph,
+  side, scale, font, color, language/direction without duplicating letters. This
+  provides KF8 with a portable drop cap without requiring unsupported `::first-letter`.
+- CSS media types now distinguish screen/print/speech, `not screen`, `not print`,
+  and comma alternatives; print rules do not leak into the reader.
+- EPUB resolves manifest fallback chains, honors declared `spine@toc` NCX,
+  tokenized `properties`, literal `+` signs in ZIP paths, and standalone SVG spine items.
+- Multiple EPUB nav/NCX targets inside a single XHTML become distinct chapters;
+  percent-encoded Unicode fragments resolve to actual XML IDs.
+- EPUB `spine itemref linear="no"` is stored outside the main reading order and opens
+  only via typed hyperlink/TOC targets in a separate transient surface; normal progress,
+  search, pagination, and book completion are unaffected.
+- Legacy FB2EPUB notes are recognized solely through combined converter metadata,
+  bracketed markers, `ch2-N.xhtml`, and fragments — avoiding brittle global heuristics.
+- FB2 fixes first-body semantics, full poem/stanza/subtitle/date, rich titles,
+  inline images in poems/tables, SVG/GIF MIME extraction, image alt fallbacks,
+  regular anchors, and link/noteref separation.
+- FB2 root `text/css` stylesheets, literal `style=`, and named `<style name>`
+  undergo a bounded XML-aware cascade; `xml:lang` inherits from body and sections
+  down to blocks and individual inline runs.
+- Reflow bidi now follows a unified pipeline for FB2/EPUB/MOBI6/KF8: inherited
+  HTML `dir=ltr/rtl/auto`, CSS `direction`/`unicode-bidi`, `bdi`/`bdo`, headings,
+  lists, and table cells reach Compose layout. Internal UBA controls are created only
+  in a temporary layout string with an explicit offset map; source text for search,
+  copying, links, and footnotes remains unmodified. Logical `start/end` and physical
+  `left/right` are not conflated; their cascade does not double identical margins.
+  Horizontal book geometry is independent of Android UI locale, and the first
+  authored column of an RTL table renders on the right.
+- MOBI6 and KF8 independently filter `amzn-mobi`/`amzn-kf8`, retain legacy CSS,
+  NCX/INDX navigation, and decouple filepos navigation from true note markers.
+- Legacy HTML `align=` and `<center>` inherit across blocks; CSS retains precedence.
+- Legacy `<font size/face>` no longer loses size or generic font family mappings.
+- Table typography (scale/family/line-height/bold/italic/lang/direction) now participates
+  in both measurement and rendering, rather than outer margins alone.
+- Inline images inside table cells participate in min/max intrinsic measurement and
+  render through the shared rich-text pipeline; wide images are no longer collapsed to
+  the width of U+FFFC nor clipped by column allocators.
+- Semantic footnotes now store a complete `NoteDocument` rather than only the first
+  three paragraphs or 700 characters: popups use the shared renderer for headings, lists,
+  blockquotes, poems, tables, block/inline images, CSS, and note-to-note hyperlinks.
+- EPUB 2 DTBook (`application/x-dtbook+xml`) passes through a true manifest/spine/NCX
+  pipeline: levels, lists, poems, tables, SVG, anchors, and CSS do not require a
+  spurious XHTML media type.
+- Presentation MathML provides a bounded native formatter for scripts, fractions,
+  roots, fences, limits, matrices, semantics/accessibility fallbacks, anchors, and links;
+  inline/display placement is preserved.
+- CSS cascade now correctly resolves margin/font shorthands, relative line-height,
+  nested imports/media, selector work limits, and repeated aliases; the FB2 compatibility
+  profile follows the same core cascade rules.
+- On API 26–32, book sniffing no longer invokes API 33-only `InputStream.readNBytes`;
+  a compatible bounded prefix reader has been added.
+- Publication-wide resource budgets have been introduced for ZIP/FB2/PDB records,
+  decompression, CSS/import expansion, DOM/generated content, fonts/WOFF, HUFF dictionaries,
+  KF8 assembly/index/markers, and SVG resources. Corrupted decorative assets degrade locally,
+  while corrupted mandatory content yields a controlled error.
+- CSS `color`/`background-color`, legacy `color`/`text`/`bgcolor`, and FB2 styles
+  are preserved across blocks, inline runs, headings, first-letter drop caps, tables/cells,
+  and rich notes. The publisher toggle strips them completely; single authored colors
+  receive contrast-safe counterparts, while complete foreground/background pairs are
+  preserved without unprompted recoloring.
+- HTML containers now remain flat for the semantic reader API, but their nested geometry
+  is stored via separate half-open `PublisherBoxSpan` intervals. A parent background is no
+  longer duplicated onto each child paragraph, rendering once around the range.
+- Direct text in structural `div`/`section` elements creates an anonymous CSS block rather
+  than a default reader paragraph: spurious first-line indents and paragraph gaps are omitted,
+  while explicit or inherited `text-indent` is preserved.
+- The native publisher-box planner retains nested backgrounds, margin/padding, basic
+  solid/dashed/dotted/double borders, percentage/font-relative widths, centering, and
+  `break-inside:avoid`; measurement, pagination cache, and painting utilize an identical model.
+- Basic `float:left/right` now applies beyond single drop caps or standalone images: safe
+  short container/figure blocks can be wrapped by adjacent text. `clear:left/right/both`
+  terminates wrapping, and unsafe combinations fall back safely to normal flow instead
+  of losing content.
+- Authored table cell geometry is stored alongside its text styling: padding and border
+  are separated, including explicit `padding:0` and `border:none`; intrinsic measurement,
+  cross-page splitting, and rendering account for this geometry. An unbreakable
+  row/rowspan group taller than the available page height is not clipped: that specific
+  page receives a local vertical scroll container as an emergency fallback, keeping all
+  content intact and other pages normal.
 
-## Реальная регрессия: *The Math Book*
+## Real-World Regression: *The Math Book*
 
-Файл, показавший разрыв со сторонней читалкой, разобран как пакет, а не
-по отдельным скриншотам. Это reflowable EPUB, а не pre-paginated/fixed-layout:
+The file that exhibited discrepancies against third-party readers was inspected as a full
+package rather than through isolated screenshots. It is a reflowable EPUB, not
+pre-paginated or fixed-layout:
 
 - 122 XHTML content documents;
-- 450 raster assets и 477 ссылок на изображения;
-- две реальные HTML tables; часть визуальных таблиц/схем на страницах
-  на самом деле является JPEG;
-- нет embedded fonts, SVG, MathML, audio и video.
+- 450 raster assets and 477 image references;
+- Two actual HTML tables; several visual tables and diagrams on pages are actually JPEGs;
+- No embedded fonts, SVG, MathML, audio, or video.
 
-Поэтому разница шрифта не может быть исправлена «извлечением шрифта книги»: его в
-пакете нет. FrogReader должен сохранить авторские size/weight/style/family hints,
-но не выдумывать отсутствующую font family.
+Therefore, font discrepancies cannot be resolved by "extracting the book font": none is present
+in the package. FrogReader must preserve authored size/weight/style/family hints without
+fabricating a nonexistent font family.
 
-Наблюдаемая поломка была в native reflow path: background стилизованного
-контейнера размножался на его leaf paragraphs, float-группа теряла связь
-картинки с caption/text, а padding/borders табличных ячеек не доходили до
-общего measure/render path. Исправление не проверяет title, ISBN или классы этой
-книги: вся production logic опирается на обычную DOM/CSS семантику и применима к
-следующим учебникам.
+The observed failure was in the native reflow pipeline: styled container backgrounds were duplicated
+onto leaf paragraphs, floating groups lost coordination between images and captions/text, and
+table cell padding/borders failed to reach the shared measure/render pipeline. The fix does not
+check the title, ISBN, or class names of this specific book: all production logic relies on
+standard DOM/CSS semantics applicable to future textbooks.
 
-`MathBookPublisherRegressionTest` условно открывает локальный оригинал и проверяет,
-что серый, зелёный и розовый panels, белые rules, прямые rule-labels без
-абзацного отступа, левый float, центрированная 80%-картинка, 90% images и
-геометрия реальных cells доходят до общей модели. Тест пропускается, если
-личного EPUB нет на машине, поэтому он дополняет, а не заменяет синтетические
-детерминированные fixtures. Пока device-gate ниже не пройден, это доказательство
-parser/model/measure policy, но не pixel-identical визуальной паритетности.
+`MathBookPublisherRegressionTest` conditionally opens the local original file and asserts that gray,
+green, and pink panels, white rules, unindented rule labels, left floats, centered 80% images,
+90% images, and actual cell geometry reach the shared model. The test is skipped if the personal
+EPUB is not present on the machine, complementing rather than replacing synthetic deterministic
+fixtures. Until the device-gate below passes, this serves as evidence of parser/model/measure
+policy compliance rather than pixel-identical visual parity.
 
-## Единый нумерованный capability checklist
+## Unified Numbered Capability Checklist
 
-Одинаковые номера намеренно применяются ко всем четырём колонкам. Так любой
-регрессионный corpus и ручная книга могут ссылаться на один case ID независимо
-от контейнера.
+Identical numbers are deliberately used across all four columns. In this way, any
+regression corpus and manual book can refer to the same case ID regardless of the container.
 
-### A. Контейнер, metadata и ресурсы
+### A. Container, Metadata, and Resources
 
-| № | Возможность | FB2 | EPUB | MOBI6 | KF8/AZW3 |
+| № | Capability | FB2 | EPUB | MOBI6 | KF8/AZW3 |
 |---:|---|:---:|:---:|:---:|:---:|
-| 1 | Сигнатура/контейнер определяется по содержимому | ✅ | ✅ | ✅ | ✅ |
-| 2 | Корректная кодировка текста | ✅ | ✅ | ✅ | ✅ |
-| 3 | Сжатие и безопасные границы ресурсов | ✅ | ✅ | ✅ | ✅ |
-| 4 | Шифрование/DRM | Ø | ◐ | 🔒 | 🔒 |
-| 5 | Title и основной author | ✅ | ✅ | ✅ | ✅ |
-| 6 | Несколько authors/contributors/translators | ✅ | ◐ | ◐ | ◐ |
+| 1 | Signature / container detected by content | ✅ | ✅ | ✅ | ✅ |
+| 2 | Correct text character encoding | ✅ | ✅ | ✅ | ✅ |
+| 3 | Compression and safe resource bounds | ✅ | ✅ | ✅ | ✅ |
+| 4 | Encryption / DRM | Ø | ◐ | 🔒 | 🔒 |
+| 5 | Title and primary author | ✅ | ✅ | ✅ | ✅ |
+| 6 | Multiple authors / contributors / translators | ✅ | ◐ | ◐ | ◐ |
 | 7 | Publisher, date/year, ISBN, subjects/genres | ✅ | ✅ | ✅ | ✅ |
-| 8 | Series/collection | ✅ | ✅ | Ø | Ø |
-| 9 | Annotation/description | ◐ | ◐ | ◐ | ◐ |
-| 10 | Cover и thumbnail | ◐ | ✅ | ◐ | ◐ |
+| 8 | Series / collection | ✅ | ✅ | Ø | Ø |
+| 9 | Annotation / description | ◐ | ◐ | ◐ | ◐ |
+| 10 | Cover and thumbnail | ◐ | ✅ | ◐ | ◐ |
 | 11 | Keywords, provenance, rights, roles, refinements | ◐ | ◐ | ◐ | ◐ |
 | 12 | Global publication language | ✅ | ✅ | ✅ | ✅ |
-| 13 | Несколько renditions одной публикации | Ø | ❌ | Ø | Ø |
-| 14 | Manifest/resource fallback chain | Ø | ✅ | Ø | ⚠ |
-| 15 | Встроенные/обфусцированные fonts | Ø | ✅ | Ø | ✅ |
+| 13 | Multiple renditions of a single publication | Ø | ❌ | Ø | Ø |
+| 14 | Manifest / resource fallback chain | Ø | ✅ | Ø | ⚠ |
+| 15 | Embedded / obfuscated fonts | Ø | ✅ | Ø | ✅ |
 
-`🔒` означает сознательный отказ от DRM, а не попытку обойти защиту. EPUB
-понимает стандартное IDPF/Adobe font obfuscation, но не коммерческое DRM.
+`🔒` denotes an intentional refusal to implement DRM, rather than an attempt to circumvent protection. EPUB
+supports standard IDPF/Adobe font obfuscation, but not commercial DRM.
 
-### B. Порядок, главы, навигация и ссылки
+### B. Order, Chapters, Navigation, and Links
 
-| № | Возможность | FB2 | EPUB | MOBI6 | KF8/AZW3 |
+| № | Capability | FB2 | EPUB | MOBI6 | KF8/AZW3 |
 |---:|---|:---:|:---:|:---:|:---:|
-| 16 | Авторский основной reading order | ✅ | ✅ | ✅ | ✅ |
-| 17 | Дополнительные/non-linear bodies/resources | ◐ | ✅ | Ø | ◐ |
-| 18 | Вложенная иерархия section/chapter | ✅ | ✅ | ✅ | ✅ |
-| 19 | TOC/NCX/INDX labels и depth | ✅ | ✅ | ✅ | ✅ |
-| 20 | Несколько TOC targets в одном content file | ✅ | ✅ | ✅ | ◐ |
+| 16 | Authored primary reading order | ✅ | ✅ | ✅ | ✅ |
+| 17 | Supplementary / non-linear bodies and resources | ◐ | ✅ | Ø | ◐ |
+| 18 | Nested section/chapter hierarchy | ✅ | ✅ | ✅ | ✅ |
+| 19 | TOC/NCX/INDX labels and depth | ✅ | ✅ | ✅ | ✅ |
+| 20 | Multiple TOC targets in a single content file | ✅ | ✅ | ✅ | ◐ |
 | 21 | Page-list, landmarks, guide/start-reading | Ø | ❌ | ❌ | ❌ |
-| 22 | IDs/anchors на обычных блоках | ◐ | ✅ | ✅ | ✅ |
-| 23 | Обычные внутренние cross-references | ✅ | ✅ | ✅ | ✅ |
-| 24 | Семантические footnotes/endnotes | ✅ | ✅ | ✅ | ✅ |
-| 25 | Backlink остаётся навигацией, а не popup-note | ✅ | ✅ | ✅ | ✅ |
-| 26 | Безопасные HTTP(S)/mailto/tel links | ✅ | ✅ | ✅ | ✅ |
-| 27 | EPUB CFI / Kindle locations / переносимые ranges | Ø | ❌ | ❌ | ❌ |
+| 22 | IDs/anchors on arbitrary blocks | ◐ | ✅ | ✅ | ✅ |
+| 23 | Standard internal cross-references | ✅ | ✅ | ✅ | ✅ |
+| 24 | Semantic footnotes / endnotes | ✅ | ✅ | ✅ | ✅ |
+| 25 | Backlink remains navigation, not a popup note | ✅ | ✅ | ✅ | ✅ |
+| 26 | Secure HTTP(S)/mailto/tel links | ✅ | ✅ | ✅ | ✅ |
+| 27 | EPUB CFI / Kindle locations / portable ranges | Ø | ❌ | ❌ | ❌ |
 | 28 | Author page breaks before block | ◐ | ✅ | ✅ | ✅ |
 | 29 | Break after/inside, widows/orphans | Ø/◐ | ◐ | ◐ | ◐ |
 | 30 | RTL page progression / spreads | ◐ | ◐ | ◐ | ◐ |
 
-EPUB `linear="no"` не подмешивается в главы и прогресс: обычная XHTML-ссылка
-или nav/NCX row открывает документ отдельно, а Back возвращает на прежнее
-место. Popup-note хранит `NoteDocument` и использует общий `RenderPart`, поэтому
-таблицы, изображения, списки, стихи, заголовки и ссылки не уплощаются.
+EPUB `linear="no"` is not intermixed with regular chapters or reading progress: a standard XHTML hyperlink
+or nav/NCX row opens the document separately, and Back returns to the prior location.
+Popup notes store a `NoteDocument` and use the shared `RenderPart`, ensuring tables, images, lists,
+poems, headings, and links are not flattened.
 
-Reflow reader зеркалит физический порядок страниц, зоны касания и selection
-auto-turn для RTL. EPUB `page-progression-direction` имеет приоритет; FB2,
-MOBI6 и KF8 без сохранённой явной директивы безопасно выводят направление из
-языка книги. Авторские spreads пока относятся к отложенному fixed-layout слою,
-поэтому строка 30 остаётся частичной, а не полной поддержкой.
+The reflow reader mirrors physical page progression, tap zones, and selection auto-turn for RTL.
+EPUB `page-progression-direction` takes precedence; FB2, MOBI6, and KF8 without an explicit preserved
+directive safely infer progression direction from the book's language. Authored spreads currently
+belong to the deferred fixed-layout layer, which is why row 30 remains partial rather than full support.
 
-Все форматы используют одну browser-like историю внутренних переходов: ссылки,
-TOC, поиск, закладки, цитаты, progress scrub и случайный scroll-прыжок более чем
-на два экрана сохраняют исходную позицию. Контекстная кнопка физически находится
-справа, учитывает реальную высоту/анимацию нижней панели, исчезает через короткий
-интервал, но системный Back остаётся доступен ограниченное время. Позиции main,
-EPUB `linear=no` и rich-note хранятся раздельно; в scroll mode текстовый anchor
-восстанавливается после изменения ширины или шрифта, а non-text блоки имеют
-pixel fallback.
+All formats share a unified, browser-like internal navigation history: links, TOC, search, bookmarks,
+quotes, progress scrubbing, and accidental scroll jumps exceeding two screenfuls preserve the return position.
+The contextual back button is physically located on the right, accounts for the actual height and animation
+of the bottom navigation bar, disappears after a short interval, while system Back remains available for a
+bounded period. Positions for main reading, EPUB `linear="no"`, and rich notes are tracked separately; in
+scroll mode, text anchors restore after width or font adjustments, while non-text blocks use pixel fallbacks.
 
-### C. Текстовая структура и inline formatting
+### C. Text Structure and Inline Formatting
 
-| № | Возможность | FB2 | EPUB | MOBI6 | KF8/AZW3 |
+| № | Capability | FB2 | EPUB | MOBI6 | KF8/AZW3 |
 |---:|---|:---:|:---:|:---:|:---:|
-| 31 | Paragraphs и mixed inline content | ✅ | ✅ | ✅ | ✅ |
+| 31 | Paragraphs and mixed inline content | ✅ | ✅ | ✅ | ✅ |
 | 32 | Rich multi-line headings/titles | ✅ | ✅ | ✅ | ✅ |
 | 33 | Subtitle | ✅ | ◐ | ◐ | ◐ |
-| 34 | Bold/strong и italic/emphasis | ✅ | ✅ | ✅ | ✅ |
+| 34 | Bold/strong and italic/emphasis | ✅ | ✅ | ✅ | ✅ |
 | 35 | Underline, strike/del/ins | ◐ | ✅ | ✅ | ✅ |
 | 36 | Superscript/subscript | ✅ | ✅ | ✅ | ✅ |
-| 37 | Code/monospace и preformatted whitespace | ✅/Ø | ✅ | ✅ | ✅ |
+| 37 | Code/monospace and preformatted whitespace | ✅/Ø | ✅ | ✅ | ✅ |
 | 38 | Quote/blockquote/cite/epigraph | ✅ | ✅ | ✅ | ✅ |
 | 39 | Poem, stanza, verse, text-author, date | ✅ | ◐ | Ø/◐ | ◐ |
 | 40 | Ordered/unordered/nested lists | Ø | ✅ | ✅ | ✅ |
 | 41 | Definition lists | Ø | ◐ | ◐ | ◐ |
 | 42 | Ruby | Ø | ◐ | Ø | ◐ |
-| 43 | `<q>` с языковыми кавычками | Ø | ✅ | Ø/⚠ | ✅ |
-| 44 | `<mark>` как видимое выделение | Ø | ◐ | Ø/⚠ | ◐ |
+| 43 | `<q>` with language-aware quotation marks | Ø | ✅ | Ø/⚠ | ✅ |
+| 44 | `<mark>` visible highlighting | Ø | ◐ | Ø/⚠ | ◐ |
 | 45 | `<wbr>` break opportunity | Ø | ✅ | Ø | ✅ |
 | 46 | `<nobr>` / CSS white-space modes | Ø | ❌ | ◐ | ❌ |
 | 47 | Generated `::before`/`::after` strings | Ø | ◐ | ⚠ | Ø/⚠ |
 | 48 | Drop caps: `::first-letter` / explicit floated span | Ø | ◐ | ◐ | ◐ |
 | 49 | Block `lang`/`xml:lang` | ✅ | ✅ | ◐ | ✅ |
 | 50 | Inline span language | ✅ | ✅ | ◐ | ✅ |
-| 51 | `dir`/CSS `direction` на блоке | Ø/◐ | ✅ | ◐ | ✅ |
+| 51 | `dir`/CSS `direction` on block | Ø/◐ | ✅ | ◐ | ✅ |
 | 52 | `bdi`/`bdo`/`unicode-bidi` | Ø/◐ | ✅ | ◐ | ✅ |
-| 53 | Vertical writing/text orientation/combine | Ø | ❌ | Ø | ⚠ |
+| 53 | Vertical writing / text orientation / combine | Ø | ❌ | Ø | ⚠ |
 
-Ruby сейчас является понятной деградацией «base + маленький superscript rt»,
-но не настоящим межстрочным ruby layout. Bidi isolation/override работает в
-native reflow, а вертикальное CJK по-прежнему требует fidelity renderer.
+Ruby currently renders via a sensible degradation of "base text + small superscript rt",
+rather than full interlinear ruby typography. Bidi isolation/override operates in native
+reflow, whereas vertical CJK writing continues to require a high-fidelity renderer.
 
-FB2 2.x не имеет стандартизованных `dir`, `bdi` или `unicode-bidi`: FrogReader
-может вывести направление блока из `xml:lang` и изолировать явно помеченный
-другим языком inline run, но не способен восстановить невыраженный авторский
-override. Legacy MOBI6 также не даёт надёжного контракта для современных
-HTML5-isolates: базовые `dir`/CSS и сохранённая разметка обрабатываются, если
-они реально дошли до контента. EPUB и KF8 выражают эти семантики полнее.
-В пределах одного flattened native paragraph CSS `unicode-bidi: plaintext`
-использует безопасный first-strong isolate; отдельный reset на каждой внутренней
-CSS paragraph boundary невозможен, если исходный box уже был уплощён моделью.
-Автотесты доказывают parser/model/offset/measure поведение; shaping сложных
-арабских лигатур и mixed selection ещё требует ручного device-gate на Pixel 9a.
+FB2 2.x lacks standardized `dir`, `bdi`, or `unicode-bidi` elements: FrogReader can infer
+block direction from `xml:lang` and isolate an inline span explicitly tagged with another
+language, but cannot reconstruct unexpressed author overrides. Legacy MOBI6 likewise provides
+no reliable contract for modern HTML5 isolates: basic `dir`/CSS and preserved markup are
+handled if they actually reached the content. EPUB and KF8 express these semantics more fully.
+Within a single flattened native paragraph, CSS `unicode-bidi: plaintext` uses a safe
+first-strong isolate; a separate reset at each internal CSS paragraph boundary is not possible
+once the source box has been flattened by the model. Automated tests demonstrate
+parser/model/offset/measure behavior; shaping complex Arabic ligatures and mixed selection
+still requires a manual device-gate on a Pixel 9a.
 
-### D. CSS и геометрия reflowable layout
+### D. CSS and Reflowable Layout Geometry
 
-| № | Возможность | FB2 | EPUB | MOBI6 | KF8/AZW3 |
+| № | Capability | FB2 | EPUB | MOBI6 | KF8/AZW3 |
 |---:|---|:---:|:---:|:---:|:---:|
-| 54 | Stylesheet и inline `style` | ◐ | ✅ | ◐ | ✅ |
+| 54 | Stylesheet and inline `style` | ◐ | ✅ | ◐ | ✅ |
 | 55 | Cascade/specificity/inheritance/`!important` | ◐ | ◐ | ◐ | ◐ |
 | 56 | Class/id/tag/attribute/combinator selectors | ◐ | ◐ | ◐ | ◐ |
 | 57 | Structural pseudo-classes | Ø | ◐ | ⚠ | Ø/⚠ |
-| 58 | CSS custom properties и `calc()` subset | Ø/⚠ | ◐ | ⚠ | ⚠ |
+| 58 | CSS custom properties and `calc()` subset | Ø/⚠ | ◐ | ⚠ | ⚠ |
 | 59 | Local recursive `@import` | Ø/⚠ | ✅ | Ø/⚠ | ✅ |
-| 60 | Screen/print и Kindle media types | Ø/◐ | ◐ | ✅ | ✅ |
+| 60 | Screen/print and Kindle media types | Ø/◐ | ◐ | ✅ | ✅ |
 | 61 | Device width/aspect/orientation queries | Ø | ❌ | Ø/⚠ | ❌ |
 | 62 | Font family/style/weight/size | ◐ | ◐ | ◐ | ◐ |
 | 63 | Inline named embedded font family | Ø | ◐ | Ø | ◐ |
-| 64 | Line-height и hyphenation hints | ◐ | ◐ | ◐ | ◐ |
+| 64 | Line-height and hyphenation hints | ◐ | ◐ | ◐ | ◐ |
 | 65 | Text align/justify/indent | ✅ | ✅ | ✅ | ✅ |
 | 66 | Margins/padding/centered boxes | ◐ | ◐ | ◐ | ◐ |
-| 67 | Foreground color и background | ✅ | ✅ | ✅ | ✅ |
+| 67 | Foreground color and background | ✅ | ✅ | ✅ | ✅ |
 | 68 | Basic borders / radius, outline, shadow | ◐ | ◐ | ◐ | ◐ |
 | 69 | Letter/word spacing, transform, text-shadow | ❌ | ❌ | ❌ | ❌ |
-| 70 | Image/container float и basic text wrapping | Ø/◐ | ◐ | ◐ | ◐ |
+| 70 | Image/container float and basic text wrapping | Ø/◐ | ◐ | ◐ | ◐ |
 | 71 | Clear/overflow/object-fit/min-max/aspect-ratio | Ø | ◐ | ◐ | ◐ |
 | 72 | Absolute/fixed positioning, z-index, transform | Ø | ❌ | Ø | ❌ |
 | 73 | Flex/grid/columns | Ø | ❌ | Ø | Ø/⚠ |
-| 74 | Full table CSS/border-collapse/layout | ◐ | ◐ | ◐ | ◐ |
+| 74 | Full table CSS / border-collapse / layout | ◐ | ◐ | ◐ | ◐ |
 | 75 | `@page`, named pages, page floats | Ø | ❌ | Ø | Ø/⚠ |
 
-FB2 stylesheet support — это compatibility-профиль поверх семантического XML,
-а не браузерная обязанность. EPUB/KF8, напротив, реально умеют гораздо больше
-CSS, поэтому неполные строки 68–75 остаются reader gaps, а не пределом форматов.
-В строке 68 реализованы физические basic borders, но не radius/outline/shadow;
-в строке 71 — только basic `clear`; в строке 74 — cell padding/background/borders
-без полной браузерной модели `border-collapse`, colgroup и nested layout.
+FB2 stylesheet support is a compatibility profile on top of semantic XML, not a browser mandate.
+EPUB/KF8, in contrast, genuinely support vastly more CSS, so incomplete rows 68–75 represent
+reader gaps rather than format limitations. In row 68, physical basic borders are implemented,
+but not radius/outline/shadow; in row 71, only basic `clear` is supported; in row 74, cell
+padding/background/borders are supported without the full browser `border-collapse` model,
+colgroup, or nested layout.
 
-### E. Изображения, SVG, таблицы и специальные режимы
+### E. Images, SVG, Tables, and Special Modes
 
-| № | Возможность | FB2 | EPUB | MOBI6 | KF8/AZW3 |
+| № | Capability | FB2 | EPUB | MOBI6 | KF8/AZW3 |
 |---:|---|:---:|:---:|:---:|:---:|
-| 76 | JPEG/PNG и block images | ✅ | ✅ | ✅ | ✅ |
+| 76 | JPEG/PNG and block images | ✅ | ✅ | ✅ | ✅ |
 | 77 | GIF animation | ◐ | ◐ | ⚠ | ⚠ |
 | 78 | WebP/BMP/AVIF tolerant static decode | ◐ | ◐ | ⚠ | ⚠ |
-| 79 | Inline images в исходной позиции | ✅ | ✅ | ✅ | ✅ |
-| 80 | Float images без дублирования | Ø/◐ | ✅ | ✅ | ✅ |
+| 79 | Inline images in original text position | ✅ | ✅ | ✅ | ✅ |
+| 80 | Float images without duplication | Ø/◐ | ✅ | ✅ | ✅ |
 | 81 | Width/height/aspect preservation | ◐ | ◐ | ✅ | ✅ |
 | 82 | `alt`/`aria-label`/`title`, missing fallback | ◐ | ◐ | ◐ | ◐ |
-| 83 | SVG binary/by-reference | ✅ | ◐ | Ø/⚠ | ◐ |
+| 83 | SVG binary / by-reference | ✅ | ◐ | Ø/⚠ | ◐ |
 | 84 | Mixed inline SVG shapes + text + raster image | Ø | ◐ | Ø | ◐ |
 | 85 | Standalone SVG content page | Ø | ◐ | Ø | ❌ |
 | 86 | SVG links/search/CSS/fonts/resource origin | Ø | ❌ | Ø | ❌ |
 | 87 | Table grid/header/caption | ◐ | ✅ | ✅ | ✅ |
 | 88 | Colspan/rowspan | ◐ | ◐ | ◐ | ◐ |
 | 89 | Cell align | ✅ | ✅ | ✅ | ✅ |
-| 90 | Cell vertical align/colgroup/complex nested cells | ❌ | ❌ | ❌ | ❌ |
-| 91 | Table splitting и repeated header | ✅ | ✅ | ✅ | ✅ |
+| 90 | Cell vertical align / colgroup / complex nested cells | ❌ | ❌ | ❌ | ❌ |
+| 91 | Table splitting and repeated header | ✅ | ✅ | ✅ | ✅ |
 | 92 | Presentation MathML | Ø | ◐ | Ø | Ø |
 | 93 | Fixed-layout pages/spreads/orientation | Ø | ❌ | Ø | ❌ |
-| 94 | KF8 panels/region magnification/text popups | Ø | Ø | Ø | ❌ |
+| 94 | KF8 panels / region magnification / text popups | Ø | Ø | Ø | ❌ |
 | 95 | Script/forms/canvas/iframe | Ø | ❌/optional | Ø | Ø |
 | 96 | Audio/video/media overlays | Ø | ⏸ | Ø | ⏸/Ø |
-| 97 | Semantic accessibility tree/ARIA/DPUB-ARIA | ◐ | ◐ | Ø/◐ | ◐ |
-| 98 | Search/selection по normal text | ✅ | ✅ | ✅ | ✅ |
-| 99 | Search/selection по SVG/MathML/nonlinear content | Ø | ◐ | Ø | ❌ |
+| 97 | Semantic accessibility tree / ARIA / DPUB-ARIA | ◐ | ◐ | Ø/◐ | ◐ |
+| 98 | Search/selection across normal text | ✅ | ✅ | ✅ | ✅ |
+| 99 | Search/selection across SVG/MathML/nonlinear content | Ø | ◐ | Ø | ❌ |
 | 100 | Large-file bounds, damaged input degradation | ◐ | ◐ | ◐ | ◐ |
 
-`⏸` — явно отложенные audio/video. Для KF8 официальная support table также
-помечает обычные HTML audio/video как неподдерживаемые, несмотря на отдельные
-исторические Kindle publishing workflows.
+`⏸` marks explicitly deferred audio/video features. For KF8, the official support table also
+marks standard HTML audio/video as unsupported, despite historical Kindle publishing workflows.
 
-## Профиль каждого движка
+## Profile of Each Engine
 
 ### FB2 2.x
 
-FB2 прежде всего описывает смысл книги XML-элементами: body/section/title,
-epigraph/cite, poem/stanza/v, annotation, дополнительными bodies для сносок,
-базовыми таблицами и binary-ресурсами. XSD разрешает произвольные root
-`stylesheet`, literal `style` на текстовых/табличных элементах, named inline
-`<style name>` и `xml:lang`, но не определяет обязательный браузерный layout
-engine. Поэтому отсутствие flex/grid не является дефектом FB2-reader, а потеря
-разрешённых `style`, таблицы, языка или rich title — является.
+FB2 primarily describes a book's semantics through XML elements: body/section/title,
+epigraph/cite, poem/stanza/v, annotation, auxiliary bodies for notes, basic tables,
+and binary resources. The XSD permits arbitrary root `stylesheet` declarations, literal `style`
+attributes on text/table elements, named inline `<style name>`, and `xml:lang`, but does not
+specify a mandatory browser layout engine. Thus, the absence of flexbox/grid is not an FB2 reader
+defect; losing valid `style` declarations, tables, language tags, or rich titles is.
 
-Текущий native path сохраняет всю основную структуру, глубокие section levels
-до H6, rich titles/subtitles, стихи, таблицы, ссылки/сноски, inline/block images,
-SVG/GIF binary, полный rich note body и ограниченный CSS compatibility profile.
-Оставшаяся крупная граница — элементы, которых в самой FB2-модели нет
-(настоящие HTML lists, MathML, fixed layout, сложный SVG DOM).
+The current native pipeline preserves all core structure, deep section levels down to H6,
+rich titles/subtitles, poems, tables, links/footnotes, inline/block images, SVG/GIF binaries,
+complete rich note bodies, and a bounded CSS compatibility profile. The remaining major boundary
+consists of elements absent from the FB2 model itself (true HTML lists, MathML, fixed layout,
+complex SVG DOM).
 
 ### EPUB 2 / EPUB 3.3
 
-EPUB — самый широкий из четырёх форматов: пакет может включать XHTML, CSS, SVG,
-Presentation MathML, embedded fonts, reflow/fixed-layout metadata, nav/NCX,
-page-list/landmarks, non-linear spine resources, fallbacks, media overlays и
-скрипты. Поэтому «HTML-текст открылся» — лишь базовый уровень EPUB support.
+EPUB is the broadest of the four formats: a package may contain XHTML, CSS, SVG,
+Presentation MathML, embedded fonts, reflow/fixed-layout metadata, nav/NCX, page-list/landmarks,
+non-linear spine resources, fallbacks, media overlays, and scripts. Consequently, "HTML text renders"
+represents merely a baseline tier of EPUB support.
 
-Reflow path сейчас сохраняет package/spine/fallbacks, nav и NCX с несколькими
-fragment targets в одном XHTML, Unicode IRI fragments, embedded/obfuscated
-fonts, recursive imports, substantial CSS cascade, tables, lists, ruby,
-preformatted text, SVG/images, semantic links и отдельно открываемые
-`linear="no"` documents. EPUB 2 DTBook проходит тот же package path, а
-Presentation MathML имеет читаемый native fallback. Вложенные reflowable HTML
-containers теперь сохраняют bounded box geometry, basic float/clear и
-ячеечную геометрию без перевода в fixed-layout. Главные настоящие reader
-gaps: fixed layout и browser-level MathML fidelity, vertical writing, оставшийся
-browser-level CSS painting/box model, SVG как searchable/accessibility tree,
-scripts/media overlays и DPUB-ARIA semantics.
+The reflow pipeline currently preserves package/spine/fallbacks, nav and NCX with multiple
+fragment targets within a single XHTML document, Unicode IRI fragments, embedded/obfuscated
+fonts, recursive imports, substantial CSS cascade, tables, lists, ruby, preformatted text,
+SVG/images, semantic links, and independently opened `linear="no"` documents. EPUB 2 DTBook
+traverses the same package pipeline, and Presentation MathML features a readable native fallback.
+Nested reflowable HTML containers now preserve bounded box geometry, basic float/clear, and
+cell geometry without shifting to fixed layout. The primary true reader gaps remain: fixed layout
+and browser-level MathML fidelity, vertical writing, remaining browser-level CSS painting/box model,
+SVG as a searchable/accessibility tree, scripts/media overlays, and DPUB-ARIA semantics.
 
 ### MOBI6/7
 
-Legacy MOBI — PDB/PalmDOC container с OEB-подобным HTML, record/filepos links,
-EXTH metadata, старым presentational markup и существенно меньшим CSS/HTML
-пространством. Нельзя требовать от него EPUB 3 MathML, modern SVG DOM, grid или
-fixed-layout semantics, которых формат не выражает надёжно.
+Legacy MOBI is a PDB/PalmDOC container containing OEB-like HTML, record/filepos links,
+EXTH metadata, older presentational markup, and a significantly smaller CSS/HTML footprint.
+It cannot be expected to support EPUB 3 MathML, modern SVG DOM, grid, or fixed-layout semantics
+that the format does not reliably express.
 
-Текущий путь отдельно декодирует PalmDOC/HUFF-CDIC text, charset/EXTH,
-filepos/guide/NCX-like navigation, legacy `<font>`, `align`, tables, images,
-pagebreaks, ссылки и узко распознаваемые note markers. Его приоритет — не
-«эмулировать браузер», а не терять редкую старую авторскую разметку и безопасно
-деградировать повреждённые записи. `.mobi`, `.prc` и старый `.azw` остаются
-одним legacy engine независимо от расширения.
+The current pipeline independently decodes PalmDOC/HUFF-CDIC text, charset/EXTH,
+filepos/guide/NCX-like navigation, legacy `<font>`, `align`, tables, images, page breaks, links,
+and narrowly recognized note markers. Its priority is not to emulate a browser, but to avoid losing
+legacy authored markup and to safely degrade damaged records. Files with `.mobi`, `.prc`, and older
+`.azw` extensions are handled by a single legacy engine regardless of extension.
 
 ### KF8 / MOBI8 / AZW3
 
-KF8 несёт HTML5/CSS и ресурсы в PDB/KF8 structures (FDST flows,
-skeleton/fragment reconstruction, INDX/NCX). Это отдельная capability column,
-даже когда KF8 находится второй секцией внутри combo `.mobi`. Pure `.azw3` и
-combo KF8 должны давать одинаковый reflow result.
+KF8 carries HTML5/CSS and resources inside PDB/KF8 structures (FDST flows, skeleton/fragment
+reconstruction, INDX/NCX). This represents an independent capability column, even when KF8
+is packaged as a secondary section within a combo `.mobi` file. Pure `.azw3` and combo KF8
+must yield identical reflow results.
 
-Текущий путь реконструирует KF8 markup, resources/fonts/navigation, различает
-`amzn-kf8` и `amzn-mobi`, рекурсивно и итеративно раскрывает `kindle:flow`
-`@import`, сохраняет repeat source order и ограничивает враждебный import graph.
-Официальная Amazon-таблица при этом прямо помечает `::before`, `::after`,
-`::first-letter` и structural pseudo-classes как неподдерживаемые KF8: их
-отсутствие нельзя записывать как нормативный reader gap. Реальные крупные gaps
-— KF8 fixed-layout/panels/region magnification/text popups, полный поддержанный
-Amazon CSS painting. KFX остаётся отдельным пятым закрытым
-контейнером и в эту реализацию не входит.
+The current pipeline reconstructs KF8 markup, resources/fonts/navigation, distinguishes
+`amzn-kf8` from `amzn-mobi`, recursively and iteratively expands `kindle:flow` `@import`,
+preserves repeated source ordering, and caps adversarial import graphs. Amazon's official
+documentation explicitly designates `::before`, `::after`, `::first-letter`, and structural
+pseudo-classes as unsupported by KF8; their absence cannot be classified as a normative reader gap.
+The real major gaps are KF8 fixed-layout/panels/region magnification/text popups and full supported
+Amazon CSS painting. KFX remains a separate, proprietary fifth container format and is outside
+the scope of this implementation.
 
-## Оставшаяся работа по приоритету
+## Remaining Work by Priority
 
-### P0 — отдельная архитектура, а не ещё один parser `when`
+### P0 — Dedicated Architecture Rather Than Another Parser `when`
 
-1. **Publisher-layout surface.** Ввести типизированный выбор surface:
-   `NativeReflow` для прозы и изолированный package-aware layout для EPUB
-   fixed-layout, полной Presentation MathML, vertical writing, full SVG/HTML и KF8
-   fixed panels. Он должен получать локальные ресурсы через контролируемый
-   origin, запрещать произвольный network/file access, сохранять typed internal
-   navigation и не смешивать координаты с reflow progress.
-2. **Два пространства прогресса.** Основной reading order уже отделён от EPUB
-   linked documents. Publisher-layout должен продолжить этот инвариант и иметь
-   стабильные anchors без фиктивных chapter indices.
+1. **Publisher-layout surface.** Introduce a typed surface selector: `NativeReflow` for prose
+   and an isolated package-aware layout for EPUB fixed-layout, full Presentation MathML,
+   vertical writing, full SVG/HTML, and KF8 fixed panels. It must access local resources via
+   a restricted origin, forbid arbitrary network/file access, retain typed internal navigation,
+   and avoid conflating coordinates with reflow progress.
+2. **Dual progress spaces.** The primary reading order is already decoupled from EPUB linked
+   documents. Publisher-layout must uphold this invariant and provide stable anchors without
+   fictitious chapter indices.
 
-Rich notes и publication-wide resource budgets из прежнего P0 реализованы и
-закрыты автоматическими регрессиями. Они больше не перечисляются как будущая
-архитектура.
+Rich notes and publication-wide resource budgets from previous P0 items have been implemented
+and verified with automated regressions. They are no longer listed as future architecture.
 
-### Publisher-layout: принятый архитектурный план
+### Publisher-Layout: Adopted Architectural Plan
 
-Fixed-layout нельзя добавлять как ещё один `ContentElement`: один EPUB spine
-может смешивать reflowable и pre-paginated items, повторять один manifest
-resource несколькими `itemref`, задавать overrides на каждом occurrence и
-содержать `linear="no"` цели. План поэтому вводит отдельные
-`PublisherPublication`/`PublisherSpineItem` и типизированные
-`ReaderLocation.Reflow`/`ReaderLocation.Publisher`, сохраняя один общий logical
-reading order. Progress считается по linear occurrence, а synthetic blank,
-spread slot, panel и linked document его не меняют.
+Fixed-layout cannot simply be added as another `ContentElement`: a single EPUB spine may mix
+reflowable and pre-paginated items, repeat a single manifest resource across multiple `itemref`
+entries, specify overrides on each occurrence, and include `linear="no"` targets. The plan therefore
+introduces dedicated `PublisherPublication`/`PublisherSpineItem` models and typed
+`ReaderLocation.Reflow`/`ReaderLocation.Publisher` locations, maintaining a single shared logical
+reading order. Progress is calculated by linear occurrence, while synthetic blanks, spread slots,
+panels, and linked documents do not distort it.
 
-Implementation разделён на три проверяемых среза:
+Implementation is divided into three verifiable slices:
 
-1. EPUB fixed-layout foundation: OPF `rendition:*`, viewport/SVG `viewBox`,
-   stable occurrence id, local resource session, одна fixed page и typed
-   navigation/progress/back.
-2. Spreads и mixed spine: LTR/RTL planner, placement/blank/true-spread,
-   rotation restore, reflow↔fixed sequence, publisher search/bookmarks и
-   vertical writing на browser surface.
-3. KF8 fixed-layout: только доказанные retained metadata, затем typed Kindle
-   magnification/text popup/panel regions и virtual-panel fallback.
+1. EPUB fixed-layout foundation: OPF `rendition:*`, viewport/SVG `viewBox`, stable occurrence IDs,
+   local resource session, single fixed page rendering, and typed navigation/progress/back.
+2. Spreads and mixed spine: LTR/RTL planner, placement/blank/true-spread handling, rotation restoration,
+   reflow↔fixed transitions, publisher search/bookmarks, and vertical writing on the browser surface.
+3. KF8 fixed-layout: verified retained metadata first, followed by typed Kindle magnification/text
+   popup/panel regions and virtual-panel fallbacks.
 
-Локальная publisher surface должна использовать отдельный HTTPS app-assets
-origin на публикацию; JavaScript, network, file/content access, forms, frames и
-media выключены. WebView не попадает в `BookContent`/disk cache, а runtime
-session закрывается ViewModel. Эти инварианты требуют instrumentation на API 26
-и актуальном Android до включения surface в production.
+The local publisher surface must use a dedicated HTTPS app-assets origin per publication; JavaScript,
+network access, file/content schemes, forms, frames, and media are disabled. WebView state does not
+leak into `BookContent`/disk cache, and runtime sessions are closed by the ViewModel. These invariants
+require instrumentation testing on API 26 and modern Android before enabling the surface in production.
 
-### P1 — fidelity обычных reflowable книг
+### P1 — Fidelity of Standard Reflowable Books
 
-- border radius/outline/shadow, border-collapse и более полный безопасный
-  box painting поверх уже реализованных basic borders/background в Compose;
-- white-space/word-break/overflow-wrap, letter/word spacing, text-transform,
-  visibility и поддержанные font-feature/variant свойства;
-- более общая float formatting context: несколько одновременных floats,
-  многоабзацное обтекание, min/max-width и overflow/object-fit;
-- richer object/picture/srcset/resource fallback, URL query/base semantics и
-  external references внутри SVG;
+- Border radius/outline/shadow, border-collapse, and more comprehensive safe box painting on top
+  of already implemented basic borders/backgrounds in Compose;
+- White-space/word-break/overflow-wrap, letter/word spacing, text-transform, visibility, and supported
+  font-feature/variant properties;
+- More comprehensive float formatting context: multiple concurrent floats, multi-paragraph text wrapping,
+  min/max-width, and overflow/object-fit;
+- Richer object/picture/srcset/resource fallbacks, URL query/base semantics, and external references
+  inside SVG;
 - EPUB page-list, landmarks/guide/start-reading, multiple rootfiles/renditions;
-- table vertical-align/colgroup/nested blocks и более полный caption model;
-- accessibility roles/labels/DPUB-ARIA, SVG/MathML text в search/selection;
-- corpus реальных книг: отдельные MOBI6 `.mobi` и KF8 `.azw3`, а не выводы по
-  одному combo-файлу.
+- Table vertical-align/colgroup/nested blocks and a more complete caption model;
+- Accessibility roles/labels/DPUB-ARIA, SVG/MathML text inclusion in search and selection;
+- Corpus of physical books: distinct MOBI6 `.mobi` and KF8 `.azw3` files, avoiding conclusions drawn
+  from a single combo-file.
 
-### P2 — tolerant/редкие расширения
+### P2 — Tolerant / Rare Extensions
 
-- повреждённые CSS selectors/declarations, duplicate ids и странные encodings;
-- vendor prefixes, converter-specific note conventions и obsolete HTML;
-- WebP/BMP/AVIF и animated GIF на разных Android image decoders;
-- extreme nested lists/sections/tables/import graphs с graceful truncation и
-  диагностикой вместо crash/ANR.
+- Corrupted CSS selectors/declarations, duplicate IDs, and unusual character encodings;
+- Vendor prefixes, converter-specific note conventions, and obsolete HTML elements;
+- WebP/BMP/AVIF and animated GIF behavior across diverse Android image decoders;
+- Extreme nested lists/sections/tables/import graphs with graceful truncation and diagnostics
+  in place of crashes or ANRs.
 
-## Исполняемые доказательства и границы тестов
+## Executable Evidence and Test Boundaries
 
-`FormatParityTest` строит четыре временных эквивалентных книги — FB2, EPUB,
-MOBI6 и KF8 — и сравнивает normalized model snapshot для пяти одинаковых cases:
+`FormatParityTest` synthesizes four temporary equivalent books — FB2, EPUB, MOBI6, and KF8 — and
+compares normalized model snapshots across five identical cases:
 
-1. rich heading + bold/italic runs;
-2. обычный paragraph с END alignment;
-3. обычная cross-reference против настоящей footnote;
-4. inline и block PNG с одинаковыми декодируемыми bytes;
-5. table header/grid/rowspan/colspan/cell alignment.
+1. Rich heading + bold/italic runs;
+2. Regular paragraph with END alignment;
+3. Regular cross-reference versus genuine footnote;
+4. Inline and block PNG with identical decoded bytes;
+5. Table header/grid/rowspan/colspan/cell alignment.
 
-Этот gate намеренно не притворяется pixel test и не объявляет ложный паритет
-для возможностей, которых нет в FB2. Отдельные suites проверяют CSS cascade,
-HTML5 inline semantics, FB2 poems/styles/languages, EPUB package/navigation,
-MOBI6 и KF8 независимо, pagination metrics, table grid и link routing. Отдельно
-проверяются EPUB2 DTBook package/NCX, MathML linear fallback, rich notes с
-таблицей и изображениями, API 26 import path и adversarial resource budgets.
+This gate deliberately does not pretend to be a pixel test or claim false parity for features
+absent from FB2. Dedicated suites verify CSS cascade, HTML5 inline semantics, FB2 poems/styles/languages,
+EPUB package/navigation, MOBI6 and KF8 independently, pagination metrics, table grids, and link routing.
+Separate tests verify EPUB 2 DTBook package/NCX, MathML linear fallback, rich notes with tables and
+images, API 26 import pipelines, and adversarial resource budgets.
 
-Постоянный FrogCompare corpus теперь материализует 132 нумерованных cases в
-отдельных `.fb2`, `.epub`, legacy `.mobi` и pure `.azw3`, плюс отдельный EPUB 2
-DTBook fixture. Источники и проверка детерминированных SHA-256 лежат в
-`app/src/test/java/com/example/frogreader/testbooks/`; генерация запускается
-явно через `-PgenerateTestBooks=true`. Для EPUB всё ещё нужно постепенно
-подключать релевантные reflow cases из официального W3C EPUB tests suite.
-Синтетический fixture доказывает точный инвариант; реальная книга доказывает,
-что мы правильно поняли экосистему.
+The persistent FrogCompare corpus now materializes 132 numbered test cases into distinct `.fb2`,
+`.epub`, legacy `.mobi`, and pure `.azw3` books, alongside a separate EPUB 2 DTBook fixture.
+Source definitions and deterministic SHA-256 validation live in
+`app/src/test/java/com/example/frogreader/testbooks/`; regeneration is triggered explicitly via
+`-PgenerateTestBooks=true`. For EPUB, relevant reflow test cases from the official W3C EPUB test
+suite should continue to be incorporated incrementally. Synthetic fixtures verify exact invariants;
+real books verify our understanding of the ecosystem.
 
-Новый publisher-layout gate разделён по слоям: `PublisherLayoutCssTest` и
-`PublisherBoxStyleResolverTest` проверяют cascade и box values;
-`PublisherLayoutMapperTest`/`PublisherLayoutSpanTest` — вложенные half-open ranges,
-slice/rebase и clear markers; `ReaderPublisherLayoutTest` — safe float planning;
-`PublisherBoxLayoutGeometryTest` и `PaginationPublisherPolicyTest` — общую
-measure/render geometry и pagination policy; `PaginationCacheTest` — полную
-сериализацию новой модели. `MathBookPublisherRegressionTest` добавляет
-условную проверку исходного EPUB, когда он доступен локально.
+The publisher-layout gate is split across architectural layers: `PublisherLayoutCssTest` and
+`PublisherBoxStyleResolverTest` verify cascade and box values; `PublisherLayoutMapperTest` and
+`PublisherLayoutSpanTest` verify nested half-open ranges, slicing/rebasing, and clear markers;
+`ReaderPublisherLayoutTest` verifies safe float planning; `PublisherBoxLayoutGeometryTest` and
+`PaginationPublisherPolicyTest` verify shared measure/render geometry and pagination policy;
+`PaginationCacheTest` verifies full serialization of the new model. `MathBookPublisherRegressionTest`
+adds conditional verification of the original EPUB when available locally.
 
-## Обязательный ручной device-gate (Pixel 9a)
+## Mandatory Manual Device-Gate (Pixel 9a)
 
-Автоматизация телефона не выполняется. Владелец вручную проверяет:
+Phone-level automated UI tests are not executed in CI. The owner manually verifies:
 
-1. H1–H6: шесть видимо разных размеров при малом/среднем/максимальном base font.
-2. Publisher `font-size:1em` действительно заменяет semantic heading size.
-3. Таблица: inherited size/family/italic/bold/line-height, широкие columns,
-   rowspan и повтор header после page break.
-4. EPUB `linear="no"`: открытие из текста и Contents, linked→main, linked→linked,
-   Back без скачка progress и без ложного completion.
-5. Animated GIF в FB2 и EPUB; static fallback при decoder failure.
-6. Mixed SVG shapes+text+raster, standalone SVG page и missing-resource alt.
-7. Embedded regular/bold/italic fonts на API 26 compatibility path.
-8. Cross-reference не открывается как note; настоящая note не прыгает как TOC.
-9. Одинаковая сложная таблица/заголовок/картинка в четырёх форматах рядом.
-10. Rich note длиннее 700 символов: заголовок, список/стих, таблица, block и
-    inline image, note→note и возврат в основной текст.
-11. EPUB2 DTBook: NCX переход на fragment, level1–level6, nested list, poem,
-    SVG и table; контент не исчезает из-за media type.
-12. MathML: inline scripts/fraction/root и display matrix/limits остаются
-    читаемыми, выделяемыми и не ломают пагинацию; сравнение не выдаётся за
-    pixel-identical browser MathML.
-13. Author colors в обычном тексте, inline span, heading/drop-cap, quote,
-    table/cell и rich note: точная пара видна с Publisher formatting, полностью
-    исчезает без него, одиночный цвет не становится невидимым в OLED/sepia.
-14. Smart return: internal link/Contents/search/bookmark/quote/progress scrub и
-    дальний page/scroll jump; точный возврат в обоих режимах, nested note и
-    linked document, отсутствие phantom history после cancel/no-op, правая
-    кнопка не перекрывает нижний bar и исчезает автоматически.
-15. Arabic/Hebrew: mixed RTL/LTR с цифрами и скобками, `dir=auto`, `bdi`/`bdo`,
-    headings/lists/table, logical margins, page order/tap zones, selection,
-    search/copy в page и scroll режимах.
-16. *The Math Book*, «Numerals take their places»: зелёная иллюстрация и заголовок
-    сохраняют авторскую ширину; `IN CONTEXT` — один серый bordered panel
-    с белыми separators, а не отдельные серые полосы за каждым paragraph;
-    `KEY CIVILIZATION`, `FIELD`, `BEFORE`, `AFTER` начинаются у общего левого края.
-17. *The Math Book*, `Cuneiform`: рисунок с caption слева и текст справа
-    остаются одним светло-зелёным bordered container; при узкой ширине или
-    крупном шрифте stacked fallback не теряет ни рисунок, ни caption, ни текст.
-18. *The Math Book*, `Parabolas`: схема зеркала имеет примерно 90% ширины,
-    а розовый `Practical applications` сохраняет heading rule, background,
-    frame и безопасное image/text wrapping.
-19. Обе реальные HTML tables книги: cell padding/background/borders видны,
-    колонки не выходят за viewport, а разрез по страницам не съедает нижний
-    inset/border. Растровая 80%-схема base-60 центрирована в колонке, а не
-    приклеена к её левому краю.
-20. Пункты 16–19 повторяются в paged и scroll mode, на малом и крупном
-    шрифте. Publisher formatting on сохраняет hierarchy; off снимает
-    author boxes/colors без потери текста, картинок, переходов и progress anchors.
+1. H1–H6: six visually distinct sizes at small, medium, and maximum base font settings.
+2. Publisher `font-size:1em` genuinely overrides default semantic heading sizes.
+3. Tables: inherited size/family/italic/bold/line-height, wide columns, rowspan, and repeated headers
+   following a page break.
+4. EPUB `linear="no"`: opening from text and Contents, linked→main, linked→linked, Back navigation
+   without progress jumps or false completion triggers.
+5. Animated GIF in FB2 and EPUB; static fallback when decoder fails.
+6. Mixed SVG shapes + text + raster images, standalone SVG pages, and missing-resource alt fallbacks.
+7. Embedded regular/bold/italic fonts on the API 26 compatibility pipeline.
+8. Cross-references do not open as notes; true notes do not navigate as TOC jumps.
+9. Identical complex tables, headings, and images displayed side-by-side across all four formats.
+10. Rich notes longer than 700 characters: heading, list/poem, table, block and inline image,
+    note→note navigation, and return to main text.
+11. EPUB 2 DTBook: NCX jumping to fragment, level1–level6, nested lists, poems, SVG, and tables;
+    content does not drop out due to media type.
+12. MathML: inline scripts/fractions/roots and display matrices/limits remain readable, selectable,
+    and do not disrupt pagination; comparison does not claim pixel-identical browser MathML.
+13. Author colors in body text, inline spans, headings/drop caps, quotes, tables/cells, and rich notes:
+    exact colors appear when Publisher formatting is on, disappear completely when turned off,
+    and isolated colors do not become illegible on OLED or sepia themes.
+14. Smart return: internal link/Contents/search/bookmark/quote/progress scrubbing and distant
+    page/scroll jumps; precise return in both modes, nested notes, and linked documents, no phantom
+    history following cancel/no-op, right-hand button does not obscure the bottom bar and dismisses
+    automatically.
+15. Arabic/Hebrew: mixed RTL/LTR with numbers and parentheses, `dir=auto`, `bdi`/`bdo`, headings/lists/table,
+    logical margins, page order/tap zones, selection, search/copy in both paged and scroll modes.
+16. *The Math Book*, "Numerals take their places": green illustration and heading preserve authored
+    width; `IN CONTEXT` is a single gray bordered panel with white separators rather than separate
+    gray bands behind each paragraph; `KEY CIVILIZATION`, `FIELD`, `BEFORE`, `AFTER` align to the shared
+    left margin.
+17. *The Math Book*, `Cuneiform`: diagram with caption on the left and text on the right remain a
+    single light-green bordered container; in narrow viewports or large font sizes, stacked fallback
+    retains image, caption, and text.
+18. *The Math Book*, `Parabolas`: mirror diagram occupies approximately 90% width, while pink
+    `Practical applications` retains heading rule, background, frame, and safe image/text wrapping.
+19. Both actual HTML tables in the book: cell padding/background/borders are visible, columns do not
+    overflow the viewport, and page breaks do not clip bottom insets/borders. Raster 80% base-60 diagram
+    is centered in its column rather than pinned to the left edge.
+20. Items 16–19 repeat in paged and scroll modes, under small and large font settings. Publisher
+    formatting enabled preserves hierarchy; disabled removes author boxes/colors without losing
+    text, images, links, or progress anchors.
 
-В этой книге нет embedded font, поэтому device-gate не должен требовать
-pixel-identical гарниту из эталонного приложения. Проверяются авторские
-font size/weight/style и layout hierarchy, а выбор конкретной доступной гарнитуры
-остаётся политикой reader typography.
+Because this book contains no embedded font, the device-gate must not demand pixel-identical typefaces
+matching reference reading applications. Authored font size/weight/style and layout hierarchy are verified,
+while selection of available system fonts remains the policy of reader typography.
 
-До этой проверки формулировка — «код и автоматические gates зелёные», а не
-«визуально лучший движок на рынке уже доказан».
+Until this verification passes, status remains "code and automated gates passing", not "visually superior
+engine on the market proven".
 
-## Нормативные и справочные источники
+## Normative and Reference Sources
 
 - [EPUB 3.3 — W3C Recommendation](https://www.w3.org/TR/epub-33/)
 - [EPUB Reading Systems 3.3](https://www.w3.org/TR/epub-rs-33/)
 - [W3C EPUB tests](https://w3c.github.io/epub-tests/index.html)
-- [EPUBCheck test suite, включая EPUB 2 DTBook](https://www.w3.org/publishing/epubcheck/docs/test-suite/)
+- [EPUBCheck test suite, including EPUB 2 DTBook](https://www.w3.org/publishing/epubcheck/docs/test-suite/)
 - [CSS Color Module Level 4](https://www.w3.org/TR/css-color-4/)
 - [Android Developers: local content in WebView](https://developer.android.com/develop/ui/views/layout/webapps/load-local-content)
 - [AndroidX WebKit releases](https://developer.android.com/jetpack/androidx/releases/webkit)
@@ -659,7 +625,7 @@ font size/weight/style и layout hierarchy, а выбор конкретной �
 - [Library of Congress: Mobipocket format description](https://www.loc.gov/preservation/digital/formats/fdd/fdd000472.shtml)
 - [MobileRead MOBI container reference](https://wiki.mobileread.com/wiki/MOBI)
 
-EPUB/FB2 имеют открытые normative schemas/specifications. Binary MOBI/KF8
-container полностью и актуально Amazon не стандартизует публично, поэтому его
-low-level record parsing дополнительно сверяется с независимыми реализациями и
-реальными файлами; publisher-facing HTML/CSS claims берутся из Amazon docs.
+EPUB and FB2 have open normative schemas and specifications. Binary MOBI and KF8 container formats
+are not fully or publicly standardized by Amazon in modern form, so low-level record parsing is
+verified against independent implementations and real files; publisher-facing HTML/CSS claims are
+derived directly from Amazon documentation.

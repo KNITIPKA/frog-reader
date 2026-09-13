@@ -454,11 +454,11 @@ class GenerateTestBooksTest {
         val readme = buildReadme(files, dtbook)
         assertTrue("README lost first case", "| 1 |" in readme)
         assertTrue("README lost last case", "| 132 |" in readme)
-        assertTrue("README lost spec classification", "Ø формат так не умеет" in readme)
-        assertTrue("README lost reader-gap classification", "⚠ читалка — нет" in readme)
+        assertTrue("README lost spec classification", "Ø unsupported by format" in readme)
+        assertTrue("README lost reader-gap classification", "⚠ reader gap" in readme)
         assertTrue("README lost fixture-mistake rule", "fixture mistake" in readme)
         assertTrue("README revived stale css=null claim", "css = null" !in readme)
-        assertTrue("README revived stale links-as-notes claim", "все ссылки считаются сносками" !in readme)
+        assertTrue("README revived stale links-as-notes claim", "all links are treated as notes" !in readme && "все ссылки считаются сносками" !in readme)
         for (number in 124..126) {
             val row = readme.lineSequence().single { it.startsWith("| $number |") }
             assertTrue("README still labels implemented bidi case $number as a gap", "⚠" !in row)
@@ -490,11 +490,11 @@ class GenerateTestBooksTest {
             )
             println(
                 "$format → ${file.name}, ${file.length() / 1024} KB, " +
-                    "глав ${content.chapters.size}, " +
-                    "уровней ${content.chapters.maxOf { it.depth } + 1}, " +
-                    "сносок ${content.notes.size}, " +
-                    "переходов ${content.linkTargets.size}, " +
-                    "шрифтов ${content.fonts.size}",
+                    "chapters ${content.chapters.size}, " +
+                    "levels ${content.chapters.maxOf { it.depth } + 1}, " +
+                    "notes ${content.notes.size}, " +
+                    "links ${content.linkTargets.size}, " +
+                    "fonts ${content.fonts.size}",
             )
         }
         val dtbookContent = BookParsers.parseContent(
@@ -504,7 +504,7 @@ class GenerateTestBooksTest {
         )
         println(
             "EPUB2/DTBook → ${dtbook.name}, ${dtbook.length() / 1024} KB, " +
-                "глав ${dtbookContent.chapters.size}",
+                "chapters ${dtbookContent.chapters.size}",
         )
     }
 
@@ -595,16 +595,16 @@ class GenerateTestBooksTest {
 
     private fun buildReadme(files: Map<Fmt, File>, dtbook: File): String = buildString {
         append(README_HEADER)
-        append("\n\n## Файлы и контрольные суммы\n\n")
-        append("| Engine | Файл | SHA-256 |\n|---|---|---|\n")
+        append("\n\n## Files and Checksums\n\n")
+        append("| Engine | File | SHA-256 |\n|---|---|---|\n")
         for (format in Fmt.entries) {
             val file = files.getValue(format)
             append("| $format | `${file.name}` | `${sha256(file)}` |\n")
         }
         append("| EPUB2/DTBook | `${dtbook.name}` | `${sha256(dtbook)}` |\n")
 
-        append("\n## Единый numbered checklist\n\n")
-        append("| № | Проверка | Базовое ручное ожидание | FB2 | EPUB | MOBI6 | KF8 |\n")
+        append("\n## Unified Numbered Checklist\n\n")
+        append("| № | Check | Baseline Manual Expectation | FB2 | EPUB | MOBI6 | KF8 |\n")
         append("|---:|---|---|---|---|---|---|\n")
         for (test in doc.tests()) {
             append("| ${test.number} | ${md(test.title)} | ${md(test.expected)} |")
@@ -624,16 +624,16 @@ class GenerateTestBooksTest {
     }
 
     private fun status(test: Block.Test, format: Fmt): String {
-        if (format !in test.formats) return "Ø формат так не умеет"
+        if (format !in test.formats) return "Ø unsupported by format"
         val expectation = test.expectedPerFormat[format] ?: test.expected
         val normalized = expectation.trim().lowercase()
         return if (normalized.startsWith("reader gap") ||
             normalized.startsWith("известный пробел") ||
             normalized.startsWith("известный край")
         ) {
-            "⚠ читалка — нет"
+            "⚠ reader gap"
         } else {
-            "✓ проверить"
+            "✓ verify"
         }
     }
 
@@ -672,15 +672,15 @@ private const val HEBREW_BIDI_SAMPLE = "שָׁלוֹם עֲלֵיכֶם"
 private const val MIXED_BIDI_SAMPLE = "مرحبا FrogReader 2026 — (الإصدار 3.5) [EPUB/KF8]"
 
 private val README_HEADER = """
-# FrogCompare — одна книга в четырёх форматах
+# FrogCompare — One Book in Four Formats
 
-`FrogCompare.fb2`, `.epub`, `.mobi` (классический MOBI6) и `.azw3` (KF8) содержат
-**одинаковый список 1–132**. `.mobi` и `.azw3` не являются одним переименованным
-файлом: первый строится как PalmDOC/MOBI6 с `filepos`, второй — как pure KF8 с
-FDST/SKEL/FRAG, `kindle:pos`, INDX navigation, CSS flow и font resource.
+`FrogCompare.fb2`, `.epub`, `.mobi` (classic MOBI6), and `.azw3` (KF8) contain
+the **identical checklist 1–132**. `.mobi` and `.azw3` are not a single renamed
+file: the first is built as PalmDOC/MOBI6 with `filepos`, the second as pure KF8 with
+FDST/SKEL/FRAG, `kindle:pos`, INDX navigation, CSS flow, and font resources.
 
-Файлы собирает `GenerateTestBooksTest`; содержание живёт в `TestBookContent.kt`.
-Пересобрать:
+Files are built by `GenerateTestBooksTest`; content lives in `TestBookContent.kt`.
+Rebuild:
 
 ```
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
@@ -688,67 +688,66 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   -PgenerateTestBooks=true
 ```
 
-Без `-PgenerateTestBooks=true` тесты работают только во временной папке и не
-меняют `.testbooks/`. ZIP timestamps фиксированы, PDB headers детерминированы;
-повторная сборка должна дать те же SHA-256.
+Without `-PgenerateTestBooks=true`, tests run only in a temporary directory and
+do not modify `.testbooks/`. ZIP timestamps are fixed, PDB headers are deterministic;
+rebuilding must produce the same SHA-256 hashes.
 
-## Как классифицировать отличие
+## How to Classify Differences
 
-- **Ø формат так не умеет** — в книге виден stub; писатель не подсовывает
-  неподдерживаемый markup и использует честный форматный эквивалент, если он есть.
-- **⚠ формат умеет, читалка — нет** — markup действительно находится в файле,
-  но README/строка ожидания явно фиксирует reader gap.
-- **fixture mistake** — нужного markup/resource/ID нет в самом generated file,
-  четыре книги получили разные исходные тексты или подпись/container неверны.
-  Автотесты одинаковой нумерации, signatures, parse round-trip и determinism
-  должны ловить эту категорию до телефона.
+- **Ø unsupported by format** — a stub is visible in the book; the writer does not inject
+  unsupported markup and uses an honest format equivalent if one exists.
+- **⚠ reader gap** — markup is indeed present in the file, but the README/expectation
+  line explicitly records a reader gap.
+- **fixture mistake** — the required markup/resource/ID is missing from the generated file itself,
+  the four books received differing source texts, or the signature/container is invalid.
+  Automated tests for identical numbering, signatures, parse round-trip, and determinism
+  must catch this category before testing on a device.
 
-Обычный fragment/filepos/kindle:pos link и настоящий noteref проверяются
-раздельно. MOBI6 читает собственный legacy stylesheet, но это не превращает его
-в HTML5/KF8 и не добавляет embedded fonts, SVG, ruby или MathML.
+Standard fragment/filepos/kindle:pos links and true noterefs are verified
+separately. MOBI6 reads its own legacy stylesheet, but this does not transform it
+into HTML5/KF8, nor does it add embedded fonts, SVG, ruby, or MathML.
 """.trimIndent()
 
 private val README_FOOTER = """
 
-## Критический ручной маршрут на Pixel 9a
+## Critical Manual Device Route on Pixel 9a
 
-1. Импортировать четыре main files одновременно и проверить metadata/cover 1–11.
-2. В каждом файле открыть 14–16: одинаковая nested navigation и обычные links.
-3. Сравнить 20–30 и 31–41 с Publisher's formatting off/on.
-4. Сравнить tables 62–69, inline/block/SVG/GIF images 70–78.
-5. Проверить cross-reference vs noteref 79–85.
-6. На 111–116 убедиться глазами, что H1, H2, H3, H4, H5, H6 имеют шесть
-   последовательно разных размеров при минимальном, среднем и максимальном base font.
-7. На 117 открыть rich note: прокрутить H3, rich paragraph с inline image,
-   quote, table, block image; [1] должен заменить popup, ссылка в главу 12 —
-   закрыть popup и выполнить обычную навигацию.
-8. На 118 EPUB показывает readable structured MathML. FB2/MOBI6/KF8 показывают
-   ровно линейный эквивалент `x = (−b ± √(b² − 4ac)) / 2a` — это spec parity,
-   не reader failure.
-9. Case 98 использует explicit leading span во всех HTML paths. EPUB/MOBI6/KF8
-   должны синтезировать из него один SideBox drop cap; FB2 честно показывает
-   format-limit stub, потому что нормативной float-модели текста у него нет.
-10. На 119–120 проверить typography и publisher colors при выключенном/включённом
-   Publisher's formatting во всех четырёх книгах.
-11. GIF 75 должен реально менять orange/blue frame; static frame отметить как
-    «формат умеет, читалка — нет» только после device check, не по JVM parse test.
-12. На 121–132 сравнить Arabic joining/harakat, Hebrew niqqud, mixed punctuation,
-    `dir=auto`, `bdi`, `bdo`, RTL heading/link/noteref/list/table и logical
-    start/end. В 124–126 EPUB/KF8 сохраняют native HTML bidi semantics, а
-    FB2/MOBI6 используют честные Unicode equivalents; все четыре результата
-    должны совпасть по смыслу. На 132 только EPUB несёт `margin-inline-*` и
-    должен дать больший логический начальный отступ справа; остальные получают
-    `Ø` stub.
+1. Import four main files simultaneously and verify metadata/cover 1–11.
+2. In each file open 14–16: identical nested navigation and regular links.
+3. Compare 20–30 and 31–41 with Publisher's formatting off/on.
+4. Compare tables 62–69, inline/block/SVG/GIF images 70–78.
+5. Verify cross-reference vs noteref 79–85.
+6. At 111–116 verify by eye that H1, H2, H3, H4, H5, H6 have six
+   consistently distinct sizes at small, medium, and maximum base font.
+7. At 117 open rich note: scroll H3, rich paragraph with inline image,
+   quote, table, block image; [1] must replace popup, link to chapter 12 must
+   close popup and navigate normally.
+8. At 118 EPUB displays readable structured MathML. FB2/MOBI6/KF8 show
+   the exact linear equivalent `x = (−b ± √(b² − 4ac)) / 2a` — this is spec parity,
+   not reader failure.
+9. Case 98 uses explicit leading span across all HTML paths. EPUB/MOBI6/KF8
+   must synthesize a single SideBox drop cap from it; FB2 honestly displays
+   the format-limit stub because it has no normative float text model.
+10. At 119–120 verify typography and publisher colors with Publisher's formatting
+    turned off/on across all four books.
+11. GIF 75 must visibly alternate orange/blue frames; mark static frame as
+    "reader gap" only after device check, not based on JVM parse test.
+12. At 121–132 compare Arabic joining/harakat, Hebrew niqqud, mixed punctuation,
+    `dir=auto`, `bdi`, `bdo`, RTL heading/link/noteref/list/table, and logical
+    start/end. In 124–126 EPUB/KF8 retain native HTML bidi semantics, while
+    FB2/MOBI6 use honest Unicode equivalents; all four results must match semantically.
+    At 132 only EPUB carries `margin-inline-*` and must produce a larger logical start
+    indent on the right; others receive the `Ø` stub.
 
-Классификация bidi опирается на [W3C HTML bidi guidance](https://www.w3.org/TR/i18n-html-tech-bidi/)
-и официальную [Amazon KF8 support table](https://kdp.amazon.com/en_US/help/topic/GG5R7N649LECKP7U):
-KF8 явно поддерживает `bdi`, `bdo`, `direction` и `unicode-bidi`, но таблица не
-обещает `margin-inline-*`. Поэтому 124–126 являются обязательными reader checks,
-а отсутствие 132 в KF8 fixture — честный format/profile limit.
+Bidi classification is based on [W3C HTML bidi guidance](https://www.w3.org/TR/i18n-html-tech-bidi/)
+and official [Amazon KF8 support table](https://kdp.amazon.com/en_US/help/topic/GG5R7N649LECKP7U):
+KF8 explicitly supports `bdi`, `bdo`, `direction`, and `unicode-bidi`, but the table does not
+promise `margin-inline-*`. Therefore 124–126 are mandatory reader checks,
+and the absence of 132 in KF8 fixture is an honest format/profile limit.
 
-`FrogCompare_DTBook_EPUB2.epub` — отдельная пятая compatibility fixture. Она
-намеренно не входит в four-way 1–132: это валидный EPUB 2 с
+`FrogCompare_DTBook_EPUB2.epub` is a separate fifth compatibility fixture. It is
+intentionally excluded from the four-way 1–132: it is a valid EPUB 2 with
 `application/x-dtbook+xml`, native level1–level6, nested list, poem/linegroup,
-table, PNG+SVG, CSS, anchors, prodnote/rearmatter и NCX fragments. Подмешивать
-DTBook в EPUB 3 main book было бы fixture mistake.
+table, PNG+SVG, CSS, anchors, prodnote/rearmatter, and NCX fragments. Mixing
+DTBook into the EPUB 3 main book would be a fixture mistake.
 """.trimIndent()
