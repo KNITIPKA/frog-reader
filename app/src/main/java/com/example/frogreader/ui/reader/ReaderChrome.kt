@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.rememberScrollState
@@ -166,17 +167,15 @@ internal fun ReaderBookHeader(
 private fun ReaderPanelHandle(
     colors: ReaderColors,
     expanded: Boolean,
-    remaining: String,
-    position: String,
     onToggle: () -> Unit,
     drag: Modifier = Modifier,
 ) {
     val label = stringResource(if (expanded) R.string.reader_collapse_panel else R.string.reader_expand_panel)
-    BoxWithConstraints(
+    Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .fillMaxWidth()
-            .height(26.dp)
+            .height(14.dp)
             .then(drag)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -187,42 +186,10 @@ private fun ReaderPanelHandle(
             )
             .semantics { contentDescription = label },
     ) {
-        val halfWidth = (maxWidth / 2) - 20.dp
-        Text(
-            text = remaining,
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontWeight = FontWeight.Medium,
-                fontFeatureSettings = "tnum",
-            ),
-            color = colors.onChromeVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .widthIn(max = halfWidth)
-                .align(Alignment.CenterStart)
-                .padding(start = 4.dp)
-                .clearAndSetSemantics { contentDescription = remaining },
-        )
         Box(
             modifier = Modifier
                 .size(width = 32.dp, height = 4.dp)
                 .background(colors.onChromeVariant.copy(alpha = 0.4f), CircleShape),
-        )
-        Text(
-            text = position,
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontWeight = FontWeight.Medium,
-                fontFeatureSettings = "tnum",
-            ),
-            color = colors.onChromeVariant,
-            textAlign = TextAlign.End,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .widthIn(max = halfWidth)
-                .align(Alignment.CenterEnd)
-                .padding(end = 4.dp)
-                .clearAndSetSemantics { contentDescription = position },
         )
     }
 }
@@ -264,8 +231,8 @@ internal fun ReaderChapterFooter(
         enabled = progressValuesReady,
         colors = colors,
         onSeek = onSeekBook,
-    ) { remaining, position, activeLabel, activeParents ->
-        ReaderPanelHandle(colors, panelExpanded, remaining, position, onTogglePanel, headerDrag)
+    ) { activeLabel, activeParents ->
+        ReaderPanelHandle(colors, panelExpanded, onTogglePanel, headerDrag)
         panelContent()
         val heading = remember(activeLabel) { readerChapterHeading(activeLabel) }
         val context = listOfNotNull(activeParents.lastOrNull(), heading.label).joinToString(" · ")
@@ -393,8 +360,6 @@ private fun ReaderBookProgress(
     defaultChapterLabel: String = "",
     defaultChapterParents: List<String> = emptyList(),
     chapterHeader: @Composable (
-        remaining: String,
-        position: String,
         activeLabel: String,
         activeParents: List<String>,
     ) -> Unit,
@@ -477,7 +442,7 @@ private fun ReaderBookProgress(
         disabledInactiveTrackColor = colors.track,
     )
     Column {
-        chapterHeader(remaining, position, activeLabel, activeParents)
+        chapterHeader(activeLabel, activeParents)
         Spacer(Modifier.height(2.dp))
         Slider(
             value = shown,
@@ -515,7 +480,7 @@ private fun ReaderBookProgress(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp)
-                .height(30.dp)
+                .height(26.dp)
                 .semantics { contentDescription = label },
             thumb = {
                 // Vertical-dash thumb replacing the round dot / horizontal pill.
@@ -613,6 +578,41 @@ private fun ReaderBookProgress(
                 }
             },
         )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp)
+                .padding(top = 1.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = remaining,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.Medium,
+                    fontFeatureSettings = "tnum",
+                ),
+                color = colors.onChromeVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .clearAndSetSemantics { contentDescription = remaining },
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = position,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.Medium,
+                    fontFeatureSettings = "tnum",
+                ),
+                color = colors.onChromeVariant,
+                textAlign = TextAlign.End,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.clearAndSetSemantics { contentDescription = position },
+            )
+        }
     }
 }
 
