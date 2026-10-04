@@ -11,6 +11,8 @@ class AppSettingsTest {
         assertEquals(false, restored.centerHeadings)
         assertEquals(true, restored.autoHideReturnButton)
         assertEquals(null, restored.defaultTranslator)
+        assertEquals("", restored.profileName)
+        assertEquals(null, restored.profileAvatarBase64)
     }
 
     @Test
@@ -19,6 +21,8 @@ class AppSettingsTest {
         val settings = AppSettings(
             centerHeadings = true, autoHideReturnButton = false,
             defaultTranslator = "translator.app/translator.app.ProcessText",
+            profileName = "Анастасия Мараховская",
+            profileAvatarBase64 = "YXZhdGFy",
         )
         val encoded = json.encodeToString(AppSettings.serializer(), settings)
         assertEquals(settings, json.decodeFromString<AppSettings>(encoded))

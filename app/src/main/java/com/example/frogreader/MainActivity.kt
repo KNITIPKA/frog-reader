@@ -1,5 +1,6 @@
 package com.example.frogreader
 
+import com.example.frogreader.ui.theme.floatingSurface
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -23,6 +24,7 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -32,16 +34,23 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
@@ -50,23 +59,25 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoStories
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FileOpen
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.ToggleFloatingActionButton
-import androidx.compose.material3.ToggleFloatingActionButtonDefaults.animateIcon
-import androidx.compose.material3.animateFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -79,7 +90,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -87,21 +97,35 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.frogreader.ui.theme.LocalFrogColors
+import java.util.Locale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.graphics.drawable.toDrawable
 import androidx.activity.compose.LocalActivity
 import androidx.core.view.WindowCompat
@@ -141,14 +165,26 @@ import com.example.frogreader.ui.lock.LockScreen
 import com.example.frogreader.ui.lock.LockViewModel
 import com.example.frogreader.ui.nav.LibraryRoute
 import com.example.frogreader.ui.nav.NavTab
+import com.example.frogreader.ui.nav.TabSwitchController
 import com.example.frogreader.ui.nav.ReaderRoute
 import com.example.frogreader.ui.nav.SettingsRoute
 import com.example.frogreader.ui.nav.ProfileRoute
+import com.example.frogreader.ui.nav.QuotesAndBookmarksRoute
+import com.example.frogreader.ui.nav.FrogAddFab
+import com.example.frogreader.ui.nav.ReadingQueueFabState
+import com.example.frogreader.ui.profile.ReadingQueueScreen
+import com.example.frogreader.ui.nav.ReadingQueueRoute
+import com.example.frogreader.ui.nav.ReadingLogRoute
+import com.example.frogreader.ui.nav.ReadingLogInfoRoute
+import com.example.frogreader.ui.nav.ReadingLogCameraRoute
+import com.example.frogreader.ui.profile.ReadingLogScreen
+import com.example.frogreader.ui.profile.ReadingLogCameraScreen
 import com.example.frogreader.ui.nav.StatsRoute
 import com.example.frogreader.ui.nav.TrackerRoute
 import com.example.frogreader.ui.reader.ReaderScreen
 import com.example.frogreader.ui.settings.SettingsScreen
 import com.example.frogreader.ui.profile.ProfileScreen
+import com.example.frogreader.ui.profile.ProfileSectionScreen
 import com.example.frogreader.ui.stats.StatsScreen
 import com.example.frogreader.ui.theme.FrogReaderTheme
 import com.example.frogreader.ui.theme.colorSchemeFor
@@ -420,6 +456,14 @@ class MainActivity : ComponentActivity() {
         startupReaderBookId: String?,
         theme: AppTheme,
     ) {
+        val pagerState = rememberPagerState(initialPage = 0) { 2 }
+        val coroutineScope = rememberCoroutineScope()
+        val tabSwitch = remember(pagerState, coroutineScope) {
+            TabSwitchController(coroutineScope) { page ->
+                pagerState.animateScrollToPage(page, animationSpec = TabSwitchAnimation)
+            }
+        }
+
         val backStackEntry by navController.currentBackStackEntryAsState()
         val destination = backStackEntry?.destination
         // Null for the first frame, before the start destination reaches the
@@ -427,27 +471,31 @@ class MainActivity : ComponentActivity() {
         // over a reader-first launch.
         val startsInLibrary = startupReaderBookId == null
         val onTopLevel = destination?.isTopLevel() ?: startsInLibrary
-        val onLibrary = destination?.hasRoute<LibraryRoute>() ?: startsInLibrary
-        val selectedTab = if (destination?.hasRoute<ProfileRoute>() == true) {
-            NavTab.PROFILE
-        } else {
-            NavTab.LIBRARY
+        val onReadingQueue = destination?.hasRoute<ReadingQueueRoute>() == true
+        val onReadingLog = destination?.hasRoute<ReadingLogRoute>() == true
+        var readingQueueFab by remember { mutableStateOf<Pair<String, ReadingQueueFabState>?>(null) }
+
+        // Logical selection changes only after settling, including accessibility,
+        // back behavior and library dock lifecycle. A cancelled drag changes none
+        // of these. Read continuous progress only inside the navigation visuals.
+        val selectedTab = if (pagerState.settledPage == 1) NavTab.PROFILE else NavTab.LIBRARY
+        val onLibrary = selectedTab == NavTab.LIBRARY
+        val tabProgress: () -> Float = remember(pagerState) {
+            { (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 1f) }
+        }
+        val backReturnsToLibrary by remember(pagerState) {
+            derivedStateOf { pagerState.settledPage != 0 || pagerState.isScrollInProgress }
         }
 
         // Give the system bars back the moment the reader stops being
         // the destination — which is when the pop STARTS, not when the
         // reader finally leaves composition a transition later.
-        //
-        // The reader reads in BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE,
-        // and under that behaviour a swipe from the screen edge asks
-        // the system for TRANSIENT bars, which Android draws with a
-        // dark scrim of its own. The back gesture is exactly such a
-        // swipe, so closing a book left a scrimmed status bar over the
-        // library until something put the window back in order. Doing
-        // it here is early enough that there is nothing to see.
         val activity = LocalActivity.current
         val inReader = destination?.hasRoute<ReaderRoute>() == true
-        LaunchedEffect(inReader, theme) {
+        // Library and Profile share one destination in the pager. Reapply icon
+        // contrast on tab switches too; inReader alone stays false throughout
+        // that transition and can leave stale light icons on a light surface.
+        LaunchedEffect(backStackEntry, selectedTab, theme, activity) {
             if (inReader) return@LaunchedEffect
             val window = activity?.window ?: return@LaunchedEffect
             val controller = WindowCompat.getInsetsController(window, window.decorView)
@@ -457,13 +505,6 @@ class MainActivity : ComponentActivity() {
             controller.isAppearanceLightNavigationBars = !theme.isDark()
         }
 
-        // Hoisted to the activity on purpose. The add button and the
-        // import sheet live out here, OUTSIDE the NavHost, while the
-        // snackbar that reports what an import did lives inside the
-        // library screen. Left to `viewModel()` in each place, those are
-        // two different instances — which is exactly why the library's
-        // import messages have gone nowhere since the button started
-        // calling the repository directly. One instance, one channel.
         val libraryViewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory)
         val isImportingBook by libraryViewModel.importing.collectAsStateWithLifecycle()
 
@@ -473,98 +514,76 @@ class MainActivity : ComponentActivity() {
             hasSyntheticReaderStart = startupReaderBookId != null,
         )
 
-        // The folder being scanned, or null. Not rememberSaveable: the
-        // tree grant is one-shot and does not survive process death, so
-        // restoring the screen would restore it onto a folder it can no
-        // longer read.
         var scanningFolder by remember { mutableStateOf<Uri?>(null) }
         var fabMenuExpanded by rememberSaveable { mutableStateOf(false) }
-        // The library hides the button while it has a folder open or a
-        // selection running. Not saveable on purpose: the screen tells
-        // us again on its first composition after a restore.
-        var libraryFabVisible by remember { mutableStateOf(true) }
+        var libraryDockVisible by remember { mutableStateOf(true) }
+        var libraryTabSwipeEnabled by remember { mutableStateOf(true) }
 
         BackHandler(fabMenuExpanded) { fabMenuExpanded = false }
-        // Switching tabs with the menu open would leave two choices
-        // hanging over a screen they have nothing to do with.
-        LaunchedEffect(onLibrary) {
-            if (!onLibrary) fabMenuExpanded = false
+        // Back gesture on Profile tab returns to Library tab:
+        BackHandler(enabled = onTopLevel && !fabMenuExpanded && backReturnsToLibrary) {
+            tabSwitch.select(0)
         }
 
-        val filePicker = rememberLauncherForActivityResult(
-            OpenSupportedBooksContract(),
-        ) { uris -> libraryViewModel.importBooks(uris) }
-
-        // No takePersistableUriPermission. The folder is read once,
-        // straight away, and every book found is copied into private
-        // storage — so a grant that outlives the scan buys nothing and
-        // costs a slot against the per-app cap that nothing ever
-        // released. The old scan leaked one per folder ever added.
-        val folderPicker = rememberLauncherForActivityResult(
-            ActivityResultContracts.OpenDocumentTree(),
-        ) { treeUri -> if (treeUri != null) scanningFolder = treeUri }
+        // Import is available on both tabs, but not over a reader or detail page.
+        LaunchedEffect(onTopLevel) {
+            if (!onTopLevel) fabMenuExpanded = false
+        }
 
         val onTabSelected: (NavTab) -> Unit = { tab ->
-            if (tab != selectedTab) {
-                val route: Any = when (tab) {
-                    NavTab.LIBRARY -> LibraryRoute
-                    NavTab.PROFILE -> ProfileRoute
-                }
-                navController.navigate(route) {
+            val targetPage = when (tab) {
+                NavTab.LIBRARY -> 0
+                NavTab.PROFILE -> 1
+            }
+            if (destination?.isTopLevel() == true) {
+                tabSwitch.select(targetPage)
+            } else {
+                navController.navigate(LibraryRoute) {
                     popUpTo(LibraryRoute) { saveState = true }
                     launchSingleTop = true
                     restoreState = true
                 }
+                coroutineScope.launch {
+                    pagerState.scrollToPage(targetPage)
+                }
             }
         }
 
-        Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            // Zero on purpose. Every screen already applies its own
-            // status-bar inset, and the bottom comes from the bar,
-            // which carries the system navigation-bar inset itself —
-            // Scaffold adding either again would double it.
-            contentWindowInsets = WindowInsets(0, 0, 0, 0),
-            bottomBar = {
-                if (ShowBottomBar) {
-                    // The Box measures to the bar, so the slot's height —
-                    // and with it every screen's bottom content padding —
-                    // is exactly what it was.
-                    Box {
-                        FrogNavigationBar(
-                            visible = onTopLevel,
-                            selectedTab = selectedTab,
-                            onTabSelected = onTabSelected,
-                        )
-                        FabMenuScrim(
-                            visible = fabMenuExpanded,
-                            onDismiss = { fabMenuExpanded = false },
-                            modifier = Modifier.matchParentSize(),
-                        )
-                    }
+        val filePicker = rememberLauncherForActivityResult(
+            OpenSupportedBooksContract(),
+        ) { uris ->
+            if (uris.isNotEmpty()) {
+                onTabSelected(NavTab.LIBRARY)
+                libraryViewModel.importBooks(uris)
+            }
+        }
+
+        val folderPicker = rememberLauncherForActivityResult(
+            ActivityResultContracts.OpenDocumentTree(),
+        ) { treeUri -> if (treeUri != null) scanningFolder = treeUri }
+
+
+        FrogMainScaffold(
+            readingQueueActive = onReadingQueue || onReadingLog,
+            readingQueueFab = readingQueueFab?.takeIf { it.first == backStackEntry?.id }?.second,
+            navigationVisible = onTopLevel,
+            dockVisible = !onLibrary || libraryDockVisible,
+            selectedTab = selectedTab,
+            onTabSelected = onTabSelected,
+            tabProgress = tabProgress,
+            importVisible = onTopLevel,
+            importing = isImportingBook,
+            importExpanded = fabMenuExpanded,
+            onImportExpandedChange = { fabMenuExpanded = it },
+            onAddBook = {
+                if (!isImportingBook) {
+                    filePicker.launch(BookParsers.SUPPORTED_MIME_TYPES)
                 }
             },
-            floatingActionButton = {
-                ImportFabMenu(
-                    // Library only. Profile is where reading history
-                    // will live; importing a book from it never made
-                    // sense. The library also asks for it to step aside
-                    // while a folder or a selection is on top of it.
-                    visible = onLibrary && libraryFabVisible,
-                    importing = isImportingBook,
-                    expanded = fabMenuExpanded,
-                    onExpandedChange = { fabMenuExpanded = it },
-                    onAddBook = {
-                        if (!isImportingBook) {
-                            filePicker.launch(BookParsers.SUPPORTED_MIME_TYPES)
-                        }
-                    },
-                    onScanFolder = { folderPicker.launch(storageRootUri()) },
-                    // The shelf is made empty and named afterwards: the
-                    // view model reports its id back and the library
-                    // opens it with the cursor in the name field.
-                    onNewShelf = { libraryViewModel.createShelf() },
-                )
+            onScanFolder = { folderPicker.launch(storageRootUri()) },
+            onNewShelf = {
+                onTabSelected(NavTab.LIBRARY)
+                libraryViewModel.createShelf()
             },
         ) { innerPadding ->
             // NOT padded by innerPadding: a screen that resizes the
@@ -574,25 +593,60 @@ class MainActivity : ComponentActivity() {
             // content clears the bar while their background does not.
             NavHost(
                 navController = navController,
-                startDestination = startupReaderBookId?.let(::ReaderRoute) ?: LibraryRoute,
+                startDestination = startupReaderBookId?.let { ReaderRoute(it) } ?: LibraryRoute,
                 modifier = Modifier.fillMaxSize(),
-                enterTransition = { if (switchingTabs) tabEnter() else pushEnter() },
+                enterTransition = {
+                    when {
+                        switchingTabs -> tabEnter()
+                        initialState.destination.hasRoute<ReaderRoute>() &&
+                            targetState.destination.hasRoute<LibraryRoute>() -> readerReturnEnter()
+                        else -> pushEnter()
+                    }
+                },
                 exitTransition = { if (switchingTabs) tabExit() else fadeOut(NavFade) },
-                popEnterTransition = { if (switchingTabs) tabEnter() else fadeIn(NavFade) },
+                popEnterTransition = {
+                    when {
+                        switchingTabs -> tabEnter()
+                        initialState.destination.hasRoute<ReaderRoute>() -> readerReturnEnter()
+                        else -> fadeIn(NavFade)
+                    }
+                },
                 popExitTransition = { if (switchingTabs) tabExit() else popExit() },
             ) {
                 composable<LibraryRoute> {
-                    LibraryScreen(
-                        onFabVisible = { libraryFabVisible = it },
-                        viewModel = libraryViewModel,
-                        contentPadding = innerPadding,
-                        onOpenBook = { book ->
-                            navController.navigate(ReaderRoute(book.id))
-                        },
-                        onOpenSettings = { navController.navigate(SettingsRoute) },
-                        onEditBook = { navController.navigate(BookMetadataRoute(it.id)) },
-                        onBookInfo = { navController.navigate(BookInfoRoute(it.id)) },
-                    )
+                    HorizontalPager(
+                        state = pagerState,
+                        // Only two top-level pages: retain their local UI state
+                        // and avoid composing a whole screen midway through a drag.
+                        beyondViewportPageCount = 1,
+                        userScrollEnabled = onTopLevel && !fabMenuExpanded && (!onLibrary || libraryTabSwipeEnabled),
+                        modifier = Modifier.fillMaxSize(),
+                        key = { page -> if (page == 0) "library" else "profile" },
+                    ) { page ->
+                        when (page) {
+                            0 -> LibraryScreen(
+                                onDockVisible = { libraryDockVisible = it },
+                                onTabSwipeEnabled = { libraryTabSwipeEnabled = it },
+                                dockScrollEnabled = onTopLevel && onLibrary && !fabMenuExpanded,
+                                viewModel = libraryViewModel,
+                                contentPadding = innerPadding,
+                                onOpenBook = { book ->
+                                    navController.navigate(ReaderRoute(book.id))
+                                },
+                                onOpenSettings = { navController.navigate(SettingsRoute) },
+                                onEditBook = { navController.navigate(BookMetadataRoute(it.id)) },
+                                onBookInfo = { navController.navigate(BookInfoRoute(it.id)) },
+                            )
+                            1 -> ProfileScreen(
+                                contentPadding = innerPadding,
+                                onOpenSettings = { navController.navigate(SettingsRoute) },
+                                onOpenQuotesAndBookmarks = { navController.navigate(QuotesAndBookmarksRoute) { launchSingleTop = true } },
+                                onOpenStats = { navController.navigate(StatsRoute) { launchSingleTop = true } },
+                                onOpenReadingQueue = { navController.navigate(ReadingQueueRoute) { launchSingleTop = true } },
+                                onOpenReadingLog = { navController.navigate(ReadingLogRoute) { launchSingleTop = true } },
+                            )
+                        }
+                    }
                 }
 
                 composable<BookMetadataRoute>(
@@ -623,19 +677,83 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     popEnterTransition = {
-                        if (initialState.destination.hasRoute<BookMetadataRoute>()) {
+                        if (initialState.destination.hasRoute<ReaderRoute>()) {
+                            readerReturnEnter()
+                        } else if (initialState.destination.hasRoute<BookMetadataRoute>()) {
                             slideInHorizontally(NavSlide) { -it } + fadeIn(spring(stiffness = Spring.StiffnessMediumLow))
                         } else {
                             fadeIn(NavFade)
                         }
                     },
                 ) { entry ->
-                    val id = entry.toRoute<BookInfoRoute>().bookId
-                    BookInfoScreen(id, onBack = { navController.popBackStack() }, onEdit = { navController.navigate(BookMetadataRoute(id)) })
+                    val info = entry.toRoute<BookInfoRoute>()
+                    val id = info.bookId
+                    BookInfoScreen(id, onBack = { navController.popBackStack() }, onEdit = { navController.navigate(BookMetadataRoute(id)) },
+                        reviewRequested = info.reviewRequested,
+                        onEditReadingLog = { logId ->
+                            navController.navigate(ReadingLogRoute) { launchSingleTop = true }
+                            navController.currentBackStackEntry?.savedStateHandle?.set("readingLogEditId", logId)
+                        },
+                        onOpenReadingLog = { navController.navigate(ReadingLogInfoRoute(it)) })
                 }
 
                 composable<ProfileRoute> {
-                    ProfileScreen(contentPadding = innerPadding)
+                    LaunchedEffect(Unit) {
+                        pagerState.scrollToPage(1)
+                        navController.navigate(LibraryRoute) {
+                            popUpTo(LibraryRoute) { saveState = true }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                }
+
+                composable<QuotesAndBookmarksRoute> {
+                    com.example.frogreader.ui.profile.QuotesAndBookmarksScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenQuoteOrBookmark = { bookId, quoteId, bookmarkId ->
+                            navController.navigate(ReaderRoute(bookId, quoteId, bookmarkId))
+                        },
+                        onBookInfo = { navController.navigate(BookInfoRoute(it)) },
+                    )
+                }
+                composable<ReadingQueueRoute> { entry ->
+                    ReadingQueueScreen(onBack = { navController.popBackStack() },
+                        onOpenBook = { navController.navigate(ReaderRoute(it)) },
+                        onFabStateChange = { state ->
+                            if (state != null) readingQueueFab = entry.id to state
+                            else if (readingQueueFab?.first == entry.id) readingQueueFab = null
+                        })
+                }
+                composable<ReadingLogRoute> { entry ->
+                    val captured by entry.savedStateHandle.getStateFlow<String?>("readingLogCoverUri", null).collectAsStateWithLifecycle()
+                    val editId by entry.savedStateHandle.getStateFlow<String?>("readingLogEditId", null).collectAsStateWithLifecycle()
+                    ReadingLogScreen(onBack = { navController.popBackStack() },
+                        onOpenEntry = { navController.navigate(ReadingLogInfoRoute(it)) },
+                        onFabStateChange = { state ->
+                            if (state != null) readingQueueFab = entry.id to state
+                            else if (readingQueueFab?.first == entry.id) readingQueueFab = null
+                        },
+                        onCaptureCover = { navController.navigate(ReadingLogCameraRoute) },
+                        capturedCoverUri = captured?.let(Uri::parse),
+                        onCapturedCoverConsumed = { entry.savedStateHandle["readingLogCoverUri"] = null },
+                        editEntryId = editId,
+                        onEditRequestConsumed = { entry.savedStateHandle["readingLogEditId"] = null })
+                }
+                composable<ReadingLogInfoRoute> { entry ->
+                    val id = entry.toRoute<ReadingLogInfoRoute>().entryId
+                    BookInfoScreen("", onBack = { navController.popBackStack() }, onEdit = {}, readingLogId = id,
+                        onEditReadingLog = { logId ->
+                            if (!navController.popBackStack(ReadingLogRoute, inclusive = false)) navController.navigate(ReadingLogRoute)
+                            navController.currentBackStackEntry?.savedStateHandle?.set("readingLogEditId", logId)
+                        },
+                        onOpenReadingLog = { navController.navigate(ReadingLogInfoRoute(it)) })
+                }
+                composable<ReadingLogCameraRoute> {
+                    ReadingLogCameraScreen(onBack = { navController.popBackStack() }, onCaptured = { uri ->
+                        navController.previousBackStackEntry?.savedStateHandle?.set("readingLogCoverUri", uri.toString())
+                        navController.popBackStack()
+                    })
                 }
 
                 composable<TrackerRoute> {
@@ -645,7 +763,16 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                composable<ReaderRoute> { entry ->
+                composable<ReaderRoute>(
+                    exitTransition = {
+                        if (targetState.destination.hasRoute<LibraryRoute>()) {
+                            readerCloseExit()
+                        } else {
+                            fadeOut(NavFade)
+                        }
+                    },
+                    popExitTransition = { readerCloseExit() },
+                ) { entry ->
                     val route = entry.toRoute<ReaderRoute>()
                     val openLibrary: () -> Unit = {
                         navController.navigate(LibraryRoute) {
@@ -661,9 +788,12 @@ class MainActivity : ComponentActivity() {
                     }
                     ReaderScreen(
                         bookId = route.bookId,
+                        initialQuoteId = route.quoteId,
+                        initialBookmarkId = route.bookmarkId,
                         onBack = {
                             if (!navController.popBackStack()) openLibrary()
                         },
+                        onReview = { navController.navigate(BookInfoRoute(it, reviewRequested = true)) },
                     )
                 }
 
@@ -676,13 +806,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Dims the library behind an open menu, and closes it on a
-            // tap anywhere. Its other half is in the bottomBar slot.
-            FabMenuScrim(
-                visible = fabMenuExpanded,
-                onDismiss = { fabMenuExpanded = false },
-                modifier = Modifier.fillMaxSize(),
-            )
         }
 
         // Hosted here rather than inside the library screen: a book
@@ -714,6 +837,7 @@ class MainActivity : ComponentActivity() {
                 onDismiss = { scanningFolder = null },
                 onPickAnotherFolder = { folderPicker.launch(storageRootUri()) },
                 onFinished = { added, failed ->
+                    if (added > 0 || failed > 0) onTabSelected(NavTab.LIBRARY)
                     libraryViewModel.reportBatchImport(added, failed)
                 },
             )
@@ -803,96 +927,307 @@ private const val SplashExitScale = 1.08f
 
 /**
  * Flag to control the visibility of the bottom navigation bar (Library & Profile tabs).
- * Set to false temporarily per user request. Set back to true in the next update to restore.
  */
-private const val ShowBottomBar = false
+private const val ShowBottomBar = true
+private val ImportButtonSize = 60.dp
+private val ImportButtonGap = 12.dp
+private val LibraryDockMaxWidth = 400.dp
+private val DockSidePadding = 20.dp
 
 // ------------------------------------------------------------------ chrome
 
-/**
- * The two-tab bar.
- *
- * Always in the layout, never conditionally removed. Scaffold derives the
- * content's bottom padding from whatever this slot measures, so dropping the
- * bar makes that padding collapse to zero — which re-measures every screen in
- * the NavHost, at the precise moment the route transition is already running.
- * That is what reads as the interface rebuilding itself in pieces. Sliding the
- * bar out of view instead keeps the measured height, and the padding never
- * moves.
- */
+/** Shared chrome: the import button sits beside navigation, not over books. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FrogNavigationBar(
-    visible: Boolean,
+internal fun FrogMainScaffold(
+    navigationVisible: Boolean,
+    dockVisible: Boolean = true,
     selectedTab: NavTab,
     onTabSelected: (NavTab) -> Unit,
+    tabProgress: () -> Float = { if (selectedTab == NavTab.PROFILE) 1f else 0f },
+    importVisible: Boolean,
+    importing: Boolean,
+    importExpanded: Boolean,
+    onImportExpandedChange: (Boolean) -> Unit,
+    onAddBook: () -> Unit,
+    onScanFolder: () -> Unit,
+    onNewShelf: () -> Unit,
+    readingQueueActive: Boolean = false,
+    readingQueueFab: ReadingQueueFabState? = null,
+    content: @Composable (PaddingValues) -> Unit,
 ) {
-    var barHeight by remember { mutableIntStateOf(0) }
+    var dockHeight by remember { mutableStateOf(72.dp) }
+    val controlsVisible = (navigationVisible && dockVisible) || importExpanded
     val hidden by animateFloatAsState(
-        targetValue = if (visible) 0f else 1f,
-        // Not the expressive spatial spring: an overshoot here would bounce the
-        // bar back up past its resting edge on the way in.
+        targetValue = if (controlsVisible) 0f else 1f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioNoBouncy,
             stiffness = Spring.StiffnessMediumLow,
         ),
-        label = "navBarHidden",
+        label = "bottomDockHidden",
     )
+    val fabHidden by animateFloatAsState(
+        if (controlsVisible || readingQueueActive) 0f else 1f,
+        spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+        label = "sharedFabHidden",
+    )
+    Box(Modifier.fillMaxSize()) {
+        Scaffold(
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            bottomBar = {
+                // Keep content clearance constant throughout the slide. Menu
+                // expansion and hiding must never reflow the book grid.
+                if (ShowBottomBar) {
+                    Spacer(Modifier.fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility
+                            .only(WindowInsetsSides.Bottom))
+                        .height(dockHeight + 16.dp))
+                }
+            },
+            content = content,
+        )
+        FabMenuScrim(importExpanded, { onImportExpandedChange(false) }, Modifier.fillMaxSize())
+        // The dock keeps its own slide. The FAB follows the same motion on main
+        // screens, but stays anchored when it becomes the Reading Queue action.
+        Box(
+            Modifier.align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .graphicsLayer { translationY = size.height * hidden }
+                .then(if (controlsVisible) Modifier else Modifier.clearAndSetSemantics {}),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            if (ShowBottomBar) {
+                FrogNavigationBar(
+                    visible = controlsVisible && !importExpanded,
+                    selectedTab = selectedTab,
+                    onTabSelected = onTabSelected,
+                    tabProgress = tabProgress,
+                    reserveImportSpace = true,
+                    importButtonSize = ImportButtonSize,
+                    onDockHeightChanged = { dockHeight = it },
+                )
+            }
+        }
+        Box(
+                modifier = Modifier.align(Alignment.BottomCenter)
+                    .graphicsLayer { translationY = size.height * fabHidden }
+                    .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility
+                        .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+                    .padding(horizontal = DockSidePadding, vertical = 8.dp)
+                    .padding(bottom = ((dockHeight - ImportButtonSize) / 2).coerceAtLeast(0.dp))
+                    .widthIn(max = LibraryDockMaxWidth).fillMaxWidth(),
+                contentAlignment = Alignment.BottomEnd,
+            ) {
+                ImportFabMenu(
+                    buttonSize = ImportButtonSize,
+                    visible = if (readingQueueActive) readingQueueFab?.visible != false else importVisible && controlsVisible,
+                    readingQueueActive = readingQueueActive,
+                    readingQueueFab = readingQueueFab,
+                    importing = importing && !readingQueueActive,
+                    expanded = importExpanded && !readingQueueActive,
+                    onExpandedChange = onImportExpandedChange,
+                    onAddBook = onAddBook,
+                    onScanFolder = onScanFolder,
+                    onNewShelf = onNewShelf,
+                )
+        }
+    }
+}
 
-    NavigationBar(
+/** The floating two-tab card; its parent owns dock movement and content clearance. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun FrogNavigationBar(
+    visible: Boolean,
+    selectedTab: NavTab,
+    onTabSelected: (NavTab) -> Unit,
+    tabProgress: () -> Float = { if (selectedTab == NavTab.PROFILE) 1f else 0f },
+    reserveImportSpace: Boolean = false,
+    importButtonSize: Dp = ImportButtonSize,
+    onDockHeightChanged: (Dp) -> Unit = {},
+) {
+    val scheme = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    val actionSpace by animateDpAsState(
+        if (reserveImportSpace) importButtonSize + ImportButtonGap else 0.dp, label = "dockActionSpace",
+    )
+    val dockWidth by animateDpAsState(
+        if (reserveImportSpace) LibraryDockMaxWidth else 320.dp, label = "dockWidth",
+    )
+    Box(
         // Same reason the library header uses the ignoring-visibility inset:
         // the reader hides the system bars, so coming back from a book this
         // measures while the navigation bar is still gone. The default inset
         // reads 0, the bar is that much shorter, and it slides down into place
         // as the system bar animates back. Reserving the space either way
         // keeps it still.
-        windowInsets = WindowInsets.systemBarsIgnoringVisibility
-            .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom),
         modifier = Modifier
-            .onSizeChanged { barHeight = it.height }
-            .graphicsLayer { translationY = barHeight * hidden },
+            .fillMaxWidth()
+            // Fade scrolling covers/text beneath the controls and gesture area.
+            .background(Brush.verticalGradient(listOf(
+                scheme.surface.copy(alpha = 0f),
+                scheme.surface.copy(alpha = 0.92f),
+                scheme.surface,
+            )))
+            .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility
+                .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+            .padding(horizontal = DockSidePadding, vertical = 8.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        NavigationBarItem(
-            selected = selectedTab == NavTab.LIBRARY,
-            // The bar is still measured while off screen; nothing on it should
-            // be reachable there.
-            enabled = visible,
-            onClick = { onTabSelected(NavTab.LIBRARY) },
-            icon = { Icon(Icons.Rounded.AutoStories, contentDescription = null) },
-            label = { Text(stringResource(R.string.nav_library)) },
+        Row(
+            modifier = Modifier.widthIn(max = dockWidth).fillMaxWidth()
+                .onSizeChanged { onDockHeightChanged(with(density) { it.height.toDp() }) },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(30.dp),
+                color = LocalFrogColors.current.nav,
+                shadowElevation = 3.dp,
+            ) {
+                val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+                Box(modifier = Modifier.padding(6.dp)) {
+                    Box(modifier = Modifier.matchParentSize()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .fillMaxWidth(0.5f)
+                                .graphicsLayer {
+                                    translationX = tabProgress() * size.width * if (isRtl) -1f else 1f
+                                }
+                                .clip(RoundedCornerShape(24.dp))
+                                .background(scheme.primaryContainer)
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.selectableGroup(),
+                        horizontalArrangement = Arrangement.spacedBy(0.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        FrogNavigationItem(
+                            modifier = Modifier.weight(1f),
+                            selected = selectedTab == NavTab.LIBRARY,
+                            selectionProgress = { 1f - tabProgress() },
+                            enabled = visible,
+                            onClick = { onTabSelected(NavTab.LIBRARY) },
+                            icon = Icons.Rounded.AutoStories,
+                            label = stringResource(R.string.nav_library),
+                        )
+                        FrogNavigationItem(
+                            modifier = Modifier.weight(1f),
+                            selected = selectedTab == NavTab.PROFILE,
+                            selectionProgress = tabProgress,
+                            enabled = visible,
+                            onClick = { onTabSelected(NavTab.PROFILE) },
+                            icon = Icons.Outlined.PersonOutline,
+                            selectedIcon = Icons.Rounded.Person,
+                            label = stringResource(R.string.nav_profile),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(actionSpace))
+        }
+    }
+}
+
+@Composable
+private fun FrogNavigationItem(
+    selected: Boolean,
+    selectionProgress: () -> Float,
+    enabled: Boolean,
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    selectedIcon: ImageVector = icon,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        if (pressed) 0.94f else 1f,
+        animationSpec = tween(100),
+        label = "tabPressScale",
+    )
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            // A bounded ripple paints a second capsule over the moving selection,
+            // leaving a visible trail on taps. Give the content press feedback instead.
+            .selectable(selected = selected, enabled = enabled, role = Role.Tab,
+                interactionSource = interactionSource, indication = null, onClick = onClick)
+            .semantics { contentDescription = label }
+            .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
+            .heightIn(min = 60.dp).padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+    ) {
+        // This small scope alone observes every frame. No independent springs:
+        // indicator, tint, icon and label all follow the same finger position.
+        FrogNavigationItemVisuals(selectionProgress, icon, selectedIcon, label)
+    }
+}
+
+@Composable
+private fun FrogNavigationItemVisuals(
+    selectionProgress: () -> Float,
+    icon: ImageVector,
+    selectedIcon: ImageVector,
+    label: String,
+) {
+    val progress = selectionProgress().coerceIn(0f, 1f)
+    val scheme = MaterialTheme.colorScheme
+    val foreground = lerp(scheme.onSurfaceVariant, scheme.onPrimaryContainer, progress)
+    Box(Modifier.size(24.dp)) {
+        Icon(
+            icon, contentDescription = null, tint = foreground,
+            modifier = Modifier.fillMaxSize().graphicsLayer {
+                alpha = if (icon == selectedIcon) 1f else 1f - progress
+            },
         )
-        NavigationBarItem(
-            selected = selectedTab == NavTab.PROFILE,
-            enabled = visible,
-            onClick = { onTabSelected(NavTab.PROFILE) },
-            icon = { Icon(Icons.Rounded.Person, contentDescription = null) },
-            label = { Text(stringResource(R.string.nav_profile)) },
+        if (icon != selectedIcon) {
+            Icon(
+                selectedIcon, contentDescription = null, tint = foreground,
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = progress },
+            )
+        }
+    }
+    val caption = label.uppercase(Locale.ROOT)
+    val labelStyle = MaterialTheme.typography.labelMedium.copy(
+        fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 0.8.sp,
+    )
+    // Measure both weights once, then crossfade in a fixed footprint. Switching
+    // font weight at the halfway point would make the caption visibly jump.
+    Box(contentAlignment = Alignment.Center) {
+        Text(
+            text = caption, style = labelStyle, fontWeight = FontWeight.Medium,
+            color = foreground, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.graphicsLayer { alpha = 1f - progress }.clearAndSetSemantics {},
+        )
+        Text(
+            text = caption, style = labelStyle, fontWeight = FontWeight.SemiBold,
+            color = foreground, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.graphicsLayer { alpha = progress }.clearAndSetSemantics {},
         )
     }
 }
 
 /**
- * Add-a-book button, and the two choices that rise out of it.
+ * Add-a-book button and the import actions that rise out of it.
  *
- * Free to come and go: Scaffold takes the content's bottom padding from the
- * bar, not from this slot, so removing it moves nothing. It also places this
- * slot LAST and pins its bottom edge above the bar, which is why the menu can
- * grow upwards out of the button without anything else shifting.
+ * Rendered over the dock in a separate overlay. The navigation row reserves
+ * its width; the menu can grow upwards without moving the grid or the button.
  *
- * Shown and hidden by [Modifier.animateFloatingActionButton], not by
- * AnimatedVisibility. The hand-rolled version drove alpha with [NavFade], a
- * LOW-BOUNCY spring — and a bouncy spring aiming at 0 undershoots past it. Alpha
- * clamps at 0, springs back up, and the button flashes back into view after it
- * has already faded. The Material modifier separates the two channels the way
- * the motion scheme intends: a spatial spring for the scale, which may overshoot
- * because that reads as weight, and a non-bouncy effects spring for the alpha,
- * which may not. It also folds to a zero-size layout once it is invisible
- * instead of adding and removing the node.
+ * Moves with the navigation capsule through the shared dock parent. Its own
+ * layout and scale remain constant when scrolling hides the controls.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ImportFabMenu(
+    buttonSize: Dp,
     visible: Boolean,
+    readingQueueActive: Boolean,
+    readingQueueFab: ReadingQueueFabState?,
     importing: Boolean,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
@@ -900,11 +1235,6 @@ private fun ImportFabMenu(
     onScanFolder: () -> Unit,
     onNewShelf: () -> Unit,
 ) {
-    // Resolved out here: the semantics block below is not a composable scope.
-    val toggleLabel = stringResource(R.string.fab_menu_open)
-    val expandedLabel = stringResource(R.string.fab_menu_expanded)
-    val collapsedLabel = stringResource(R.string.fab_menu_collapsed)
-
     // Hand-rolled rather than FloatingActionButtonMenu. That component staggers
     // its items by animating an INTEGER — the count of visible ones — with a
     // spring, and reveals them as `index >= itemCount - value`. Across six
@@ -913,11 +1243,8 @@ private fun ImportFabMenu(
     // different moments. One shared pair of springs instead: both items rise
     // and fade as one thing.
     Column(
-        // Constant height whether open or closed, so the Scaffold measures this
-        // slot once instead of on every frame of the animation — and the button
-        // does not drift while the items come and go. No inset to cancel out
-        // either: this column is exactly as wide as its widest child, so
-        // Scaffold puts the button back where a plain FAB would sit.
+        // Bottom anchored by the overlay: items expand upwards while the
+        // rounded-square toggle stays level with the navigation capsule.
         horizontalAlignment = Alignment.End,
     ) {
         FabMenuItem(
@@ -951,44 +1278,18 @@ private fun ImportFabMenu(
         )
         FabMenuSpacer(expanded, 16.dp)
 
-        ToggleFloatingActionButton(
-            checked = expanded,
-            onCheckedChange = onExpandedChange,
-            modifier = Modifier
-                .semantics {
-                    // The button comes before its own menu in the traversal
-                    // order, or a screen reader announces the choices before
-                    // saying what opened them.
-                    traversalIndex = -1f
-                    stateDescription = if (expanded) expandedLabel else collapsedLabel
-                    contentDescription = toggleLabel
-                }
-                .animateFloatingActionButton(
-                    // Stays put while the menu is open even if the route
-                    // changes underneath it: hiding the button that owns an
-                    // open menu would strand the menu on screen.
-                    visible = visible || expanded,
-                    alignment = Alignment.BottomEnd,
-                ),
-        ) {
-            if (importing) {
-                LoadingIndicator(
-                    modifier = Modifier.size(24.dp),
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            } else {
-                val icon by remember {
-                    derivedStateOf {
-                        if (checkedProgress > 0.5f) Icons.Rounded.Close else Icons.Rounded.Add
-                    }
-                }
-                Icon(
-                    painter = rememberVectorPainter(icon),
-                    contentDescription = null,
-                    modifier = Modifier.animateIcon({ checkedProgress }),
-                )
-            }
-        }
+        FrogAddFab(
+            expanded = readingQueueActive,
+            visible = visible,
+            enabled = if (readingQueueActive) readingQueueFab?.enabled == true else visible || expanded,
+            importing = importing,
+            menuExpanded = expanded,
+            buttonSize = buttonSize,
+            onClick = {
+                if (readingQueueActive) readingQueueFab?.onClick?.invoke()
+                else onExpandedChange(!expanded)
+            },
+        )
     }
 }
 
@@ -1037,9 +1338,9 @@ private fun FabMenuItem(
     Surface(
         onClick = onClick,
         enabled = visible,
-        shape = CircleShape,
-        color = scheme.primaryContainer,
-        contentColor = scheme.onPrimaryContainer,
+        shape = RoundedCornerShape(20.dp),
+        color = scheme.floatingSurface,
+        contentColor = scheme.onSurface,
         shadowElevation = 3.dp,
         modifier = Modifier
             .graphicsLayer {
@@ -1072,7 +1373,7 @@ private fun FabMenuItem(
                 .padding(horizontal = 20.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(icon, contentDescription = null)
+            Icon(icon, contentDescription = null, tint = scheme.primary)
             Spacer(Modifier.size(12.dp))
             Text(
                 text = label,
@@ -1086,12 +1387,8 @@ private fun FabMenuItem(
 /**
  * The dim behind an open FAB menu.
  *
- * Goes up twice — once over the Scaffold's content, once over the navigation
- * bar. Scaffold draws the bar AFTER the content, so a single sheet in the
- * content slot would leave the bar as a bright strip under a darkened screen,
- * which reads as a rendering fault rather than a design. Two sheets on the same
- * animation land as one. The floating button is drawn after both and stays lit,
- * which is the point: it is the thing the menu belongs to.
+ * Drawn above the entire Scaffold so both content and navigation dim together.
+ * The import overlay is drawn afterwards, keeping its actions lit and tappable.
  *
  * Not composed at all once it has faded out, so an invisible sheet of glass is
  * never left over the library swallowing taps.
@@ -1130,6 +1427,13 @@ private fun FabMenuScrim(
 
 /** How dark the library goes behind an open FAB menu. */
 private const val FabScrimAlpha = 0.32f
+
+// Shared by tab taps and Back. Direct drags retain the pager's native fling.
+private val TabSwitchAnimation = spring<Float>(
+    dampingRatio = Spring.DampingRatioNoBouncy,
+    stiffness = Spring.StiffnessMediumLow,
+    visibilityThreshold = 0.5f,
+)
 
 private val NavFade = spring<Float>(
     dampingRatio = Spring.DampingRatioLowBouncy,
@@ -1175,3 +1479,15 @@ private fun pushEnter(): EnterTransition =
 
 private fun popExit(): ExitTransition =
     fadeOut(NavFade) + scaleOut(NavFade, targetScale = 0.94f)
+
+// Reader closing uses a bounded, non-overshooting curve for both layers.
+// Navigation owns it, so Back gestures can seek and cancel the same transition.
+private val ReaderCloseMotion = tween<Float>(durationMillis = 360, easing = FastOutSlowInEasing)
+
+private fun readerCloseExit(): ExitTransition =
+    fadeOut(ReaderCloseMotion) +
+        scaleOut(ReaderCloseMotion, targetScale = 0.86f, transformOrigin = TransformOrigin.Center)
+
+private fun readerReturnEnter(): EnterTransition =
+    fadeIn(ReaderCloseMotion) +
+        scaleIn(ReaderCloseMotion, initialScale = 0.97f, transformOrigin = TransformOrigin.Center)

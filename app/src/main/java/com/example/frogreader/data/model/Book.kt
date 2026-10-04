@@ -1,5 +1,6 @@
 package com.example.frogreader.data.model
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -163,9 +164,17 @@ data class Book(
     val status: ReadingStatus = ReadingStatus.NONE,
     /** 1..5, or null when the book has not been rated. */
     val rating: Int? = null,
+    /** Half-star steps; absent in older stores, which retain [rating]. */
+    val ratingHalfStars: Int? = null,
+    /** The current reading, so reopening a finished book cannot add duplicate history. */
+    val activeReadingLogId: String? = null,
+    val suppressReadingLog: Boolean = false,
     /** The user's own review. */
     val review: String? = null,
     val reviewUpdatedAtMillis: Long? = null,
+    /** The intention saved before this book moved from Reading Queue to the library. */
+    @SerialName("readingListNote")
+    val readingQueueNote: String? = null,
     /**
      * This book's own reading settings (font, size, margins, mode…).
      * Null = the book still follows the app-wide "last used" settings.
@@ -182,7 +191,9 @@ data class Book(
     val translators: List<String> = emptyList(),
     val description: String? = null,
     val language: String? = null,
-)
+) {
+    val effectiveRatingHalfStars: Int? get() = ratingHalfStars ?: rating?.times(2)
+}
 
 /**
  * A named group of books that lives in the same grid as the books themselves.

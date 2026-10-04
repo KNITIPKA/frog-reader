@@ -138,8 +138,8 @@ internal fun SettingsNavigationRow(
     subtitle: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    iconContainer: Color = MaterialTheme.colorScheme.surfaceVariant,
-    iconTint: Color = MaterialTheme.colorScheme.primary,
+    iconContainer: Color = MaterialTheme.colorScheme.secondaryContainer,
+    iconTint: Color = MaterialTheme.colorScheme.onSecondaryContainer,
     trailing: (@Composable () -> Unit)? = null,
     showChevron: Boolean = true,
     enabled: Boolean = true,
@@ -202,8 +202,8 @@ internal fun SettingsSwitchRow(
     ) {
         SettingsIconCircle(
             icon = icon,
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            tint = MaterialTheme.colorScheme.primary,
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            tint = MaterialTheme.colorScheme.onSecondaryContainer,
         )
         Spacer(Modifier.width(16.dp))
         SettingsRowText(title, subtitle, Modifier.weight(1f))
@@ -237,8 +237,8 @@ internal fun <T> SettingsControlRow(
         Row(verticalAlignment = Alignment.CenterVertically) {
             SettingsIconCircle(
                 icon = icon,
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                tint = MaterialTheme.colorScheme.primary,
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
             )
             Spacer(Modifier.width(16.dp))
             SettingsRowText(title, subtitle, Modifier.weight(1f))
@@ -266,7 +266,7 @@ internal fun <T> SettingsSegmentedControl(
             .fillMaxWidth()
             .selectableGroup()
             .clip(RoundedCornerShape(24.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {

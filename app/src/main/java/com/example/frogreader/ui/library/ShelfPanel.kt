@@ -107,13 +107,13 @@ private val RowGap = 14.dp
 /**
  * How much room each cell keeps below its cover for the title and author.
  *
- * Reserved per ROW, not per title: a page whose rows resize as you swipe it is
- * unreadable. Inside the cell the author still sits immediately under the
- * title — the slack all ends up at the bottom, where nobody notices it. Two
- * lines of 12sp title (15.4dp each), 2dp, one line of 11sp author (14dp), and
- * the 7dp above the title: 54dp, rounded up so a descender never gets clipped.
+ * None any more: the title and author are a [CoverCaption] on the cover, as in
+ * the library grid. Under the cover, two lines of title still cut most titles
+ * short, and the strip reserved for them made every row a third taller than
+ * its books. Kept as a named zero so the row arithmetic below still says what
+ * a row is made of.
  */
-private val CellTextHeight = 58.dp
+private val CellTextHeight = 0.dp
 
 /** The strip under the pager: page dots, or the selection's two buttons. */
 private val DotsRowHeight = 58.dp
@@ -974,7 +974,14 @@ private fun ShelfPanelBook(
                 .clip(RoundedCornerShape(16.dp))
                 .combinedClickable(onLongClick = { onLongClick(coverRect) }, onClick = onClick),
         ) {
-            BookCover(book = book, coverFile = coverFile, titleSize = 9.sp, padding = 8.dp)
+            BookCover(book = book, coverFile = coverFile, titleSize = 0.sp, padding = 8.dp)
+            CoverCaption(
+                title = book.title,
+                author = book.author,
+                titleSize = 12.sp,
+                authorSize = 10.sp,
+                padding = 8.dp,
+            )
 
             if (percent > 0) {
                 Box(
@@ -993,14 +1000,6 @@ private fun ShelfPanelBook(
                         color = scheme.onSurface,
                     )
                 }
-                // How far in, along the bottom edge of the cover.
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth(fraction)
-                        .height(4.dp)
-                        .background(scheme.primary),
-                )
             }
 
             if (selecting) {
@@ -1018,15 +1017,6 @@ private fun ShelfPanelBook(
                         .background(scheme.primary.copy(alpha = 0.22f)),
                 )
             }
-        }
-
-        Spacer(Modifier.height(7.dp))
-        // Full column width even when a shortened cover is narrower than it, so
-        // the labels stay left-aligned with each other rather than centring.
-        TileTitle(text = book.title, maxLines = 2, modifier = Modifier.fillMaxWidth())
-        book.author?.let { author ->
-            Spacer(Modifier.height(2.dp))
-            TileSubtitle(text = author, modifier = Modifier.fillMaxWidth())
         }
     }
 }

@@ -142,6 +142,8 @@ fun ReaderPanelsContent(
     /** Whether the page being read is bookmarked, and its toggle. */
     bookmarked: Boolean = false,
     onToggleBookmark: () -> Unit = {},
+    /** Exact nav anchor when one spine chapter contains several subchapters. */
+    currentNavigationIndex: Int? = null,
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
 
@@ -177,7 +179,7 @@ fun ReaderPanelsContent(
 
             Box(Modifier.weight(1f)) {
                 when (tab) {
-                    0 -> ContentsTab(ready, currentChapter, chapterStartPages, onChapterClick)
+                    0 -> ContentsTab(ready, currentChapter, chapterStartPages, onChapterClick, currentNavigationIndex)
                     1 -> BookmarksTab(
                         ready, book, bookmarked, onToggleBookmark,
                         onBookmarkClick, onRemoveBookmark,
@@ -201,11 +203,12 @@ private fun ContentsTab(
     currentChapter: Int,
     chapterStartPages: List<Int>?,
     onChapterClick: (ReaderNavigationTarget) -> Unit,
+    currentNavigationIndex: Int?,
 ) {
     val entries = ready.navigation
     val tree = remember(entries) { ReaderContentsTree(entries.map { it.depth }) }
-    val currentEntryIndex = remember(entries, currentChapter) {
-        entries.indexOfFirst { entry ->
+    val currentEntryIndex = remember(entries, currentChapter, currentNavigationIndex) {
+        currentNavigationIndex ?: entries.indexOfFirst { entry ->
             (entry.target as? ReaderNavigationTarget.ReadingOrder)?.chapterIndex == currentChapter
         }.takeIf { it >= 0 }
     }
@@ -667,7 +670,7 @@ fun ReaderSettingsControls(
             Icon(
                 Icons.Rounded.WbSunny,
                 contentDescription = null,
-                tint = colors.secondaryText,
+                tint = colors.onChromeVariant,
                 modifier = Modifier.size(16.dp),
             )
             SettingSlider(
@@ -711,7 +714,7 @@ fun ReaderSettingsControls(
                 Icon(
                     Icons.Rounded.BrightnessAuto,
                     contentDescription = null,
-                    tint = if (autoBrightness) colors.background else colors.secondaryText,
+                    tint = if (autoBrightness) colors.onAccent else colors.onChromeVariant,
                     modifier = Modifier.size(16.dp),
                 )
                 Spacer(Modifier.width(4.dp))
@@ -719,7 +722,7 @@ fun ReaderSettingsControls(
                     stringResource(R.string.reader_brightness_auto),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = if (autoBrightness) FontWeight.Bold else FontWeight.Medium,
-                    color = if (autoBrightness) colors.background else colors.secondaryText,
+                    color = if (autoBrightness) colors.onAccent else colors.onChromeVariant,
                 )
             }
         }
@@ -1281,7 +1284,7 @@ private fun CustomFontsDialog(
                     Icon(
                         Icons.Rounded.Add,
                         contentDescription = null,
-                        tint = colors.background,
+                        tint = colors.onAccent,
                         modifier = Modifier.size(20.dp),
                     )
                     Spacer(Modifier.width(6.dp))
@@ -1289,7 +1292,7 @@ private fun CustomFontsDialog(
                         text = stringResource(R.string.reader_font_add),
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
-                        color = colors.background,
+                        color = colors.onAccent,
                     )
                 }
 
@@ -1301,7 +1304,7 @@ private fun CustomFontsDialog(
                     Text(
                         text = stringResource(R.string.reader_fonts_in_book),
                         style = MaterialTheme.typography.labelMedium,
-                        color = colors.secondaryText,
+                        color = colors.onChromeVariant,
                     )
                     Spacer(Modifier.height(6.dp))
                     for (font in bookFonts) {
@@ -1345,7 +1348,7 @@ private fun CustomFontsDialog(
                     Text(
                         text = stringResource(R.string.reader_fonts_empty),
                         style = MaterialTheme.typography.bodyMedium,
-                        color = colors.secondaryText,
+                        color = colors.onChromeVariant,
                         modifier = Modifier.padding(vertical = 14.dp, horizontal = 4.dp),
                     )
                 } else {
@@ -1390,6 +1393,8 @@ private fun CustomFontsDialog(
                                     }
                                 }
                                 androidx.compose.material3.DropdownMenu(
+                                    containerColor = colors.chrome,
+                                    tonalElevation = 0.dp,
                                     expanded = menuOpen,
                                     onDismissRequest = { menuOpen = false },
                                 ) {
@@ -1433,7 +1438,7 @@ private fun StepperGroup(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(colors.onChrome.copy(alpha = 0.06f))
+            .background(colors.control)
             .padding(5.dp),
     ) {
         Box(
@@ -1441,7 +1446,7 @@ private fun StepperGroup(
             modifier = Modifier
                 .size(width = 46.dp, height = 42.dp)
                 .clip(RoundedCornerShape(15.dp))
-                .background(colors.onChrome.copy(alpha = 0.08f))
+                .background(colors.controlButton)
                 .clickable {
                     haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
                     onDecrease()
@@ -1460,7 +1465,7 @@ private fun StepperGroup(
             modifier = Modifier
                 .size(width = 46.dp, height = 42.dp)
                 .clip(RoundedCornerShape(15.dp))
-                .background(colors.onChrome.copy(alpha = 0.08f))
+                .background(colors.controlButton)
                 .clickable {
                     haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
                     onIncrease()
@@ -1485,7 +1490,7 @@ private fun ChipRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(26.dp))
-            .background(colors.onChrome.copy(alpha = 0.08f))
+            .background(colors.control)
             .padding(4.dp),
     ) {
         options.forEachIndexed { index, label ->
@@ -1512,7 +1517,7 @@ private fun ChipRow(
                     style = MaterialTheme.typography.labelLarge,
                     fontFamily = optionFontFamilies?.getOrNull(index),
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (selected) colors.background else colors.onChrome,
+                    color = if (selected) colors.onAccent else colors.onChrome,
                     maxLines = 1,
                 )
             }
@@ -1558,7 +1563,7 @@ private fun SettingSlider(
             },
     ) {
         val active = colors.accent
-        val inactive = colors.secondaryText.copy(alpha = 0.25f)
+        val inactive = colors.track
         Canvas(Modifier.fillMaxSize()) {
             val w = size.width
             val trackHeight = 6.dp.toPx()
@@ -1598,7 +1603,7 @@ private fun PanelSectionLabel(
             Icon(
                 icon,
                 contentDescription = null,
-                tint = colors.secondaryText,
+                tint = colors.onChromeVariant,
                 modifier = Modifier.size(15.dp),
             )
             Spacer(Modifier.width(6.dp))
@@ -1606,7 +1611,7 @@ private fun PanelSectionLabel(
         Text(
             text = text.uppercase(),
             style = MaterialTheme.typography.labelSmall,
-            color = colors.secondaryText,
+            color = colors.onChromeVariant,
             letterSpacing = 1.2.sp,
         )
     }
@@ -1618,7 +1623,7 @@ private fun SettingsGroup(colors: ReaderColors, content: @Composable () -> Unit)
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
-            .background(colors.onChrome.copy(alpha = 0.06f)),
+            .background(colors.control),
     ) {
         content()
     }
@@ -1627,7 +1632,7 @@ private fun SettingsGroup(colors: ReaderColors, content: @Composable () -> Unit)
 @Composable
 private fun PanelDivider(colors: ReaderColors) {
     HorizontalDivider(
-        color = colors.onChrome.copy(alpha = 0.08f),
+        color = colors.controlStrong,
         modifier = Modifier.padding(start = 54.dp),
     )
 }
@@ -1671,7 +1676,7 @@ private fun SettingToggleRow(
                 Text(
                     caption,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (fromBook) colors.accent else colors.secondaryText,
+                    color = if (fromBook) colors.accent else colors.onChromeVariant,
                 )
             }
         }
@@ -1680,18 +1685,18 @@ private fun SettingToggleRow(
             checked = checked,
             enabled = enabled,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = colors.chrome,
+                checkedThumbColor = colors.onAccent,
                 checkedTrackColor = colors.accent,
-                uncheckedThumbColor = colors.secondaryText,
-                uncheckedTrackColor = colors.onChrome.copy(alpha = 0.06f),
-                uncheckedBorderColor = colors.secondaryText.copy(alpha = 0.5f),
+                uncheckedThumbColor = colors.onChromeVariant,
+                uncheckedTrackColor = colors.control,
+                uncheckedBorderColor = colors.onChromeVariant.copy(alpha = 0.5f),
                 // A book-controlled switch keeps its normal look, only muted:
                 // greying it out would hide the value it just animated to.
-                disabledCheckedThumbColor = colors.chrome,
+                disabledCheckedThumbColor = colors.onAccent,
                 disabledCheckedTrackColor = colors.accent.copy(alpha = 0.55f),
-                disabledUncheckedThumbColor = colors.secondaryText.copy(alpha = 0.55f),
-                disabledUncheckedTrackColor = colors.onChrome.copy(alpha = 0.06f),
-                disabledUncheckedBorderColor = colors.secondaryText.copy(alpha = 0.3f),
+                disabledUncheckedThumbColor = colors.onChromeVariant.copy(alpha = 0.55f),
+                disabledUncheckedTrackColor = colors.control,
+                disabledUncheckedBorderColor = colors.onChromeVariant.copy(alpha = 0.3f),
             ),
             onCheckedChange = { value ->
                 haptics.performHapticFeedback(
@@ -1735,13 +1740,13 @@ private fun AnimationCard(
                 .size(46.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(
-                    if (selected) colors.accent else colors.onChrome.copy(alpha = 0.10f),
+                    if (selected) colors.accent else colors.controlStrong,
                 ),
         ) {
             Icon(
                 icon,
                 contentDescription = null,
-                tint = if (selected) colors.background else colors.onChrome,
+                tint = if (selected) colors.onAccent else colors.onChrome,
             )
         }
         Spacer(Modifier.height(8.dp))

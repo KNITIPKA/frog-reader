@@ -4,6 +4,8 @@
 
     <!-- Unlocking the app. A normal permission: granted at install, never asked for. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!-- Discover only activities that can process selected text (Android 11+). -->
     <queries>

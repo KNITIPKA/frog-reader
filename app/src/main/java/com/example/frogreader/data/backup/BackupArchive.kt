@@ -6,6 +6,7 @@ import com.example.frogreader.data.model.BackupManifest
 import com.example.frogreader.data.model.BackupMode
 import com.example.frogreader.data.model.BackupSettings
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.data.model.ReadingLogEntry
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.IOException
@@ -26,11 +27,11 @@ class BackupFormatException(message: String, cause: Throwable? = null) : IOExcep
  * Layout:
  *
  *   manifest.json      written first, so a reader can decide before unpacking
- *   library.json       whole books, plus shelves
+ *   library.json       whole books, shelves and the ordered reading queue
  *   stats.json         per-day reading time
  *   settings.json      reader and app settings
  *   books/<id>.<ext>   FULL mode only
- *   covers/<name>      FULL mode only
+ *   covers/<name>      log covers in every mode; other covers in FULL mode
  */
 object BackupArchive {
 
@@ -58,6 +59,19 @@ object BackupArchive {
         val restoredCovers: Set<String>,
     )
 
+    /** Resolve file availability equally for library books and private reading-queue attachments. */
+    internal fun Contents.resolveDocument(booksDir: File, coversDir: File): BackupDocument {
+        fun resolve(book: Book): Book = book.copy(
+            fileName = restoredBookFiles[book.id]
+                ?: book.fileName?.takeIf { File(booksDir, it).exists() },
+            coverFileName = book.coverFileName?.takeIf { File(coversDir, it).exists() },
+        )
+        return document.copy(books = document.books.map(::resolve),
+            readingQueue = document.readingQueue.map { it.copy(attachment = it.attachment?.let(::resolve)) },
+            readingLog = document.readingLog.map { entry -> entry.copy(coverFileName = entry.coverFileName
+                ?.takeIf { it == File(it).name && File(coversDir, it).exists() }) })
+    }
+
     fun write(
         out: OutputStream,
         document: BackupDocument,
@@ -70,6 +84,8 @@ object BackupArchive {
         bookFile: (Book) -> File? = { null },
         coverFile: (Book) -> File? = { null },
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+        /** Log art includes irreplaceable photos, so even DATA archives retain it. */
+        logCoverFile: (ReadingLogEntry) -> File? = { null },
     ) {
         val manifest = BackupManifest(
             appVersion = appVersion,
@@ -77,6 +93,8 @@ object BackupArchive {
             mode = mode,
             bookCount = document.books.size,
             quoteCount = document.books.sumOf { it.quotes.size },
+            readingQueueCount = document.readingQueue.size,
+            readingLogCount = document.readingLog.size,
         )
 
         ZipOutputStream(out.buffered()).use { zip ->
@@ -87,19 +105,26 @@ object BackupArchive {
             zip.putText(STATS, json.encodeToString(ReadingStats.serializer(), stats))
             zip.putText(SETTINGS, json.encodeToString(BackupSettings.serializer(), settings))
 
+            val writtenCovers = HashSet<String>()
+            document.readingLog.forEach { entry ->
+                logCoverFile(entry)?.takeIf { it.exists() && writtenCovers.add(it.name) }?.let { file ->
+                    zip.putFile("$COVERS_DIR${file.name}", file)
+                }
+            }
             if (mode != BackupMode.FULL) {
                 onProgress(document.books.size, document.books.size)
                 return@use
             }
 
-            document.books.forEachIndexed { index, book ->
+            val assets = document.assetBooks
+            assets.forEachIndexed { index, book ->
                 bookFile(book)?.takeIf { it.exists() }?.let { file ->
                     zip.putFile("$BOOKS_DIR${book.id}.${file.extension}", file)
                 }
-                coverFile(book)?.takeIf { it.exists() }?.let { file ->
+                coverFile(book)?.takeIf { it.exists() && writtenCovers.add(it.name) }?.let { file ->
                     zip.putFile("$COVERS_DIR${file.name}", file)
                 }
-                onProgress(index + 1, document.books.size)
+                onProgress(index + 1, assets.size)
             }
         }
     }

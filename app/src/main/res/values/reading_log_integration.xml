@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="backup_reading_log_count">Reading Log: %1$d</string>
+</resources>

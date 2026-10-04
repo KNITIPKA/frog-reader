@@ -21,8 +21,10 @@ import com.example.frogreader.data.backup.SafFolderTarget
 import com.example.frogreader.data.model.BackupManifest
 import com.example.frogreader.data.model.BackupMode
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.data.model.ReadingLogEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -53,6 +55,8 @@ class BackupViewModel(
             val books: Int,
             val quotes: Int,
             val booksWithoutFile: Int,
+            val readingQueueCount: Int = 0,
+            val readingLogCount: Int = 0,
         ) : State
 
         data class Failed(val restoring: Boolean, val message: String) : State
@@ -70,6 +74,7 @@ class BackupViewModel(
     data class LibrarySummary(
         val bookCount: Int = 0,
         val quoteCount: Int = 0,
+        val readingLogCount: Int = 0,
         val totalBookBytes: Long = 0L,
         val totalCoverBytes: Long = 0L,
         /** Source bytes, not the final compressed ZIP size. */
@@ -84,18 +89,20 @@ class BackupViewModel(
         val manifest: BackupManifest?,
     )
 
-    private fun summarizeLibrary(books: List<Book>): LibrarySummary {
+    private fun summarizeLibrary(books: List<Book>, attachments: List<Book> = emptyList(), log: List<ReadingLogEntry> = emptyList()): LibrarySummary {
+        val assets = (books + attachments).distinctBy { it.id }
         // A restored data-only record may retain its historical size while its
         // fileName is null. Stat only files the FULL exporter can actually open.
-        val bookBytes = books.sumOf { book ->
+        val bookBytes = assets.sumOf { book ->
             app.bookRepository.bookFileFor(book)?.length()?.coerceAtLeast(0L) ?: 0L
         }
-        val coverBytes = books.sumOf { book ->
-            app.bookRepository.coverFileFor(book)?.length()?.coerceAtLeast(0L) ?: 0L
-        }
+        val coverBytes = (assets.mapNotNull { app.bookRepository.coverFileFor(it) } +
+            log.mapNotNull { app.bookRepository.coverFileFor(it) }).distinctBy { it.absolutePath }
+            .sumOf { it.length().coerceAtLeast(0L) }
         return LibrarySummary(
             bookCount = books.size,
             quoteCount = books.sumOf { it.quotes.size },
+            readingLogCount = log.size,
             totalBookBytes = bookBytes,
             totalCoverBytes = coverBytes,
             fullBackupEstimatedBytes = bookBytes + coverBytes,
@@ -116,12 +123,13 @@ class BackupViewModel(
 
     private val operationMutex = Mutex()
 
-    val librarySummary: StateFlow<LibrarySummary> = app.bookRepository.books
-        .map(::summarizeLibrary)
+    val librarySummary: StateFlow<LibrarySummary> = combine(app.bookRepository.books, app.bookRepository.readingQueue, app.bookRepository.readingLog) { books, list, log ->
+        summarizeLibrary(books, list.mapNotNull { it.attachment }, log)
+    }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.Eagerly,
-            initialValue = summarizeLibrary(app.bookRepository.books.value),
+            initialValue = summarizeLibrary(app.bookRepository.books.value, app.bookRepository.readingQueue.value.mapNotNull { it.attachment }, app.bookRepository.readingLog.value),
         )
 
     private val _snapshots = MutableStateFlow<List<Snapshot>>(emptyList())
@@ -370,6 +378,8 @@ class BackupViewModel(
                 books = summary.books,
                 quotes = summary.quotes,
                 booksWithoutFile = summary.booksWithoutFile,
+                readingQueueCount = summary.readingQueueCount,
+                readingLogCount = summary.readingLogCount,
             )
             refreshSnapshots()
         }

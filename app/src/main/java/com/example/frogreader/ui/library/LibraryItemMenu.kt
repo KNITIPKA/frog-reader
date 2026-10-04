@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.library
 
+import com.example.frogreader.ui.theme.floatingSurface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -136,7 +137,8 @@ internal fun LibraryItemMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
-        containerColor = scheme.surfaceContainerHigh,
+        containerColor = scheme.floatingSurface,
+        tonalElevation = 0.dp,
         modifier = Modifier.width(216.dp),
     ) {
         FrogMenuItem(

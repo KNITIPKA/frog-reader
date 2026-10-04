@@ -1,5 +1,6 @@
 package com.example.frogreader.data.model
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -77,8 +78,13 @@ data class UserBookData(
     val status: ReadingStatus = ReadingStatus.NONE,
     /** 1..5, or null when the book has not been rated. */
     val rating: Int? = null,
+    val ratingHalfStars: Int? = null,
+    val activeReadingLogId: String? = null,
+    val suppressReadingLog: Boolean = false,
     val review: String? = null,
     val reviewUpdatedAtMillis: Long? = null,
+    @SerialName("readingListNote")
+    val readingQueueNote: String? = null,
     /**
      * This book's own reading settings (font, size, margins, mode…).
      * Null = the book still follows the app-wide "last used" settings.
@@ -91,8 +97,9 @@ data class UserBookData(
     /** True when there is nothing here worth a line in userdata.json. */
     val isEmpty: Boolean
         get() = startedAtMillis == null && finishedAtMillis == null &&
-            status == ReadingStatus.NONE && rating == null && review == null &&
-            readerSettings == null
+            status == ReadingStatus.NONE && rating == null && ratingHalfStars == null && review == null &&
+            activeReadingLogId == null && !suppressReadingLog &&
+            readerSettings == null && readingQueueNote == null
 }
 
 /** Where the reading got to. The one part that is written constantly. */
@@ -131,6 +138,14 @@ data class LibraryIndex(
 @Serializable
 data class UserDataStore(
     val userData: Map<String, UserBookData> = emptyMap(),
+    /** Ordered from highest to lowest reading priority. */
+    @SerialName("readingList")
+    val readingQueue: List<ReadingQueueEntry> = emptyList(),
+    @SerialName("readingListUpdatedAtMillis")
+    val readingQueueUpdatedAtMillis: Long = 0L,
+    /** Manual order is independent of whichever date sort the screen displays. */
+    val readingLog: List<ReadingLogEntry> = emptyList(),
+    val readingLogUpdatedAtMillis: Long = 0L,
     /** Keyed by quote id, not by book id. */
     val quotes: Map<String, Quote> = emptyMap(),
     /** Keyed by bookmark id. */
@@ -179,8 +194,12 @@ fun BookRecord.withUserData(
     readingSeconds = prog?.readingSeconds ?: 0L,
     status = user?.status ?: ReadingStatus.NONE,
     rating = user?.rating,
+    ratingHalfStars = user?.ratingHalfStars,
+    activeReadingLogId = user?.activeReadingLogId,
+    suppressReadingLog = user?.suppressReadingLog ?: false,
     review = user?.review,
     reviewUpdatedAtMillis = user?.reviewUpdatedAtMillis,
+    readingQueueNote = user?.readingQueueNote,
     readerSettings = user?.readerSettings,
     genres = genres,
     series = series,
@@ -221,8 +240,12 @@ fun Book.toUserData(): UserBookData = UserBookData(
     finishedAtMillis = finishedAtMillis,
     status = status,
     rating = rating,
+    ratingHalfStars = ratingHalfStars,
+    activeReadingLogId = activeReadingLogId,
+    suppressReadingLog = suppressReadingLog,
     review = review,
     reviewUpdatedAtMillis = reviewUpdatedAtMillis,
+    readingQueueNote = readingQueueNote,
     readerSettings = readerSettings,
 )
 

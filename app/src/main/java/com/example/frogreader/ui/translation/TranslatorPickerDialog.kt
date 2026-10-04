@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.translation
 
+import com.example.frogreader.ui.theme.floatingSurface
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -60,6 +61,8 @@ fun TranslatorPickerDialog(
 ) {
     val apps = rememberTranslatorApps()
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.floatingSurface,
+        tonalElevation = 0.dp,
         onDismissRequest = { if (!busy) onDismiss() },
         title = { Text(stringResource(R.string.settings_default_translator)) },
         text = {

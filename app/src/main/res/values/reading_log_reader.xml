@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="reading_log_reader_started">Started</string>
+    <string name="reading_log_reader_finished">Finished</string>
+    <string name="reading_log_reader_elapsed">Days elapsed</string>
+    <string name="reading_log_reader_active_time">Reading time</string>
+    <string name="reading_log_reader_date_unknown">Unknown</string>
+    <string name="reading_log_reader_rate_review">Rate and review</string>
+    <string name="reading_log_reader_review">Review</string>
+    <string name="reading_log_reader_rating_value">%1$s / 5</string>
+    <string name="reading_log_reader_saved">This reading is saved in Reading Log, even without a rating.</string>
+    <string name="reading_log_reader_saving">Saving this reading…</string>
+    <string name="reading_log_reader_end_title">End of book</string>
+    <string name="reading_log_reader_previous_saved">Your previous reading is kept in Reading Log.</string>
+    <string name="reading_log_reader_not_logged">This reading was completed without a Reading Log entry.</string>
+    <string name="reading_log_reader_reread_title">Start another reading?</string>
+    <string name="reading_log_reader_reread_message">Your previous reading stays in Reading Log. Choose whether to add a separate entry for this reading.</string>
+    <string name="reading_log_reader_reread_log">Read again · add to Log</string>
+    <string name="reading_log_reader_reread_unlogged">Read without logging</string>
+    <string name="reading_log_reader_reread_keep">Keep previous reading</string>
+    <string name="reading_log_reader_reread_error">Could not start a new reading. Please try again.</string>
+    <string name="reading_log_reader_save_error_title">Reading could not be saved</string>
+    <string name="reading_log_reader_save_error">Your unsaved reading time is kept here. Try again before leaving this screen.</string>
+    <string name="reading_log_reader_retry">Retry</string>
+</resources>

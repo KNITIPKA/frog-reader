@@ -7,5 +7,5 @@
          behind them — Light on a light phone, Midnight on a dark one — and the
          window underneath is repainted with the user's ACTUAL theme in
          onCreate, so a mismatch is a crossfade rather than a flash. -->
-    <color name="splash_background">#F7FBF7</color>
+    <color name="splash_background">#F4F6F7</color>
 </resources>

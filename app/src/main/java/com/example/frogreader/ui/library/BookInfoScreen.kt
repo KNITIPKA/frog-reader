@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.library
 
+import com.example.frogreader.ui.theme.floatingSurface
 import android.content.Intent
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
@@ -12,8 +13,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
@@ -29,14 +32,53 @@ import com.example.frogreader.R
 import com.example.frogreader.data.BookSharing
 import com.example.frogreader.data.bookTransferFormat
 import com.example.frogreader.data.bookTransferName
+import com.example.frogreader.ui.profile.ReadingLogField
+import com.example.frogreader.ui.profile.ReadingLogRatingEditor
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BookInfoScreen(bookId: String, onBack: () -> Unit, onEdit: () -> Unit) {
-    val model: BookInfoViewModel = viewModel(factory = BookInfoViewModel.factory(bookId))
+fun BookInfoScreen(bookId: String, onBack: () -> Unit, onEdit: () -> Unit,
+    readingLogId: String? = null, reviewRequested: Boolean = false,
+    onEditReadingLog: (String) -> Unit = {}, onOpenReadingLog: (String) -> Unit = {},
+) {
+    val model: BookInfoViewModel = viewModel(factory = BookInfoViewModel.factory(bookId, readingLogId))
     val state by model.state.collectAsStateWithLifecycle()
+    var reviewHandled by rememberSaveable { mutableStateOf(false) }
+    var reviewSheet by rememberSaveable { mutableStateOf(false) }
+    var draftRating by rememberSaveable { mutableStateOf<Int?>(null) }
+    var draftReview by rememberSaveable { mutableStateOf("") }
+    var originalRating by rememberSaveable { mutableStateOf<Int?>(null) }
+    var originalReview by rememberSaveable { mutableStateOf("") }
+    var discardReview by rememberSaveable { mutableStateOf(false) }
+    val reviewDirty = draftRating != originalRating || draftReview != originalReview
+    val currentReviewBusy by rememberUpdatedState(state.reviewSaving)
+    val currentReviewDirty by rememberUpdatedState(reviewDirty)
+    val closeReview = { if (!state.reviewSaving) { if (reviewDirty) discardReview = true else reviewSheet = false } }
+    val reviewSheetState = key(reviewSheet) { rememberBottomSheetState(initialValue = SheetValue.Hidden,
+        enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded), confirmValueChange = { target ->
+            if (target != SheetValue.Hidden) true
+            else if (currentReviewBusy) false
+            else if (currentReviewDirty) { discardReview = true; false } else true
+        }) }
+    val editReview = {
+        val book = state.book
+        val entryId = state.readingLogEntry?.id ?: book?.activeReadingLogId?.takeIf { !book.suppressReadingLog }
+        if (entryId != null) onEditReadingLog(entryId)
+        else if (book != null) {
+            draftRating = book.ratingHalfStars ?: book.rating?.times(2)
+            draftReview = book.review.orEmpty()
+            originalRating = draftRating
+            originalReview = draftReview
+            reviewSheet = true
+        }
+    }
+    LaunchedEffect(reviewRequested, state.loading) {
+        if (reviewRequested && !reviewHandled && !state.loading && state.book != null) { reviewHandled = true; editReview() }
+    }
+    LaunchedEffect(state.reviewSavedGeneration) { if (state.reviewSavedGeneration > 0) reviewSheet = false }
     val context = LocalContext.current
     val activity = LocalActivity.current
     val surface = MaterialTheme.colorScheme.surface
@@ -57,10 +99,39 @@ fun BookInfoScreen(bookId: String, onBack: () -> Unit, onEdit: () -> Unit) {
             model.shareFinished(error.message ?: "No app could open the share menu.")
         }
     }
-    BookInfoContent(state, onBack, onEdit, model::share)
+    BookInfoContent(state, onBack, onEdit, model::share, editReview, onOpenReadingLog)
+    if (reviewSheet) ModalBottomSheet(onDismissRequest = closeReview, sheetState = reviewSheetState,
+        containerColor = MaterialTheme.colorScheme.floatingSurface,
+        sheetGesturesEnabled = !state.reviewSaving, modifier = Modifier.imePadding()) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.reading_log_review_action), Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+                FilledTonalIconButton(onClick = closeReview, enabled = !state.reviewSaving) {
+                    Icon(Icons.Rounded.Close, stringResource(R.string.reading_queue_close))
+                }
+            }
+            Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ReadingLogRatingEditor(draftRating, { draftRating = it }, !state.reviewSaving)
+                ReadingLogField(draftReview, { draftReview = it.take(20000) }, stringResource(R.string.reading_log_review), state.reviewSaving,
+                    singleLine = false, minLines = 3, maxLines = 6)
+                if (state.reviewError) Text(stringResource(R.string.reading_log_save_failed), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            Button(onClick = { model.saveReview(draftRating, draftReview) }, enabled = !state.reviewSaving,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), shape = RoundedCornerShape(18.dp)) {
+                if (state.reviewSaving) { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp); Spacer(Modifier.width(8.dp)) }
+                Text(stringResource(R.string.edit_save))
+            }
+        }
+    }
+    if (discardReview) AlertDialog(onDismissRequest = { discardReview = false }, containerColor = MaterialTheme.colorScheme.floatingSurface,
+        title = { Text(stringResource(R.string.reading_queue_discard_title)) }, text = { Text(stringResource(R.string.reading_queue_discard_hint)) },
+        confirmButton = { TextButton(onClick = { discardReview = false; reviewSheet = false }) { Text(stringResource(R.string.reading_queue_discard)) } },
+        dismissButton = { TextButton(onClick = { discardReview = false }) { Text(stringResource(R.string.reading_queue_keep_editing)) } })
     if (state.shareError != null) {
         var details by remember(state.shareError) { mutableStateOf(false) }
         AlertDialog(
+            containerColor = MaterialTheme.colorScheme.floatingSurface,
+            tonalElevation = 0.dp,
             onDismissRequest = model::dismissError,
             title = { Text(stringResource(R.string.book_info_share_error)) },
             text = {
@@ -79,7 +150,9 @@ fun BookInfoScreen(bookId: String, onBack: () -> Unit, onEdit: () -> Unit) {
 }
 
 @Composable
-internal fun BookInfoContent(state: BookInfoState, onBack: () -> Unit, onEdit: () -> Unit, onShare: () -> Unit) {
+internal fun BookInfoContent(state: BookInfoState, onBack: () -> Unit, onEdit: () -> Unit, onShare: () -> Unit,
+    onReview: () -> Unit = {}, onOpenReadingLog: (String) -> Unit = {},
+) {
     val scheme = MaterialTheme.colorScheme
     var showShareProgress by remember { mutableStateOf(false) }
     LaunchedEffect(state.sharing) {
@@ -95,8 +168,8 @@ internal fun BookInfoContent(state: BookInfoState, onBack: () -> Unit, onEdit: (
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.metadata_back)) }
             Text(stringResource(R.string.book_info_title), style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             TextButton(
-                onClick = { if (!state.sharing) onEdit() },
-                enabled = state.fileAvailable && state.book?.format?.supportsMetadataEditing == true && !showShareProgress,
+                onClick = { if (!state.sharing) { if (state.readingLogEntry != null) onReview() else onEdit() } },
+                enabled = (state.readingLogEntry != null || state.fileAvailable && state.book?.format?.supportsMetadataEditing == true) && !showShareProgress,
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
             ) {
                 Icon(Icons.Rounded.Edit, null, Modifier.size(18.dp))
@@ -125,10 +198,20 @@ internal fun BookInfoContent(state: BookInfoState, onBack: () -> Unit, onEdit: (
                 Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Column(Modifier.widthIn(max = 680.dp).fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                    BookIdentityHeader(book.title, book.author, state.cover)
-                    if (!state.fileLoading && !state.fileAvailable) Text(stringResource(R.string.book_info_missing_file), color = scheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    BookIdentityHeader(book.title, book.author, state.cover, series = book.series)
+                    if (state.readingLogEntry != null) ReadingLogDetails(state.readingLogEntry, onReview)
+                    else BookReadingReview(book.ratingHalfStars ?: book.rating?.times(2), book.review, onReview)
+                    val history = state.readingHistory.filter { it.id != state.readingLogEntry?.id }
+                    if (history.isNotEmpty()) ReadingLogHistory(history, onOpenReadingLog)
+                    if (!state.logOnly && !state.fileLoading && !state.fileAvailable) Text(stringResource(R.string.book_info_missing_file), color = scheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    if (!state.logOnly) {
                     SelectionContainer {
                         Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                            book.readingQueueNote?.takeIf { it.isNotBlank() }?.let { note ->
+                                InfoSection(stringResource(R.string.reading_queue_saved_note)) {
+                                    Text(note, style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
                             InfoSection(stringResource(R.string.book_info_publication)) {
                                 val unspecified = stringResource(R.string.book_info_not_specified)
                                 InfoValue(stringResource(R.string.details_publisher), book.publisher?.takeIf { it.isNotBlank() } ?: unspecified)
@@ -163,6 +246,7 @@ internal fun BookInfoContent(state: BookInfoState, onBack: () -> Unit, onEdit: (
                             }
                         }
                     }
+                    }
                     Spacer(Modifier.height(4.dp))
                 }
             }
@@ -174,7 +258,7 @@ internal fun BookInfoContent(state: BookInfoState, onBack: () -> Unit, onEdit: (
 private fun InfoSection(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionLabel(title, Modifier.padding(start = 4.dp))
-        Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerLowest) {
             Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(16.dp), content = content)
         }
     }

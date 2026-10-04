@@ -75,7 +75,7 @@ class BackupArchiveTest {
         shelves = listOf(Shelf("s1", "Favourites", books.map { it.id }, 1_000L)),
     )
 
-    private val stats = ReadingStats(mapOf("2026-08-09" to 3_600L))
+    private val stats = ReadingStats(mapOf("2026-08-09" to 3_600L), lastReadAtMillis = 1_785_000_000_000L)
     private val settings = BackupSettings(
         reader = ReaderSettings(fontSizeSp = 21f),
         app = AppSettings(
@@ -189,6 +189,23 @@ class BackupArchiveTest {
 
         assertNull(contents.document.books.single().fileName)
         assertEquals(1, contents.document.books.single().quotes.size)
+    }
+
+    @Test
+    fun `both backup modes preserve multilingual thoughts exact anchors and orphaned bookmarks`() {
+        val original = book("saved", fileName = null).copy(
+            quotes = listOf(Quote("q", "Текст цитати\nSecond paragraph", 3, 1000,
+                startItem = 17, startChar = 45, endItem = 19, endChar = 12,
+                note = "Мої думки 🐸\nAnother line", bookId = "saved", updatedAtMillis = 2000)),
+            bookmarks = listOf(Bookmark("b", 24, 4, "Remember this", 1000,
+                orphaned = true, bookId = "saved", updatedAtMillis = 3000)),
+        )
+        for (mode in BackupMode.entries) {
+            val restored = BackupArchive.read(ByteArrayInputStream(writeArchive(document(original), mode)), booksDir, coversDir)
+            assertEquals(original.quotes, restored.document.books.single().quotes)
+            assertEquals(original.bookmarks, restored.document.books.single().bookmarks)
+            assertNull(restored.document.books.single().fileName)
+        }
     }
 
     // --------------------------------------------------------- the manifest

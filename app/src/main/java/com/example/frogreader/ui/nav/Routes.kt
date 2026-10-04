@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.nav
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -14,10 +15,29 @@ data object LibraryRoute
 data object ProfileRoute
 
 @Serializable
+// Stable serialized names preserve navigation state from before the UI rename.
+@SerialName("com.example.frogreader.ui.nav.QuotesBookmarksRoute")
+data object QuotesAndBookmarksRoute
+
+@Serializable
+@SerialName("com.example.frogreader.ui.nav.ReadingListRoute")
+data object ReadingQueueRoute
+
+@Serializable
+@SerialName("com.example.frogreader.ui.nav.ReadingHistoryRoute")
+data object ReadingLogRoute
+
+@Serializable
+data class ReadingLogInfoRoute(val entryId: String)
+
+@Serializable
+data object ReadingLogCameraRoute
+
+@Serializable
 data object TrackerRoute
 
 @Serializable
-data class ReaderRoute(val bookId: String)
+data class ReaderRoute(val bookId: String, val quoteId: String? = null, val bookmarkId: String? = null)
 
 @Serializable
 data object SettingsRoute
@@ -36,4 +56,4 @@ enum class NavTab {
 data class BookMetadataRoute(val bookId: String)
 
 @Serializable
-data class BookInfoRoute(val bookId: String)
+data class BookInfoRoute(val bookId: String, val reviewRequested: Boolean = false)

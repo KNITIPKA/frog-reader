@@ -10,6 +10,14 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -34,6 +43,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -54,6 +66,57 @@ import androidx.compose.ui.text.PlatformTextStyle
  * subtly wrong in ten places at once — a border here, a stock Material shape
  * there — and the app stops reading as one thing.
  */
+
+/** Shared geometry keeps the two top-level screens aligned when switching tabs. */
+internal val FrogHeroCorner = 28.dp
+internal val FrogHeroPadding = 14.dp
+internal val FrogHeroContentHeight = 147.dp
+
+@Composable
+internal fun frogHeroHeight() = FrogHeroPadding * 2 +
+    FrogHeroContentHeight * LocalDensity.current.fontScale.coerceAtLeast(1f)
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun FrogHeaderContent(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    searchHint: String,
+    onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier,
+    searchEnabled: Boolean = true,
+    controlColor: Color? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth()
+            .padding(WindowInsets.systemBarsIgnoringVisibility
+                .only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal).asPaddingValues())
+            .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FrogSearchField(
+                query = query,
+                onQueryChange = onQueryChange,
+                hint = searchHint,
+                enabled = searchEnabled,
+                containerColor = controlColor,
+                modifier = Modifier.weight(1f),
+            )
+            GlassIconButton(
+                icon = Icons.Rounded.Settings,
+                contentDescription = stringResource(R.string.settings_title),
+                onClick = onOpenSettings,
+                containerColor = controlColor,
+            )
+        }
+        content()
+    }
+}
 
 /**
  * A button whose corners tighten when pressed.
@@ -107,6 +170,8 @@ internal fun FrogSearchField(
     onQueryChange: (String) -> Unit,
     hint: String,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    containerColor: Color? = null,
 ) {
     val frog = LocalFrogColors.current
 
@@ -114,7 +179,8 @@ internal fun FrogSearchField(
         modifier = modifier
             .height(44.dp)
             .clip(RoundedCornerShape(22.dp))
-            .background(frog.glass)
+            .background(containerColor ?: frog.glass)
+            .then(if (enabled) Modifier else Modifier.semantics(mergeDescendants = true) { disabled() })
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
@@ -134,9 +200,10 @@ internal fun FrogSearchField(
                     fontWeight = FontWeight.Normal,
                     color = frog.ink2,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            BasicTextField(
+            if (enabled) BasicTextField(
                 value = query,
                 onValueChange = onQueryChange,
                 singleLine = true,
@@ -150,7 +217,7 @@ internal fun FrogSearchField(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        if (query.isNotEmpty()) {
+        if (enabled && query.isNotEmpty()) {
             Icon(
                 imageVector = Icons.Rounded.Close,
                 contentDescription = stringResource(R.string.library_search_clear),
@@ -170,13 +237,14 @@ internal fun GlassIconButton(
     contentDescription: String?,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    containerColor: Color? = null,
 ) {
     val frog = LocalFrogColors.current
     Box(
         modifier = modifier
             .size(42.dp)
             .clip(CircleShape)
-            .background(frog.glass)
+            .background(containerColor ?: frog.glass)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

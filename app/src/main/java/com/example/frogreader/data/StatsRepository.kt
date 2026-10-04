@@ -16,6 +16,8 @@ import java.time.LocalDate
 @Serializable
 data class ReadingStats(
     val dailySeconds: Map<String, Long> = emptyMap(),
+    /** End of the latest qualified foreground reading, absent in older backups. */
+    val lastReadAtMillis: Long? = null,
 ) {
     fun secondsOn(date: LocalDate): Long = dailySeconds[date.toString()] ?: 0L
 }
@@ -37,18 +39,20 @@ class StatsRepository(context: Context) {
     private val _stats = MutableStateFlow(store.readOrDefault(ReadingStats()))
     val stats = _stats.asStateFlow()
 
-    suspend fun addSeconds(date: LocalDate, seconds: Long) {
+    suspend fun addSeconds(date: LocalDate, seconds: Long, lastReadAtMillis: Long? = null) {
         if (seconds <= 0) return
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 val key = date.toString()
-                val updated = ReadingStats(
+                val updated = _stats.value.copy(
                     dailySeconds = _stats.value.dailySeconds.toMutableMap().apply {
                         this[key] = (this[key] ?: 0L) + seconds
                     },
+                    lastReadAtMillis = listOfNotNull(_stats.value.lastReadAtMillis, lastReadAtMillis)
+                        .filter { it > 0L }.maxOrNull(),
                 )
-                _stats.value = updated
                 store.write(updated)
+                _stats.value = updated
             }
         }
     }

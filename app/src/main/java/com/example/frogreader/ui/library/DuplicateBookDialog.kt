@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.library
 
+import com.example.frogreader.ui.theme.floatingSurface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -103,6 +104,8 @@ fun DuplicateBookDialog(
     val sharedCover = !conflict.coverDiffers
 
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.floatingSurface,
+        tonalElevation = 0.dp,
         onDismissRequest = { onChoice(ConflictChoice.CANCEL, false) },
         title = {
             Text(

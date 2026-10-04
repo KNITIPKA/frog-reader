@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.library
 
+import com.example.frogreader.ui.theme.floatingSurface
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -31,9 +32,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -52,11 +50,8 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.ViewAgenda
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -86,6 +81,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.lerp
 import androidx.compose.ui.graphics.Brush
@@ -109,7 +108,9 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -216,12 +217,10 @@ fun LibraryScreen(
     onOpenSettings: () -> Unit = {},
     onEditBook: (Book) -> Unit = {},
     onBookInfo: (Book) -> Unit = {},
-    /**
-     * Whether the add-a-book button should be on screen. False while a folder
-     * is open or a selection is running: the FAB belongs to the library behind
-     * them, and it lands on top of the folder card and the selection bar.
-     */
-    onFabVisible: (Boolean) -> Unit = {},
+    /** Shared navigation and add button visibility, including library overlays. */
+    onDockVisible: (Boolean) -> Unit = {},
+    onTabSwipeEnabled: (Boolean) -> Unit = {},
+    dockScrollEnabled: Boolean = true,
 ) {
     val entries by viewModel.entries.collectAsStateWithLifecycle()
     val books by viewModel.books.collectAsStateWithLifecycle()
@@ -313,13 +312,48 @@ fun LibraryScreen(
         viewModel.consumeOpenShelfRequest()
     }
 
-    // The FAB is the library's, so it steps out of the way of anything laid
-    // over the library — and comes back if this screen leaves while one of
-    // those is still up.
-    val fabWanted = openShelfId == null && !selection.active && addBooksToShelf == null
-    val reportFab by rememberUpdatedState(onFabVisible)
-    LaunchedEffect(fabWanted) { reportFab(fabWanted) }
-    DisposableEffect(Unit) { onDispose { reportFab(true) } }
+    val dockAvailable = openShelfId == null && !selection.active && addBooksToShelf == null
+    val reportDock by rememberUpdatedState(onDockVisible)
+    val reportTabSwipe by rememberUpdatedState(onTabSwipeEnabled)
+    val observeDockScroll by rememberUpdatedState(dockScrollEnabled && dockAvailable)
+    val gridState = rememberLazyGridState()
+    val dockScroll = remember(density) {
+        LibraryDockScrollState(
+            hideThreshold = with(density) { 20.dp.toPx() },
+            showThreshold = with(density) { 12.dp.toPx() },
+        )
+    }
+    val dockScrollConnection = remember(dockScroll) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // Observe the gesture BEFORE the grid consumes it: short lists
+                // and either end of a long list still produce these deltas.
+                // Fling/overscroll settling cannot reverse the user's intent.
+                if (observeDockScroll && source == NestedScrollSource.UserInput &&
+                    kotlin.math.abs(available.y) > kotlin.math.abs(available.x)
+                ) {
+                    reportDock(dockScroll.onDrag(available.y))
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                dockScroll.endGesture()
+                return Velocity.Zero
+            }
+        }
+    }
+    LaunchedEffect(dockAvailable, dockScrollEnabled, dockScroll) {
+        dockScroll.reset()
+        reportDock(dockAvailable)
+        reportTabSwipe(dockAvailable)
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            reportDock(true)
+            reportTabSwipe(true)
+        }
+    }
 
     // Ticks whose entries have been deleted out from under them. Books INSIDE a
     // shelf count as still there: they are not top-level entries, and dropping
@@ -401,9 +435,7 @@ fun LibraryScreen(
         pop.entryId = id
         viewModel.consumeArrival()
     }
-    val gridState = rememberLazyGridState()
 
-    // Toggling the mode swaps every tile for a row of a completely different
     // shape. Done in one frame it reads as a stutter, so fade the entries out,
     // relayout while they are invisible, and fade them back — the Material
     // fade-through. `renderMode` is what is actually on screen; `viewMode` is
@@ -512,7 +544,7 @@ fun LibraryScreen(
                 // column count keeps every entry at span 1 in both modes, which
                 // is what lets the keys below stay stable.
                 columns = GridCells.Fixed(if (renderMode == LibraryViewMode.GRID) 3 else 1),
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().nestedScroll(dockScrollConnection),
                 contentPadding = PaddingValues(
                     start = SidePadding,
                     end = SidePadding,
@@ -998,49 +1030,15 @@ private fun LibraryHeader(
 ) {
     val frog = LocalFrogColors.current
 
-    Column(
+    FrogHeaderContent(
+        query = query,
+        onQueryChange = onQueryChange,
+        searchHint = stringResource(R.string.library_search_hint),
+        onOpenSettings = onOpenSettings,
         modifier = modifier
-            .fillMaxWidth()
             .clip(RoundedCornerShape(bottomStart = 36.dp, bottomEnd = 36.dp))
-            .background(Brush.verticalGradient(listOf(frog.headerTop, frog.headerBottom)))
-            // NOT statusBarsPadding(). The reader hides the system bars, so on
-            // the way back from a book this composes while the status bar is
-            // still gone: the inset reads 0, the header sits that much too
-            // high, and everything slides down as the bar animates back in.
-            // The reading surface already sizes itself the same way.
-            .padding(WindowInsets.statusBarsIgnoringVisibility.asPaddingValues())
-            .padding(bottom = 8.dp),
+            .background(Brush.verticalGradient(listOf(frog.headerTop, frog.headerBottom))),
     ) {
-        Row(
-            // 16dp, the same inset the hero card below uses, so the search
-            // field's left edge and the gear's right edge line up with the
-            // card. The mock had the row at 12 and the card at 16.
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            SearchField(
-                query = query,
-                onQueryChange = onQueryChange,
-                modifier = Modifier.weight(1f),
-            )
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(frog.glass)
-                    .clickable(onClick = onOpenSettings),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Settings,
-                    contentDescription = stringResource(R.string.settings_title),
-                    tint = frog.ink2,
-                    modifier = Modifier.size(21.dp),
-                )
-            }
-        }
-
         if (heroBook != null) {
             HeroCard(
                 book = heroBook,
@@ -1049,24 +1047,9 @@ private fun LibraryHeader(
                 onDetails = onHeroDetails,
                 onEdit = onHeroEdit,
                 onDelete = onHeroDelete,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp),
             )
         }
     }
-}
-
-@Composable
-private fun SearchField(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    FrogSearchField(
-        query = query,
-        onQueryChange = onQueryChange,
-        hint = stringResource(R.string.library_search_hint),
-        modifier = modifier,
-    )
 }
 
 // -------------------------------------------------------------- hero card
@@ -1090,14 +1073,14 @@ private fun HeroCard(
     val percent = (fraction * 100).roundToInt()
 
     Surface(
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(FrogHeroCorner),
         color = scheme.surfaceContainerLowest,
-        shadowElevation = 8.dp,
+        shadowElevation = 2.dp,
         modifier = modifier.fillMaxWidth(),
     ) {
         Row(
-            modifier = Modifier.padding(14.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.height(frogHeroHeight()).padding(FrogHeroPadding),
+            horizontalArrangement = Arrangement.spacedBy(FrogHeroPadding),
         ) {
             HeroCover(
                 book = book,
@@ -1106,82 +1089,45 @@ private fun HeroCard(
             )
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = book.title,
-                    fontSize = 18.sp,
-                    lineHeight = 22.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = (-0.3).sp,
-                    color = frog.ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                book.author?.let { author ->
-                    Spacer(Modifier.height(2.dp))
+                // The title block takes whatever the progress and the buttons
+                // leave, and the title sizes itself to it: a short title is set
+                // large on one line, a long one steps down until two lines hold
+                // it, and only a truly long one is cut. The card stays one
+                // height either way — it is shared geometry with the profile
+                // tab, and a header that jumps with the book is worse than a
+                // title that shrinks.
+                Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     Text(
-                        text = author,
-                        fontSize = 12.sp,
-                        lineHeight = 16.sp,
-                        color = scheme.onSurfaceVariant,
-                        maxLines = 1,
+                        text = book.title,
+                        fontWeight = FontWeight.SemiBold,
+                        lineHeight = 1.16.em,
+                        letterSpacing = (-0.3).sp,
+                        color = frog.ink,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        autoSize = TextAutoSize.StepBased(
+                            minFontSize = 14.sp,
+                            maxFontSize = 20.sp,
+                            stepSize = 0.5.sp,
+                        ),
+                        // Weighted, so the author is measured first and the
+                        // title is sized against what is left after it.
+                        modifier = Modifier.weight(1f, fill = false),
                     )
-                }
-
-                Spacer(Modifier.height(8.dp).weight(1f))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = buildAnnotatedString {
-                            withStyle(
-                                SpanStyle(
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    letterSpacing = (-0.3).sp,
-                                    color = scheme.primary,
-                                ),
-                            ) { append("$percent%") }
-                            append("  ")
-                            withStyle(
-                                SpanStyle(
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    letterSpacing = 0.8.sp,
-                                    color = scheme.onSurfaceVariant,
-                                ),
-                            ) { append(stringResource(R.string.library_read_label).uppercase()) }
-                        },
-                        // SpanStyle carries no line height — it belongs here.
-                        lineHeight = 15.sp,
-                        maxLines = 1,
-                    )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Schedule,
-                            contentDescription = null,
-                            tint = scheme.primary.copy(alpha = 0.75f),
-                            modifier = Modifier.size(13.dp),
-                        )
+                    book.author?.let { author ->
+                        Spacer(Modifier.height(3.dp))
                         Text(
-                            text = formatReadingTime(book.readingSeconds).uppercase(),
-                            fontSize = 10.sp,
-                            lineHeight = 15.sp,
-                            fontWeight = FontWeight.Medium,
-                            letterSpacing = 0.6.sp,
+                            text = author,
+                            fontSize = 12.5.sp,
+                            lineHeight = 16.sp,
                             color = scheme.onSurfaceVariant,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
 
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1198,30 +1144,51 @@ private fun HeroCard(
                     )
                 }
 
-                Spacer(Modifier.height(7.dp))
+                // Progress and chapter remainder share the full width below
+                // the bar; the latter can shrink on narrow screens.
+                Spacer(Modifier.height(6.dp))
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.MenuBook,
-                        contentDescription = null,
-                        tint = scheme.primary,
-                        modifier = Modifier.size(13.dp),
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(
+                                SpanStyle(
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = (-0.2).sp,
+                                    color = scheme.primary,
+                                ),
+                            ) { append("$percent%") }
+                            withStyle(SpanStyle(color = scheme.onSurfaceVariant)) {
+                                append(" ")
+                                append(stringResource(R.string.library_read_label))
+                            }
+                        },
+                        fontSize = 12.sp,
+                        // SpanStyle carries no line height — it belongs here.
+                        lineHeight = 16.sp,
+                        maxLines = 1,
                     )
                     Text(
-                        text = chapterLine(book).uppercase(),
-                        fontSize = 10.sp,
-                        lineHeight = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        letterSpacing = 0.5.sp,
-                        color = frog.ink2,
+                        text = chapterLine(book),
+                        lineHeight = 16.sp,
+                        color = scheme.onSurfaceVariant,
+                        textAlign = TextAlign.End,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        autoSize = TextAutoSize.StepBased(
+                            minFontSize = 10.sp,
+                            maxFontSize = 12.sp,
+                            stepSize = 0.5.sp,
+                        ),
+                        modifier = Modifier.weight(1f),
                     )
                 }
 
-                Spacer(Modifier.height(11.dp))
+                Spacer(Modifier.height(10.dp))
                 Row(
                     modifier = Modifier.height(40.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1294,7 +1261,7 @@ private fun HeroCover(
 
     Box(
         modifier = Modifier
-            .size(width = 98.dp, height = 147.dp)
+            .size(width = 98.dp, height = FrogHeroContentHeight)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
@@ -1326,7 +1293,8 @@ private fun HeroMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(24.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        containerColor = MaterialTheme.colorScheme.floatingSurface,
+        tonalElevation = 0.dp,
         modifier = Modifier.width(204.dp),
     ) {
         if (canEdit) HeroMenuItem(
@@ -1641,7 +1609,10 @@ private fun BookGridTile(
                 .combinedClickable(onLongClick = onLongClick, onClick = onClick)
                 .selectionOverlay(selected, RoundedCornerShape(18.dp)),
         ) {
-            BookCover(book = book, coverFile = coverFile, titleSize = 10.sp, padding = 9.dp)
+            // No title on a coverless plate: the caption below already carries
+            // it, and the same words twice on one tile read as a rendering bug.
+            BookCover(book = book, coverFile = coverFile, titleSize = 0.sp, padding = 9.dp)
+            CoverCaption(title = book.title, author = book.author)
             if (percent > 0) {
                 Box(
                     modifier = Modifier
@@ -1669,12 +1640,6 @@ private fun BookGridTile(
                 )
             }
         }
-        Spacer(Modifier.height(7.dp))
-        TileTitle(text = book.title)
-        book.author?.let { author ->
-            Spacer(Modifier.height(2.dp))
-            TileSubtitle(text = author)
-        }
     }
 }
 
@@ -1699,89 +1664,110 @@ private fun ShelfGridTile(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
-                // The artwork pops, the label below it does not: an overshoot
-                // spring on 12sp type is visibly jittery.
-                .graphicsLayer {
-                    scaleX = lerp(ShelfPopFrom, 1f, arrival.value)
-                    scaleY = scaleX
-                }
                 .clip(RoundedCornerShape(22.dp))
                 .background(frog.folder)
                 .combinedClickable(onLongClick = onLongClick, onClick = onClick)
                 .selectionOverlay(selected, RoundedCornerShape(22.dp)),
-            contentAlignment = Alignment.Center,
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                repeat(2) { row ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        repeat(2) { column ->
-                            val slot = row * 2 + column
-                            val book = entry.books.getOrNull(slot)
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .aspectRatio(2f / 3f)
-                                    // Mini covers land one after another, so a
-                                    // new folder reads as books dropping in
-                                    // rather than a card appearing.
-                                    .graphicsLayer {
-                                        val t = ((arrival.value - slot * 0.07f) / 0.6f)
-                                            .coerceIn(0f, 1f)
-                                        alpha = t
-                                        scaleX = lerp(0.7f, 1f, t)
-                                        scaleY = scaleX
-                                    }
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(
-                                        // Empty slots need to read as plates in
-                                        // every theme; `pill60` is near-black in
-                                        // Midnight and vanished into the shelf.
-                                        if (book == null) {
-                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
-                                        } else {
-                                            Color.Transparent
-                                        },
-                                    ),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                if (book != null) {
-                                    BookCover(
-                                        book = book,
-                                        coverFile = coverOf(book),
-                                        titleSize = 0.sp,
-                                        padding = 0.dp,
-                                    )
-                                }
-                                // The count of what is NOT shown, over the last
-                                // cover that is. Floating in the corner of the
-                                // tile it looked like a badge on the folder;
-                                // over the fourth cover it reads as "and this
-                                // many more behind this one".
-                                if (extra > 0 && slot == 3) {
-                                    Box(
-                                        modifier = Modifier
-                                            .matchParentSize()
-                                            .background(Color.Black.copy(alpha = 0.55f)),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            text = "+$extra",
-                                            fontSize = 15.sp,
-                                            lineHeight = 18.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White,
+            // The label lives INSIDE the plate now, like a book's caption on its
+            // cover: under it, a shelf was a label taller than the books beside
+            // it and its row came out ragged.
+            Column(modifier = Modifier.fillMaxSize().padding(10.dp)) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        // The artwork pops, the label under it does not: an
+                        // overshoot spring on 12sp type is visibly jittery.
+                        .graphicsLayer {
+                            scaleX = lerp(ShelfPopFrom, 1f, arrival.value)
+                            scaleY = scaleX
+                        },
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    repeat(2) { row ->
+                        Row(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            repeat(2) { column ->
+                                val slot = row * 2 + column
+                                val book = entry.books.getOrNull(slot)
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        // Cropped a little squarer than 2:3 to
+                                        // leave the plate room for its label.
+                                        .fillMaxHeight()
+                                        // Mini covers land one after another, so a
+                                        // new folder reads as books dropping in
+                                        // rather than a card appearing.
+                                        .graphicsLayer {
+                                            val t = ((arrival.value - slot * 0.07f) / 0.6f)
+                                                .coerceIn(0f, 1f)
+                                            alpha = t
+                                            scaleX = lerp(0.7f, 1f, t)
+                                            scaleY = scaleX
+                                        }
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(
+                                            // Empty slots need to read as plates in
+                                            // every theme; `pill60` is near-black in
+                                            // Midnight and vanished into the shelf.
+                                            if (book == null) {
+                                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+                                            } else {
+                                                Color.Transparent
+                                            },
+                                        ),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (book != null) {
+                                        BookCover(
+                                            book = book,
+                                            coverFile = coverOf(book),
+                                            titleSize = 0.sp,
+                                            padding = 0.dp,
                                         )
+                                    }
+                                    // The count of what is NOT shown, over the last
+                                    // cover that is. Floating in the corner of the
+                                    // tile it looked like a badge on the folder;
+                                    // over the fourth cover it reads as "and this
+                                    // many more behind this one".
+                                    if (extra > 0 && slot == 3) {
+                                        Box(
+                                            modifier = Modifier
+                                                .matchParentSize()
+                                                .background(Color.Black.copy(alpha = 0.55f)),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            Text(
+                                                text = "+$extra",
+                                                fontSize = 15.sp,
+                                                lineHeight = 18.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White,
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+                Spacer(Modifier.height(9.dp))
+                TileTitle(text = shelfName(entry), modifier = Modifier.padding(horizontal = 2.dp))
+                Spacer(Modifier.height(3.dp))
+                TileSubtitle(
+                    text = pluralStringResource(
+                        R.plurals.shelf_books_count,
+                        entry.books.size,
+                        entry.books.size,
+                    ),
+                    modifier = Modifier.padding(horizontal = 2.dp),
+                )
+                Spacer(Modifier.height(2.dp))
             }
             if (selecting) {
                 SelectionCheck(
@@ -1792,16 +1778,6 @@ private fun ShelfGridTile(
                 )
             }
         }
-        Spacer(Modifier.height(7.dp))
-        TileTitle(text = shelfName(entry))
-        Spacer(Modifier.height(2.dp))
-        TileSubtitle(
-            text = pluralStringResource(
-                R.plurals.shelf_books_count,
-                entry.books.size,
-                entry.books.size,
-            ),
-        )
     }
 }
 
@@ -2175,7 +2151,7 @@ internal fun shelfName(entry: LibraryEntry.ShelfEntry): String =
 private fun chapterLine(book: Book): String {
     val left = book.progress.pagesLeftInChapter
     return if (left >= 0) {
-        stringResource(R.string.library_pages_left_in_chapter, left)
+        pluralStringResource(R.plurals.library_pages_left_in_chapter, left, left)
     } else {
         val fraction = book.progress.fraction.let { if (it.isNaN()) 0f else it.coerceIn(0f, 1f) }
         stringResource(R.string.library_percent_left, ((1f - fraction) * 100).roundToInt())
@@ -2190,12 +2166,4 @@ private fun listMetaLine(book: Book): String {
         stringResource(R.string.library_status_not_started)
     }
     return "${book.format.name} · $status"
-}
-
-/** "45h 34m" — the shape the mock uses; minutes only under an hour. */
-private fun formatReadingTime(seconds: Long): String {
-    val totalMinutes = seconds / 60
-    val hours = totalMinutes / 60
-    val minutes = totalMinutes % 60
-    return if (hours > 0) "${hours}h ${minutes}m" else "${minutes}m"
 }

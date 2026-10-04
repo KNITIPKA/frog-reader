@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="reading_log_camera_title">Photograph cover</string>
+    <string name="reading_log_camera_hint">Fit your cover inside the frame. This is how it will appear in Reading Log.</string>
+    <string name="reading_log_camera_capture">Take photo</string>
+    <string name="reading_log_camera_gallery">Choose a photo</string>
+    <string name="reading_log_camera_permission">Allow camera access to photograph your book cover.</string>
+    <string name="reading_log_camera_allow">Allow camera</string>
+    <string name="reading_log_camera_settings">Open app settings</string>
+    <string name="reading_log_camera_error">The camera is unavailable. Try again or choose a photo.</string>
+    <string name="reading_log_camera_retry">Try again</string>
+    <string name="reading_log_camera_frame">Book cover frame, 2 to 3 aspect ratio</string>
+    <string name="reading_log_camera_flash">Toggle flash</string>
+</resources>

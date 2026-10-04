@@ -175,7 +175,7 @@ private fun AnimatedContentTransitionScope<SettingsDestination>.settingsTransiti
 }
 
 @Composable
-private fun SettingsEntryPage(
+internal fun SettingsEntryPage(
     settings: AppSettings,
     backupFrequency: BackupFrequency,
     lastBackupAt: Long?,
@@ -236,8 +236,6 @@ private fun SettingsEntryPage(
                 title = stringResource(R.string.settings_backup_title),
                 subtitle = backupSummary(lastBackupAt, backupFrequency),
                 onClick = onOpenBackup,
-                iconContainer = MaterialTheme.colorScheme.primaryContainer,
-                iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
             )
         }
 

@@ -1,10 +1,10 @@
 package com.example.frogreader.data.backup
 
 import android.content.Context
+import com.example.frogreader.data.backup.BackupArchive.resolveDocument
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.StatsRepository
-import com.example.frogreader.data.model.BackupDocument
 import com.example.frogreader.data.model.BackupManifest
 import com.example.frogreader.data.model.BackupMode
 import com.example.frogreader.data.model.BackupSettings
@@ -39,6 +39,8 @@ class BackupRepository(
         val books: Int,
         val quotes: Int,
         val booksWithoutFile: Int,
+        val readingQueueCount: Int = 0,
+        val readingLogCount: Int = 0,
     )
 
     /** A restorable FrogReader archive retained in a folder target. */
@@ -117,10 +119,7 @@ class BackupRepository(
         fileName: String,
         onProgress: (done: Int, total: Int) -> Unit,
     ): BackupRef = withContext(Dispatchers.IO) {
-        val document = BackupDocument(
-            books = books.books.value,
-            shelves = books.shelves.value,
-        )
+        val document = books.backupDocument()
         val backupSettings = BackupSettings(
             reader = settings.settings.first(),
             app = settings.appSettings.first(),
@@ -138,6 +137,7 @@ class BackupRepository(
                 createdAtMillis = System.currentTimeMillis(),
                 bookFile = { books.bookFileFor(it) },
                 coverFile = { books.coverFileFor(it) },
+                logCoverFile = { books.coverFileFor(it) },
                 onProgress = onProgress,
             )
         }
@@ -189,18 +189,9 @@ class BackupRepository(
             )
         }
 
-        val restored = contents.document.books.map { book ->
-            val fileName = contents.restoredBookFiles[book.id]
-            book.copy(
-                // A DATA backup carries no files, and a FULL one can still be
-                // missing the odd book. Either way the record survives; only
-                // the pointer to the file goes.
-                fileName = fileName ?: book.fileName?.takeIf { File(booksDir, it).exists() },
-                coverFileName = book.coverFileName?.takeIf { File(coversDir, it).exists() },
-            )
-        }
-
-        books.replaceAll(restored, contents.document.shelves)
+        val resolved = contents.resolveDocument(booksDir, coversDir)
+        val restored = resolved.books
+        books.replaceAll(restored, resolved.shelves, resolved.readingQueue, resolved.readingLog)
         contents.stats?.let { stats.replaceAll(it) }
         contents.settings?.let { fromBackup ->
             settings.update { fromBackup.reader }
@@ -211,6 +202,8 @@ class BackupRepository(
             books = restored.size,
             quotes = restored.sumOf { it.quotes.size },
             booksWithoutFile = restored.count { it.fileName == null },
+            readingQueueCount = contents.document.readingQueue.size,
+            readingLogCount = contents.document.readingLog.size,
         )
     }
 

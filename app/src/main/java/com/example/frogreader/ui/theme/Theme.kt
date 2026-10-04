@@ -15,6 +15,8 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import com.example.frogreader.data.AppTheme
@@ -22,8 +24,8 @@ import com.example.frogreader.data.AppTheme
 /**
  * App-wide theme: Material 3 Expressive with the springy motion scheme.
  *
- * The three fixed palettes (Light / Beige / Midnight) come straight from the
- * library design mock. On Android 12+, Material You can instead own the full
+ * The fixed Light palette uses clean neutral surfaces and a forest accent; see
+ * docs/light-theme.md for role assignments. On Android 12+, Material You can own the full
  * Material palette, including neutral surfaces and backgrounds, for Light and
  * Midnight. Beige is deliberately excluded and always keeps its warm palette.
  *
@@ -118,13 +120,40 @@ val AppTheme.descriptionRes: Int
 
 /** The two halves of the 44dp swatch in the theme picker: surface / accent. */
 val AppTheme.swatch: Pair<Color, Color>
-    get() = when (this) {
-        AppTheme.WHITE -> Color(0xFFF7FBF7) to Color(0xFF2A6A47)
-        AppTheme.SEPIA -> Color(0xFFF3E7D2) to Color(0xFF7E5326)
-        AppTheme.OLED -> Color(0xFF000000) to Color(0xFF7BD69B)
-    }
+    get() = colorSchemeFor(this).let { it.surface to it.primary }
+
+/** Floating controls stay light on light palettes, including Material You. */
+val ColorScheme.floatingSurface: Color
+    get() = if (surface.luminance() > 0.5f) surfaceContainerLowest else surfaceContainerHigh
+
+/**
+ * Text laid over cover artwork, and the veil under it. The same in every
+ * palette: what they sit on is the picture, not the theme, so a light theme's
+ * dark ink would vanish into a dark cover just as often as it would not.
+ */
+val CoverCaptionInk = Color(0xFFFFFFFF)
+val CoverCaptionScrim = Color(0xFF060908)
 
 // ------------------------------------------------------------ extra colors
+
+enum class ProfileLandscapeStyle { FOREST, DUNES, NIGHT }
+
+/** Decorative art and its foreground controls belong to the profile only. */
+@Immutable
+data class ProfileLandscapeColors(
+    val style: ProfileLandscapeStyle,
+    val distant: Color,
+    val middle: Color,
+    val foreground: Color,
+    val detail: Color,
+    val celestial: Color,
+    val action: Color,
+    val onAction: Color,
+    val actionBorder: Color,
+    val actionIcon: Color = onAction,
+    val actionIconBackground: Color = onAction.copy(alpha = .12f),
+    val actionSecondary: Color = onAction,
+)
 
 /**
  * Colors the mock uses that have no role in [ColorScheme]. Kept in a
@@ -155,21 +184,47 @@ data class FrogExtraColors(
     val ink: Color,
     /** Secondary text and icons on the colored header. */
     val ink2: Color,
+    /** Sky, lower haze and identity text of the profile landscape. */
+    val profileTop: Color,
+    val profileBottom: Color,
+    val onProfile: Color,
+    val profileLandscape: ProfileLandscapeColors,
 )
 
-private val LightExtraColors = FrogExtraColors(
-    headerTop = Color(0xFFA5DDBB),
-    headerBottom = Color(0xFFE1F5E8),
-    glass = Color.White.copy(alpha = 0.55f),
-    chip = Color(0xFFDFE9E1),
-    pill = Color.White.copy(alpha = 0.94f),
-    pill60 = Color.White.copy(alpha = 0.62f),
-    lift = Color(0xFFF7FBF7).copy(alpha = 0.82f),
-    nav = Color(0xFFDFE9E1),
-    folder = Color(0xFF2A6A47).copy(alpha = 0.13f),
-    ink = Color(0xFF101A13),
-    ink2 = Color(0xFF3D4F42),
-)
+// Lazy because the shared Material palette is declared below these extra roles.
+private val LightExtraColors by lazy {
+    val scheme = LightColorScheme
+    FrogExtraColors(
+        headerTop = Color(0xFFE5F1EB),
+        headerBottom = scheme.surface,
+        glass = scheme.surfaceContainerLowest.copy(alpha = 0.82f),
+        chip = scheme.surfaceContainerHigh,
+        pill = scheme.surfaceContainerLowest.copy(alpha = 0.96f),
+        pill60 = scheme.surfaceContainerLowest.copy(alpha = 0.78f),
+        lift = scheme.surface.copy(alpha = 0.82f),
+        nav = scheme.surfaceContainerLowest,
+        folder = scheme.primary.copy(alpha = 0.08f),
+        ink = scheme.onSurface,
+        ink2 = scheme.onSurfaceVariant,
+        profileTop = Color(0xFFE5EBEA),
+        profileBottom = Color(0xFFF8FAF8),
+        onProfile = Color(0xFF202B29),
+        profileLandscape = ProfileLandscapeColors(
+            style = ProfileLandscapeStyle.FOREST,
+            distant = Color(0xFFCEDBDB),
+            middle = Color(0xFFAABFC1),
+            foreground = Color(0xFF7F9D9F),
+            detail = Color(0xFF557C7D),
+            celestial = Color(0xFFFFFCF2),
+            action = scheme.surfaceContainerLowest,
+            onAction = scheme.onSurface,
+            actionBorder = scheme.outlineVariant,
+            actionIcon = scheme.primary,
+            actionIconBackground = scheme.surfaceContainer,
+            actionSecondary = scheme.onSurfaceVariant,
+        ),
+    )
+}
 
 private val BeigeExtraColors = FrogExtraColors(
     headerTop = Color(0xFFE7D3AC),
@@ -183,6 +238,20 @@ private val BeigeExtraColors = FrogExtraColors(
     folder = Color(0xFFBEA06E).copy(alpha = 0.40f),
     ink = Color(0xFF2E2416),
     ink2 = Color(0xFF4C3E29),
+    profileTop = Color(0xFFEEDCC6),
+    profileBottom = Color(0xFFFAF0E0),
+    onProfile = Color(0xFF352719),
+    profileLandscape = ProfileLandscapeColors(
+        style = ProfileLandscapeStyle.DUNES,
+        distant = Color(0xFFE0C7A7),
+        middle = Color(0xFFCDAF8B),
+        foreground = Color(0xFFB6926D),
+        detail = Color(0xFF886540),
+        celestial = Color(0xFFFFE6BC),
+        action = Color(0xFFF8EAD7).copy(alpha = 0.90f),
+        onAction = Color(0xFF49321D),
+        actionBorder = Color(0xFFFFF8EA).copy(alpha = 0.84f),
+    ),
 )
 
 private val MidnightExtraColors = FrogExtraColors(
@@ -193,10 +262,24 @@ private val MidnightExtraColors = FrogExtraColors(
     pill = Color(0xFF191D19).copy(alpha = 0.94f),
     pill60 = Color(0xFF191D19).copy(alpha = 0.60f),
     lift = Color(0xFF1E241E).copy(alpha = 0.84f),
-    nav = Color(0xFF181C18),
+    nav = Color(0xFF101410),
     folder = Color(0xFF7BD69B).copy(alpha = 0.14f),
     ink = Color(0xFFE8EDE7),
     ink2 = Color(0xFFB9C2B8),
+    profileTop = Color(0xFF10171D),
+    profileBottom = Color(0xFF070B0E),
+    onProfile = Color(0xFFF0F3F3),
+    profileLandscape = ProfileLandscapeColors(
+        style = ProfileLandscapeStyle.NIGHT,
+        distant = Color(0xFF293037),
+        middle = Color(0xFF1D242A),
+        foreground = Color(0xFF0B1015),
+        detail = Color(0xFF444A4D),
+        celestial = Color(0xFFE5CCA2),
+        action = Color(0xFF24282B).copy(alpha = 0.92f),
+        onAction = Color(0xFFF0F3F3),
+        actionBorder = Color(0xFF62686C).copy(alpha = 0.36f),
+    ),
 )
 
 val LocalFrogColors = staticCompositionLocalOf { LightExtraColors }
@@ -230,64 +313,93 @@ internal fun frogColorsFor(
 internal fun dynamicFrogColors(scheme: ColorScheme, dark: Boolean): FrogExtraColors {
     val raisedSurface = if (dark) scheme.surfaceContainerHighest else scheme.surfaceContainerLowest
     return FrogExtraColors(
-        headerTop = scheme.primaryContainer,
-        headerBottom = scheme.surfaceContainerLow,
+        headerTop = if (dark) scheme.primaryContainer else lerp(scheme.primaryContainer, scheme.surface, 0.55f),
+        headerBottom = if (dark) scheme.surfaceContainerLow else scheme.surface,
         glass = if (dark) {
             scheme.onPrimaryContainer.copy(alpha = 0.10f)
         } else {
-            scheme.surfaceContainerLowest.copy(alpha = 0.62f)
+            scheme.surfaceContainerLowest.copy(alpha = 0.82f)
         },
         chip = scheme.surfaceContainerHigh,
         pill = raisedSurface.copy(alpha = 0.94f),
         pill60 = raisedSurface.copy(alpha = 0.62f),
         lift = scheme.surfaceContainerHigh.copy(alpha = 0.84f),
-        nav = scheme.surfaceContainerHigh,
-        folder = scheme.primary.copy(alpha = if (dark) 0.20f else 0.14f),
-        ink = scheme.onPrimaryContainer,
-        ink2 = scheme.onPrimaryContainer.copy(alpha = 0.76f),
+        nav = if (dark) scheme.surfaceContainerHigh else scheme.surfaceContainerLowest,
+        folder = scheme.primary.copy(alpha = if (dark) 0.20f else 0.08f),
+        ink = if (dark) scheme.onPrimaryContainer else scheme.onSurface,
+        ink2 = if (dark) scheme.onPrimaryContainer.copy(alpha = 0.76f) else scheme.onSurfaceVariant,
+        profileTop = lerp(scheme.surface, scheme.primaryContainer, if (dark) 0.18f else 0.30f),
+        profileBottom = scheme.surfaceContainerLowest,
+        onProfile = scheme.onSurface,
+        profileLandscape = ProfileLandscapeColors(
+            style = if (dark) ProfileLandscapeStyle.NIGHT else ProfileLandscapeStyle.FOREST,
+            distant = lerp(scheme.surface, scheme.primary, if (dark) 0.19f else 0.22f),
+            middle = lerp(scheme.surface, scheme.primary, if (dark) 0.12f else 0.34f),
+            foreground = if (dark) scheme.surfaceContainerLowest else lerp(scheme.surface, scheme.primary, 0.46f),
+            detail = lerp(scheme.surface, scheme.primary, if (dark) 0.30f else 0.60f),
+            celestial = if (dark) scheme.tertiary else scheme.surfaceContainerLowest,
+            action = if (dark) scheme.surfaceContainerHigh.copy(alpha = 0.94f) else scheme.surfaceContainerLowest,
+            onAction = scheme.onSurface,
+            actionBorder = scheme.outlineVariant.copy(alpha = 0.60f),
+            actionIcon = if (dark) scheme.onSurface else scheme.primary,
+            actionIconBackground = if (dark) scheme.onSurface.copy(alpha = .12f) else scheme.surfaceContainer,
+            actionSecondary = if (dark) scheme.onSurface else scheme.onSurfaceVariant,
+        ),
     )
 }
 
 // --------------------------------------------------------------- palettes
 
-/** Light — warm white, forest green accents. Stored as [AppTheme.WHITE]. */
+/** Light — clean whites, neutral controls, fresh green accents. See docs/light-theme.md. */
 private val LightColorScheme: ColorScheme = lightColorScheme(
-    primary = Color(0xFF2A6A47),
+    primary = Color(0xFF246B50),
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFC3EBD2),
-    onPrimaryContainer = Color(0xFF06281A),
-    inversePrimary = Color(0xFF8FD3AC),
-    secondary = Color(0xFF4F6354),
+    primaryContainer = Color(0xFFDDF0E6),
+    onPrimaryContainer = Color(0xFF20513C),
+    inversePrimary = Color(0xFFA3D6BB),
+    secondary = Color(0xFF50615B),
     onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFD2E8D8),
-    onSecondaryContainer = Color(0xFF0C2417),
-    tertiary = Color(0xFF3A6470),
+    secondaryContainer = Color(0xFFEEF2F4),
+    onSecondaryContainer = Color(0xFF3B5549),
+    tertiary = Color(0xFF786039),
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFBEE9F7),
-    onTertiaryContainer = Color(0xFF001F27),
-    background = Color(0xFFF7FBF7),
-    onBackground = Color(0xFF131C15),
-    surface = Color(0xFFF7FBF7),
-    onSurface = Color(0xFF131C15),
-    surfaceVariant = Color(0xFFDDE6DE),
-    onSurfaceVariant = Color(0xFF5C6B5F),
-    surfaceTint = Color(0xFF2A6A47),
-    inverseSurface = Color(0xFF2A322B),
-    inverseOnSurface = Color(0xFFEEF3EE),
-    error = Color(0xFF8C4030),
+    tertiaryContainer = Color(0xFFF0E4CC),
+    onTertiaryContainer = Color(0xFF574321),
+    background = Color(0xFFF4F6F7),
+    onBackground = Color(0xFF222B27),
+    surface = Color(0xFFF4F6F7),
+    onSurface = Color(0xFF222B27),
+    surfaceVariant = Color(0xFFE3E8EB),
+    onSurfaceVariant = Color(0xFF58635E),
+    surfaceTint = Color(0xFF246B50),
+    inverseSurface = Color(0xFF2B3630),
+    inverseOnSurface = Color(0xFFF3F7F5),
+    error = Color(0xFFAC4138),
     onError = Color(0xFFFFFFFF),
-    errorContainer = Color(0xFFFFDAD3),
-    onErrorContainer = Color(0xFF3A0A02),
-    outline = Color(0xFF6F7F72),
-    outlineVariant = Color(0xFFB3C4B6),
-    scrim = Color(0xFF000000),
+    errorContainer = Color(0xFFFFE5DF),
+    onErrorContainer = Color(0xFF742D27),
+    outline = Color(0xFF78847E),
+    outlineVariant = Color(0xFFD8DFE2),
+    scrim = Color(0xFF18251E),
     surfaceBright = Color(0xFFFFFFFF),
-    surfaceDim = Color(0xFFD8E1D9),
+    surfaceDim = Color(0xFFDEE3E6),
     surfaceContainerLowest = Color(0xFFFFFFFF),
-    surfaceContainerLow = Color(0xFFF2F7F2),
-    surfaceContainer = Color(0xFFEDF3EE),
-    surfaceContainerHigh = Color(0xFFDFE9E1),
-    surfaceContainerHighest = Color(0xFFD9E3DB),
+    surfaceContainerLow = Color(0xFFFAFBFC),
+    surfaceContainer = Color(0xFFF1F3F5),
+    surfaceContainerHigh = Color(0xFFE9EDEF),
+    surfaceContainerHighest = Color(0xFFE1E6E9),
+    primaryFixed = Color(0xFFDDF0E6),
+    primaryFixedDim = Color(0xFFB5D9C5),
+    onPrimaryFixed = Color(0xFF183C2B),
+    onPrimaryFixedVariant = Color(0xFF20513C),
+    secondaryFixed = Color(0xFFEEF2F4),
+    secondaryFixedDim = Color(0xFFCCD6D2),
+    onSecondaryFixed = Color(0xFF253A30),
+    onSecondaryFixedVariant = Color(0xFF40594D),
+    tertiaryFixed = Color(0xFFF0E4CC),
+    tertiaryFixedDim = Color(0xFFDCCCAC),
+    onTertiaryFixed = Color(0xFF392C12),
+    onTertiaryFixedVariant = Color(0xFF624D29),
 )
 
 /** Beige — warm paper, umber accents. Stored as [AppTheme.SEPIA]. */

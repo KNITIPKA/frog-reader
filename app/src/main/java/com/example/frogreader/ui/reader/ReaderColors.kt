@@ -5,6 +5,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import com.example.frogreader.data.AppTheme
 import com.example.frogreader.ui.theme.colorSchemeFor
+import com.example.frogreader.ui.theme.floatingSurface
 import com.example.frogreader.ui.theme.isDark
 
 /** Colors of the reading surface; chrome = the bars floating above the text. */
@@ -15,7 +16,15 @@ data class ReaderColors(
     val secondaryText: Color,
     val chrome: Color,
     val onChrome: Color,
+    val onChromeVariant: Color,
     val accent: Color,
+    val onAccent: Color,
+    /** Inset control groups, nested buttons, and inactive progress tracks. */
+    val control: Color,
+    val controlStrong: Color,
+    /** Distinct button faces within an inset stepper group. */
+    val controlButton: Color,
+    val track: Color,
     /** Background of text saved as a quote. */
     val quoteHighlight: Color,
     /** Background of the text being selected right now, and its handles. */
@@ -41,7 +50,7 @@ fun readerColors(
 ): ReaderColors {
     val pageScheme = colorSchemeFor(theme)
     return ReaderColors(
-        // Pure white in the light theme, not the library's very slightly green
+        // Pure white in the light theme, not the library's neutral grey
         // surface: a book's own artwork is almost always on a white ground, and
         // against anything else every illustration sits in a faint box of its
         // own. Sepia and OLED keep their surface — the beige page IS the theme,
@@ -51,9 +60,19 @@ fun readerColors(
         secondaryText = pageScheme.onSurfaceVariant,
         // The page remains a stable reading surface, while its controls and
         // interactive colour can follow Material You like the rest of the app.
-        chrome = chromeScheme.surfaceContainerHigh,
+        chrome = if (theme == AppTheme.WHITE) chromeScheme.floatingSurface else chromeScheme.surfaceContainerHigh,
         onChrome = chromeScheme.onSurface,
+        onChromeVariant = chromeScheme.onSurfaceVariant,
         accent = chromeScheme.primary,
+        onAccent = chromeScheme.onPrimary,
+        control = if (theme == AppTheme.WHITE) chromeScheme.surfaceContainer
+            else chromeScheme.onSurface.copy(alpha = 0.06f),
+        controlStrong = if (theme == AppTheme.WHITE) chromeScheme.surfaceContainerHigh
+            else chromeScheme.onSurface.copy(alpha = 0.08f),
+        controlButton = if (theme == AppTheme.WHITE) chromeScheme.surfaceContainerLowest
+            else chromeScheme.onSurface.copy(alpha = 0.08f),
+        track = if (theme == AppTheme.WHITE) chromeScheme.outlineVariant
+            else chromeScheme.onSurfaceVariant.copy(alpha = 0.25f),
         quoteHighlight = chromeScheme.primary.copy(
             alpha = if (theme.isDark()) 0.28f else 0.22f,
         ),

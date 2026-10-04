@@ -118,6 +118,11 @@ data class AppSettings(
     /** Daily reading goal in minutes (for the stats screen). */
     val dailyGoalMinutes: Int = 30,
     val viewMode: LibraryViewMode = LibraryViewMode.GRID,
+    val profileName: String = "",
+    /** One bounded 512px JPEG, included in existing settings backups. */
+    val profileAvatarBase64: String? = null,
+    /** Stable mode name; unknown future modes fall back to newest completion in the log UI. */
+    val readingLogSort: String = "FINISHED_NEWEST",
 )
 
 /** Resolves the palette that should be visible right now. */
@@ -169,6 +174,9 @@ class SettingsRepository(private val context: Context) {
         val backupMode = stringPreferencesKey("backup_scope")
         val autoInvertImages = booleanPreferencesKey("auto_invert_images")
         val dailyGoal = androidx.datastore.preferences.core.intPreferencesKey("daily_goal_minutes")
+        val profileName = stringPreferencesKey("profile_name")
+        val profileAvatar = stringPreferencesKey("profile_avatar")
+        val readingLogSort = stringPreferencesKey("reading_log_sort")
         val libraryViewMode = stringPreferencesKey("library_view_mode")
         val deviceId = stringPreferencesKey("device_id")
         val backupFolder = stringPreferencesKey("backup_folder_uri")
@@ -281,6 +289,10 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.autoInvertImages] = updated.autoInvertImages
             prefs[Keys.dailyGoal] = updated.dailyGoalMinutes
             prefs[Keys.libraryViewMode] = updated.viewMode.name
+            prefs[Keys.profileName] = updated.profileName
+            prefs[Keys.readingLogSort] = updated.readingLogSort
+            updated.profileAvatarBase64?.let { prefs[Keys.profileAvatar] = it }
+                ?: prefs.remove(Keys.profileAvatar)
         }
     }
 
@@ -334,6 +346,9 @@ class SettingsRepository(private val context: Context) {
             autoInvertImages = this[Keys.autoInvertImages] ?: defaults.autoInvertImages,
             dailyGoalMinutes = this[Keys.dailyGoal] ?: defaults.dailyGoalMinutes,
             viewMode = enumOrDefault(this[Keys.libraryViewMode], defaults.viewMode),
+            profileName = this[Keys.profileName] ?: defaults.profileName,
+            profileAvatarBase64 = this[Keys.profileAvatar],
+            readingLogSort = this[Keys.readingLogSort] ?: defaults.readingLogSort,
         )
     }
 

@@ -2,6 +2,7 @@ package com.example.frogreader.data.model
 
 import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.ReaderSettings
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -38,6 +39,9 @@ data class BackupManifest(
     val mode: BackupMode = BackupMode.DATA,
     val bookCount: Int = 0,
     val quoteCount: Int = 0,
+    @SerialName("readingListCount")
+    val readingQueueCount: Int = 0,
+    val readingLogCount: Int = 0,
 ) {
     companion object {
         // Version 2 adds TXT/MD enum values that version 1 readers cannot decode.
@@ -50,7 +54,13 @@ data class BackupManifest(
 data class BackupDocument(
     val books: List<Book> = emptyList(),
     val shelves: List<Shelf> = emptyList(),
-)
+    @SerialName("readingList")
+    val readingQueue: List<ReadingQueueEntry> = emptyList(),
+    val readingLog: List<ReadingLogEntry> = emptyList(),
+) {
+    /** Assets include private reading-queue attachments, without exposing them as library books. */
+    val assetBooks: List<Book> get() = (books + readingQueue.mapNotNull { it.attachment }).distinctBy { it.id }
+}
 
 @Serializable
 data class BackupSettings(

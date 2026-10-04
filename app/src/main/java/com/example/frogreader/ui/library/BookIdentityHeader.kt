@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.library
 
+import com.example.frogreader.ui.theme.floatingSurface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,6 +40,7 @@ internal fun BookIdentityHeader(
     onChangeCover: (() -> Unit)? = null,
     onRemoveCover: (() -> Unit)? = null,
     onRestoreCover: (() -> Unit)? = null,
+    series: String? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
     val coverKey = remember(cover) {
@@ -54,7 +56,7 @@ internal fun BookIdentityHeader(
     val coverLabel = stringResource(R.string.metadata_cover_preview)
     val changeLabel = stringResource(if (cover == null) R.string.metadata_add_cover else R.string.edit_change_cover)
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(scheme.surfaceContainerLow).padding(18.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(scheme.surfaceContainerLowest).padding(18.dp),
         horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.Top,
     ) {
         Box {
@@ -85,7 +87,8 @@ internal fun BookIdentityHeader(
                     Icon(Icons.Rounded.Edit, null, Modifier.size(14.dp), tint = scheme.onPrimaryContainer)
                 }
             }
-            DropdownMenu(expanded = menu && enabled, onDismissRequest = { menu = false }, shape = RoundedCornerShape(20.dp)) {
+            DropdownMenu(expanded = menu && enabled, onDismissRequest = { menu = false }, shape = RoundedCornerShape(20.dp),
+                containerColor = scheme.floatingSurface, tonalElevation = 0.dp) {
                 if (onChangeCover != null) DropdownMenuItem(
                     text = { Text(changeLabel) }, leadingIcon = { Icon(Icons.Rounded.Edit, null) },
                     onClick = { menu = false; onChangeCover() },
@@ -103,6 +106,7 @@ internal fun BookIdentityHeader(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title.ifBlank { stringResource(R.string.edit_field_title) }, style = MaterialTheme.typography.titleLarge)
             if (!author.isNullOrBlank()) Text(author, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+            if (!series.isNullOrBlank()) Text(series, style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
         }
     }
 }

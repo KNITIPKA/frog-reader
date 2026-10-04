@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.library
 
+import com.example.frogreader.ui.theme.floatingSurface
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
@@ -115,7 +116,8 @@ internal fun MetadataEditorContent(
                 IconButton(onClick = { menu = true }, enabled = !state.busy) {
                     Icon(Icons.Rounded.MoreVert, stringResource(R.string.metadata_more_actions))
                 }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false },
+                    containerColor = scheme.floatingSurface, tonalElevation = 0.dp) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.metadata_export)) },
                         leadingIcon = { Icon(Icons.Rounded.IosShare, null) },
@@ -233,6 +235,8 @@ internal fun MetadataEditorContent(
         }
     }
     if (aboutSaving) AlertDialog(
+        containerColor = MaterialTheme.colorScheme.floatingSurface,
+        tonalElevation = 0.dp,
         onDismissRequest = { aboutSaving = false },
         icon = { Icon(Icons.Rounded.Info, null) },
         title = { Text(stringResource(R.string.metadata_about_saving)) },
@@ -240,12 +244,16 @@ internal fun MetadataEditorContent(
         confirmButton = { TextButton(onClick = { aboutSaving = false }) { Text(stringResource(R.string.metadata_close)) } },
     )
     if (errorDetails && state.error != null) AlertDialog(
+        containerColor = MaterialTheme.colorScheme.floatingSurface,
+        tonalElevation = 0.dp,
         onDismissRequest = { errorDetails = false },
         title = { Text(stringResource(R.string.metadata_error_details)) },
         text = { SelectionContainer { Text(state.error, Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodyMedium) } },
         confirmButton = { TextButton(onClick = { errorDetails = false }) { Text(stringResource(R.string.metadata_close)) } },
     )
     if (discard) AlertDialog(
+        containerColor = MaterialTheme.colorScheme.floatingSurface,
+        tonalElevation = 0.dp,
         onDismissRequest = { discard = false },
         title = { Text(stringResource(R.string.metadata_discard_title)) },
         text = { Text(stringResource(R.string.metadata_discard_hint)) },

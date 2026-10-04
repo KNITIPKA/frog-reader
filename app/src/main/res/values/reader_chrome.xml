@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="reader_expand_panel">Expand reading panel</string>
+    <string name="reader_collapse_panel">Collapse reading panel</string>
+    <plurals name="reader_chapters_remaining">
+        <item quantity="one">%1$d chapter left</item>
+        <item quantity="other">%1$d chapters left</item>
+    </plurals>
+    <string name="reader_last_chapter">Last chapter</string>
+    <string name="reader_chapter_percent_remaining">%1$d%% left in chapter</string>
+    <string name="reader_book_page_position">%1$d/%2$d</string>
+    <string name="reader_book_page_description">Page %1$d of %2$d</string>
+    <string name="reader_book_percent_position">%1$d%%</string>
+</resources>

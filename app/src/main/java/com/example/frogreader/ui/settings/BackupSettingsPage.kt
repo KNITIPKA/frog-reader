@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.settings
 
+import com.example.frogreader.ui.theme.floatingSurface
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -217,7 +218,7 @@ internal fun BackupSettingsPage(
 }
 
 @Composable
-private fun BackupHero(
+internal fun BackupHero(
     state: BackupViewModel.State,
     lastBackupAt: Long?,
     summary: BackupViewModel.LibrarySummary,
@@ -231,8 +232,8 @@ private fun BackupHero(
             .fillMaxWidth()
             .heightIn(min = 156.dp),
         shape = SettingsCardShape,
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
@@ -242,6 +243,7 @@ private fun BackupHero(
                 Icon(
                     imageVector = Icons.Rounded.CloudDone,
                     contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(26.dp),
                 )
                 Spacer(Modifier.width(14.dp))
@@ -264,8 +266,10 @@ private fun BackupHero(
                             R.string.backup_library_summary,
                             summary.bookCount,
                             summary.quoteCount,
+                            summary.readingLogCount,
                         ),
                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -290,8 +294,7 @@ private fun BackupHero(
                         enabled = enabled,
                         modifier = Modifier.size(52.dp),
                         colors = IconButtonDefaults.filledTonalIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
-                                .copy(alpha = 0.74f),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer,
                             contentColor = MaterialTheme.colorScheme.primary,
                         ),
                     ) {
@@ -349,7 +352,7 @@ private fun BackupProgress(working: BackupViewModel.State.Working) {
 }
 
 @Composable
-private fun BackupScopeRow(
+internal fun BackupScopeRow(
     selected: Boolean,
     title: String,
     subtitle: String,
@@ -363,7 +366,7 @@ private fun BackupScopeRow(
             .fillMaxWidth()
             .clip(SettingsRowShape)
             .background(
-                if (selected) MaterialTheme.colorScheme.surfaceContainer else
+                if (selected) MaterialTheme.colorScheme.primaryContainer else
                     MaterialTheme.colorScheme.surfaceContainerLowest,
             )
             .selectable(
@@ -425,7 +428,7 @@ private fun BackupScopeRowContent(
 }
 
 @Composable
-private fun BackupFolderRow(folder: String?, enabled: Boolean, onChange: () -> Unit) {
+internal fun BackupFolderRow(folder: String?, enabled: Boolean, onChange: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -434,8 +437,8 @@ private fun BackupFolderRow(folder: String?, enabled: Boolean, onChange: () -> U
     ) {
         SettingsIconCircle(
             icon = Icons.Rounded.Folder,
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            tint = MaterialTheme.colorScheme.primary,
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            tint = MaterialTheme.colorScheme.onSecondaryContainer,
         )
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
@@ -558,6 +561,8 @@ private fun RestoreConfirmDialog(
         DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(manifest.createdAtMillis))
     }
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.floatingSurface,
+        tonalElevation = 0.dp,
         onDismissRequest = onDismiss,
         shape = SettingsCardShape,
         title = { Text(stringResource(R.string.backup_restore_title)) },
@@ -571,6 +576,14 @@ private fun RestoreConfirmDialog(
                         manifest.quoteCount,
                     ),
                 )
+                if (manifest.readingQueueCount > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(stringResource(R.string.backup_reading_queue_count, manifest.readingQueueCount))
+                }
+                if (manifest.readingLogCount > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(stringResource(R.string.backup_reading_log_count, manifest.readingLogCount))
+                }
                 Spacer(Modifier.height(8.dp))
                 Text(
                     stringResource(
@@ -623,9 +636,23 @@ private fun BackupResultDialog(state: BackupViewModel.State, onDismiss: () -> Un
         else -> return
     }
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.floatingSurface,
+        tonalElevation = 0.dp,
         onDismissRequest = onDismiss,
         shape = SettingsCardShape,
-        text = { Text(message) },
+        text = {
+            Column {
+                Text(message)
+                if (state is BackupViewModel.State.RestoreDone && state.readingQueueCount > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(stringResource(R.string.backup_reading_queue_count, state.readingQueueCount))
+                }
+                if (state is BackupViewModel.State.RestoreDone && state.readingLogCount > 0) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(stringResource(R.string.backup_reading_log_count, state.readingLogCount))
+                }
+            }
+        },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(android.R.string.ok)) }
         },

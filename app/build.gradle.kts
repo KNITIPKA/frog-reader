@@ -92,6 +92,9 @@ dependencies {
     implementation(libs.androidx.glance.appwidget)
     implementation(libs.androidx.work.runtime)
     implementation(libs.androidx.documentfile)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
 
     testImplementation(libs.junit)
     // Real XML pull parser for JVM unit tests (Android provides its own at runtime).

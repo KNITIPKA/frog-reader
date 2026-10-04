@@ -21,10 +21,14 @@ import com.example.frogreader.data.model.PageProgression
 import com.example.frogreader.data.model.previewText
 import com.example.frogreader.data.model.Quote
 import com.example.frogreader.data.model.ReadingProgress
+import com.example.frogreader.data.model.ReadingStatus
+import com.example.frogreader.data.model.ReadingLogEntry
 import com.example.frogreader.data.model.withFootnoteRefStyle
 import com.example.frogreader.data.model.withoutFootnotes
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -127,6 +131,15 @@ class ReaderViewModel(
     val book: StateFlow<Book?> = repository.books
         .map { books -> books.firstOrNull { it.id == bookId } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, repository.bookById(bookId))
+
+    val readingLogEntry: StateFlow<ReadingLogEntry?> = kotlinx.coroutines.flow.combine(
+        book, repository.readingLog,
+    ) { current, entries ->
+        if (current?.suppressReadingLog == true) null
+        else entries.firstOrNull { it.id == current?.activeReadingLogId }
+            ?: entries.filter { it.linkedBookId == bookId }.maxByOrNull { it.createdAtMillis }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly,
+        if (repository.bookById(bookId)?.suppressReadingLog == true) null else repository.readingLogEntryFor(bookId))
 
     /**
      * Effective reading settings: this book's own, or the app-wide
@@ -283,6 +296,29 @@ class ReaderViewModel(
 
     private var loadedBook: Book? = null
     private var loadedContent: BookContent? = null
+    private val _offerReread = MutableStateFlow(false)
+    val offerReread = _offerReread.asStateFlow()
+    private val _readingGeneration = MutableStateFlow(0)
+    val readingGeneration = _readingGeneration.asStateFlow()
+    private val _completionVisible = MutableStateFlow(false)
+    val completionVisible = _completionVisible.asStateFlow()
+    private val _lastPageVisible = MutableStateFlow(false)
+    val lastPageVisible = _lastPageVisible.asStateFlow()
+    private val _rereadError = MutableStateFlow(false)
+    val rereadError = _rereadError.asStateFlow()
+    private val _restartingReading = MutableStateFlow(false)
+    val restartingReading = _restartingReading.asStateFlow()
+    private var viewingPreviousReading = false
+    private var finishRequested = false
+    private val _finishSaved = MutableStateFlow(false)
+    val finishSaved = _finishSaved.asStateFlow()
+    private var rereadCommitted = false
+    private var pendingReview: (() -> Unit)? = null
+    private val readingSession = ReaderReadingSession(android.os.SystemClock::elapsedRealtime)
+    private var readingWrite: Job? = null
+    private val pendingReadingWrites = ReaderReadingWriteQueue()
+    private val _readingSaveError = MutableStateFlow(false)
+    val readingSaveError = _readingSaveError.asStateFlow()
 
     fun load() {
         viewModelScope.launch {
@@ -294,11 +330,18 @@ class ReaderViewModel(
             }
             currentFlatIndex = book.progress.elementIndex
             currentScrollOffset = book.progress.scrollOffset
+            viewingPreviousReading = book.finishedAtMillis != null ||
+                book.status == ReadingStatus.FINISHED || book.status == ReadingStatus.ABANDONED
+            _finishSaved.value = viewingPreviousReading
+            _offerReread.value = viewingPreviousReading
             clearNavigationHistory()
             runCatching { repository.loadContent(book) }
                 .onSuccess { content ->
                     loadedBook = book
                     loadedContent = content
+                    // Guarantee the start stamp precedes every time and finish write,
+                    // while keeping its fsync off the reader's first rendered frame.
+                    if (!viewingPreviousReading) enqueueReadingWrite { repository.markStarted(bookId) }
                     rebuildReady()
                     // Only now. It is fire-and-forget on a scope that outlives
                     // this screen, but starting it first put a full index
@@ -646,17 +689,125 @@ class ReaderViewModel(
 
     // ------------------------------------------------------------- stats
 
+    fun coverFileFor(book: Book): File? = repository.coverFileFor(book)
+
+    /** Looking at an old completion or a saved passage never changes that reading. */
+    fun keepPreviousReading() { _offerReread.value = false }
+
+    fun beginReadingAgain(addToLog: Boolean) {
+        if (_restartingReading.value) return
+        _restartingReading.value = true
+        viewModelScope.launch {
+            _rereadError.value = false
+            runCatching {
+                if (!rereadCommitted) {
+                    readingWrite?.join()
+                    pendingReadingWrites.drain()
+                    _readingSaveError.value = false
+                    repository.beginReadingAgain(bookId, addToLog)
+                    // A later rendering failure retries only rendering, not this write.
+                    rereadCommitted = true
+                    loadedBook = repository.bookById(bookId)
+                    currentFlatIndex = 0
+                    currentCharOffset = 0
+                    currentScrollOffset = 0
+                    readingSession.reset()
+                    finishRequested = false
+                    _finishSaved.value = false
+                    viewingPreviousReading = false
+                    _completionVisible.value = false
+                    _lastPageVisible.value = false
+                }
+                rebuildReady()
+                _readingGeneration.value += 1
+                _offerReread.value = false
+                rereadCommitted = false
+            }.onFailure { _rereadError.value = true }
+            _restartingReading.value = false
+        }
+    }
+
+    fun observeCompletionPosition(lastPage: Boolean, completion: Boolean) {
+        _lastPageVisible.value = lastPage
+        _completionVisible.value = completion
+        if (completion) markFinished()
+    }
+
+    fun setReadingActive(active: Boolean) {
+        readingSession.setRunning(active && !viewingPreviousReading && !_offerReread.value && !finishRequested)
+        if (!active) flushReadingTime()
+    }
+
+    private fun flushReadingTime() {
+        val seconds = readingSession.drainSeconds()
+        if (seconds > 0) addReadingTime(seconds)
+    }
+
+    // Writes finish in order even when navigation immediately clears this ViewModel.
+    private fun enqueueReadingWrite(write: suspend () -> Unit) {
+        pendingReadingWrites.add(write)
+        if (!_readingSaveError.value) drainReadingWrites()
+    }
+
+    private fun drainReadingWrites() {
+        if (readingWrite?.isActive == true || pendingReadingWrites.isEmpty) return
+        readingWrite = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            withContext(NonCancellable) {
+                try { pendingReadingWrites.drain() }
+                catch (_: Exception) { _readingSaveError.value = true }
+            }
+        }
+    }
+
+    fun retryReadingSave() {
+        _readingSaveError.value = false
+        drainReadingWrites()
+    }
+
+    fun dismissReadingSaveError() { _readingSaveError.value = false; pendingReview = null }
+    fun cancelPendingReview() { pendingReview = null }
+
+    /** A last-page Review is an explicit finish and opens only after its receipt is durable. */
+    fun finishReadingForReview(onReview: () -> Unit) {
+        if (viewingPreviousReading || _finishSaved.value) { onReview(); return }
+        if (pendingReview == null) pendingReview = onReview
+        markFinished()
+        retryReadingSave()
+    }
+
     fun markFinished() {
-        viewModelScope.launch { repository.markFinished(bookId) }
+        if (viewingPreviousReading || _offerReread.value || finishRequested) return
+        finishRequested = true
+        readingSession.setRunning(false)
+        flushReadingTime()
+        enqueueReadingWrite {
+            val ready = _state.value as? ReaderState.Ready
+            if (ready != null) {
+                repository.saveProgress(bookId, ReadingProgress(
+                    chapterIndex = (ready.chapterStarts.size - 1).coerceAtLeast(0),
+                    elementIndex = (ready.items.size - 1).coerceAtLeast(0),
+                    fraction = 1f,
+                    pagesLeftInChapter = 0,
+                    totalPages = pagination.value?.takeIf { !it.partial }?.pages?.size ?: 0,
+                ))
+            }
+            repository.markFinished(bookId)
+            _finishSaved.value = true
+            pendingReview?.let { review -> pendingReview = null; review() }
+        }
     }
 
     /** Adds a finished reading session to the daily and per-book counters. */
     fun addReadingTime(seconds: Long) {
         if (seconds < 1 || seconds > 24 * 60 * 60) return
-        viewModelScope.launch {
-            statsRepository.addSeconds(java.time.LocalDate.now(), seconds)
-            repository.addReadingSeconds(bookId, seconds)
-        }
+        val date = java.time.LocalDate.now()
+        // Capture the actual reading time before a delayed/retried disk write.
+        val lastReadAt = System.currentTimeMillis().takeIf { readingSession.qualifiesAsReading }
+        val write = ReaderReadingTimeWrite(
+            saveBook = { repository.addReadingSeconds(bookId, seconds) },
+            saveStats = { statsRepository.addSeconds(date, seconds, lastReadAtMillis = lastReadAt) },
+        )
+        enqueueReadingWrite(write::commit)
     }
 
     // ------------------------------------------------------------- bookmarks

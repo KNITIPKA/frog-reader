@@ -19,7 +19,7 @@ import java.io.File
 import java.io.IOException
 
 /**
- * The reading lists, ratings and reviews, plus the two things that only a
+ * The reading queues, ratings and reviews, plus the two things that only a
  * future sync will read: per-record timestamps and tombstones. Those are tested
  * now precisely because nothing consumes them yet — a stamp that silently stops
  * being written would otherwise go unnoticed until the first merge.
@@ -105,6 +105,54 @@ class BookRepositoryUserDataTest {
 
         val reopened = BookRepository(context = null)
         assertEquals("why this matters", reopened.bookById("a")?.quotes?.first()?.note)
+    }
+
+    @Test
+    fun `undo quote deletion restores thoughts and anchors without reverting later book changes`() = runTest {
+        StoreFixture.seed(testDir, listOf(book("a")))
+        val repository = BookRepository(context = null)
+        val quote = Quote("q1", "the line", 2, 1000, startItem = 12, startChar = 5,
+            endItem = 13, endChar = 10, note = "Мої думки", bookId = "a")
+        repository.addQuote("a", quote)
+        repository.removeQuote("a", quote.id)
+        repository.setRating("a", 4)
+        repository.restoreQuote("a", quote)
+        repository.restoreQuote("a", quote)
+        val reopened = BookRepository(context = null).bookById("a")!!
+        assertEquals(4, reopened.rating)
+        assertEquals(quote, reopened.quotes.single().copy(updatedAtMillis = 0))
+        assertTrue(!StoreFixture.tombstonesOnDisk(testDir).containsKey(quote.id))
+    }
+
+    @Test
+    fun `undo bookmark deletion is idempotent and never toggles off a new bookmark`() = runTest {
+        StoreFixture.seed(testDir, listOf(book("a")))
+        val repository = BookRepository(context = null)
+        val bookmark = Bookmark("b1", 10, 0, "preview", 1000)
+        repository.toggleBookmark("a", bookmark)
+        repository.removeBookmark("a", bookmark.id)
+        repository.restoreBookmark("a", bookmark)
+        repository.restoreBookmark("a", bookmark)
+        assertEquals(listOf("b1"), BookRepository(context = null).bookById("a")!!.bookmarks.map { it.id })
+        assertTrue(!StoreFixture.tombstonesOnDisk(testDir).containsKey("b1"))
+        repository.removeBookmark("a", "b1")
+        repository.toggleBookmark("a", bookmark.copy(id = "b2"))
+        repository.restoreBookmark("a", bookmark)
+        assertEquals(listOf("b2"), repository.bookById("a")!!.bookmarks.map { it.id })
+    }
+
+    @Test
+    fun `clearing thoughts preserves the quote and its location after restart`() = runTest {
+        StoreFixture.seed(testDir, listOf(book("a")))
+        val repository = BookRepository(context = null)
+        val quote = Quote("q1", "the line", 2, 1000, startItem = 12, startChar = 5, note = "draft")
+        repository.addQuote("a", quote)
+        repository.setQuoteNote("a", "q1", "   ")
+        val restored = BookRepository(context = null).bookById("a")!!.quotes.single()
+        assertNull(restored.note)
+        assertEquals(12, restored.startItem)
+        assertEquals(5, restored.startChar)
+        assertEquals("the line", restored.text)
     }
 
     // -------------------------------------------------------- books with no file
