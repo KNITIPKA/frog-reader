@@ -66,6 +66,26 @@ private fun ExpansionComparisonPreview() {
     }
 }
 
+@Preview(name = "Progress · cursor at capsule edges", widthDp = 320, heightDp = 320)
+@Composable
+private fun CapsuleEdgesPreview() = CapsuleEdgeTracks()
+
+@Preview(name = "Progress · cursor at capsule edges · RTL", widthDp = 320, heightDp = 320)
+@Composable
+private fun RtlCapsuleEdgesPreview() = CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+    CapsuleEdgeTracks()
+}
+
+@Composable
+private fun CapsuleEdgeTracks() {
+    Column {
+        FocusTrackPreview(adjusting = false, fraction = 100f / 201f, caption = "First page of a chapter")
+        FocusTrackPreview(adjusting = false, fraction = 1f, caption = "Last page of the book")
+        FocusTrackPreview(adjusting = false, stops = listOf(0f, 0.6f, 1f), fraction = 1f,
+            positionCount = 101, caption = "Final one-page chapter")
+    }
+}
+
 @Preview(name = "Progress · many small chapters · expanded", widthDp = 393, heightDp = 90)
 @Composable
 private fun ManyShortChaptersPreview() = FocusTrackPreview(
@@ -110,7 +130,7 @@ private fun LongDragTrackPreview(reverse: Boolean) {
                     Slider(
                         value = layout.trackFraction(book), onValueChange = {},
                         modifier = Modifier.fillMaxWidth(),
-                        thumb = { ReaderProgressThumb(colors, true) },
+                        thumb = { ReaderProgressThumb() },
                         track = { ReaderSegmentedProgressTrack(book, layout, true, true, colors) },
                     )
                 }

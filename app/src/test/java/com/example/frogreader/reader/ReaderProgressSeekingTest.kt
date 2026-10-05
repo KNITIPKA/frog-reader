@@ -122,13 +122,13 @@ class ReaderProgressSeekingTest {
         val base = ReaderProgressLayout(listOf(0f, 100f / 201f, 102f / 201f), 300f, 202)
         val rest = base.focused(100f / 201f, expanded = false)
         val expanded = base.focused(100f / 201f, expanded = true)
-        assertEquals(16f, rest.segment(1).span * 300f, 0.001f)
+        assertEquals(20f, rest.segment(1).span * 300f, 0.001f)
         assertEquals(32f, expanded.segment(1).span * 300f, 0.001f)
         assertTrue(expanded.segment(0).end <= expanded.segment(1).start)
         assertTrue(expanded.segment(2).start >= expanded.segment(1).end)
         assertTrue(expanded.segment(2).start > rest.segment(2).start)
         // The fill grows as well, rather than merely drawing a larger outline.
-        assertEquals(24f, (expanded.segment(1).span - expanded.inset(1) * 2f) * 300f, 0.001f)
+        assertEquals(20f, (expanded.segment(1).span - expanded.inset(1) * 2f) * 300f, 0.001f)
     }
 
     @Test
@@ -181,19 +181,21 @@ class ReaderProgressSeekingTest {
     }
 
     @Test
-    fun `expanded capsules preserve all page destinations and cursor clearance`() {
+    fun `resting and expanded capsules preserve all page destinations and taller cursor clearance`() {
         val starts = listOf(0, 1, 100, 102, 103, 203)
         for (width in listOf(240f, 300f, 720f)) {
             val base = ReaderProgressLayout(starts.map { it / 203f }, width, 204)
             for (page in 0..203) {
                 val fraction = page / 203f
-                val layout = base.focused(fraction, true)
-                assertEquals(page, ReaderNavigationPolicy.progressTargetIndex(layout.bookFraction(layout.trackFraction(fraction)), 0, 203))
-                val index = layout.chapters.indexAt(fraction)
-                val segment = layout.segment(index)
-                val cursor = layout.trackFraction(fraction)
-                assertTrue((cursor - segment.start) * width >= 4f - 0.001f)
-                assertTrue((segment.end - cursor) * width >= 4f - 0.001f)
+                for (expanded in listOf(false, true)) {
+                    val layout = base.focused(fraction, expanded)
+                    assertEquals(page, ReaderNavigationPolicy.progressTargetIndex(layout.bookFraction(layout.trackFraction(fraction)), 0, 203))
+                    val index = layout.chapters.indexAt(fraction)
+                    val segment = layout.segment(index)
+                    val cursor = layout.trackFraction(fraction)
+                    assertTrue((cursor - segment.start) * width >= 6f - 0.001f)
+                    assertTrue((segment.end - cursor) * width >= 6f - 0.001f)
+                }
             }
         }
     }

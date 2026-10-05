@@ -5,16 +5,13 @@ import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.Composable
@@ -24,12 +21,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -45,23 +44,10 @@ import kotlin.math.max
 private val ProgressThumbWidth = 24.dp
 private const val ProgressFocusDurationMillis = 100
 
-/** The thumb's layout width is also subtracted when calculating the shared track scale. */
+/** Material's handle keeps its hit/measurement geometry; the cursor is drawn with the capsule. */
 @Composable
-internal fun ReaderProgressThumb(colors: ReaderColors, enabled: Boolean) {
-    Box(Modifier.size(width = ProgressThumbWidth, height = 32.dp), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier.size(width = 6.dp, height = 13.dp)
-                .background(colors.chrome, RoundedCornerShape(3.dp))
-                .padding(1.dp),
-        ) {
-            Box(
-                Modifier.fillMaxSize().background(
-                    if (enabled) colors.onChrome else colors.onChromeVariant,
-                    RoundedCornerShape(2.dp),
-                ),
-            )
-        }
-    }
+internal fun ReaderProgressThumb() {
+    Box(Modifier.size(width = ProgressThumbWidth, height = 32.dp))
 }
 
 /** Material handles gestures; its visual coordinates are converted through the same scale as the track. */
@@ -148,7 +134,7 @@ internal fun ReaderSegmentedProgressSlider(
                     }
                 }
             },
-            thumb = { ReaderProgressThumb(colors, enabled) },
+            thumb = { ReaderProgressThumb() },
             track = {
                 ReaderSegmentedProgressTrack(fraction, layout, adjusting, enabled, colors)
             },
@@ -200,6 +186,22 @@ internal fun ReaderSegmentedProgressTrack(
                 }
             }
 
+            fun marker() {
+                val outerWidth = 6.dp.toPx()
+                val outerHeight = 13.dp.toPx()
+                drawRoundRect(
+                    colors.chrome, Offset(cursor - outerWidth / 2f, y - outerHeight / 2f),
+                    Size(outerWidth, outerHeight), CornerRadius(3.dp.toPx()),
+                )
+                val innerWidth = 4.dp.toPx()
+                val innerHeight = 11.dp.toPx()
+                drawRoundRect(
+                    if (enabled) colors.onChrome else colors.onChromeVariant,
+                    Offset(cursor - innerWidth / 2f, y - innerHeight / 2f),
+                    Size(innerWidth, innerHeight), CornerRadius(2.dp.toPx()),
+                )
+            }
+
             if (detail == 0f) {
                 capsule(0f, width, trackHeight)
             } else {
@@ -233,6 +235,19 @@ internal fun ReaderSegmentedProgressTrack(
                 )
                 val inset = layout.inset(index) * width
                 capsule(chapter.start * width + inset, chapter.end * width - inset, 10.dp.toPx())
+                // At a finger anchor the padding can briefly shrink during
+                // expansion. Clip the cursor to the capsule interior, never
+                // to a separate thumb box extending into its neighbours.
+                if (right - left > stroke * 2f) {
+                    val interior = Path().apply {
+                        addRoundRect(RoundRect(
+                            left + stroke, y - focusHeight / 2f + stroke,
+                            right - stroke, y + focusHeight / 2f - stroke,
+                            CornerRadius((focusHeight / 2f - stroke).coerceAtLeast(0f)),
+                        ))
+                    }
+                    clipPath(interior) { marker() }
+                }
                 drawRoundRect(
                     colors.accent,
                     Offset(left + stroke / 2f, y - focusHeight / 2f + stroke / 2f),
@@ -240,6 +255,8 @@ internal fun ReaderSegmentedProgressTrack(
                     CornerRadius(focusHeight / 2f),
                     style = Stroke(stroke),
                 )
+            } else {
+                marker()
             }
         }
     }

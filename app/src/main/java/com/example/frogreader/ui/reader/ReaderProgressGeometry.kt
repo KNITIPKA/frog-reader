@@ -5,6 +5,9 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+// The 13 dp cursor needs clearance from the rounded 17–19 dp focus outline.
+private const val ReaderProgressFocusPaddingDp = 6f
+
 /** True book coordinates, independent of visual gaps or the expanded chapter focus. */
 internal class ReaderProgressChapters(stops: List<Float>) {
     // A chapter starting on the final page has a point span at 1, not a span in the previous chapter.
@@ -85,13 +88,13 @@ internal class ReaderProgressLayout private constructor(
     private val minimumScale by lazy(LazyThreadSafetyMode.NONE) {
         (0 until chapters.size).minOf { candidate ->
             val span = boundaries[candidate + 1] - boundaries[candidate]
-            val largestFocus = max(span + 8f / trackWidthDp, 32f / trackWidthDp).coerceAtMost(0.95f)
+            val largestFocus = max(span + ReaderProgressFocusPaddingDp * 2f / trackWidthDp, 32f / trackWidthDp).coerceAtMost(0.95f)
             if (span < 1f) ((1f - largestFocus) / (1f - span)).coerceIn(0f, 1f) else 1f
         }
     }
 
     val insets: List<Float> = animatedInsets ?: List(chapters.size) { index ->
-        if (focusedIndex == index && trackWidthDp > 0f) min(4f / trackWidthDp, segment(index).span / 2f) else 0f
+        if (focusedIndex == index && trackWidthDp > 0f) min(ReaderProgressFocusPaddingDp / trackWidthDp, segment(index).span / 2f) else 0f
     }
 
     fun inset(index: Int): Float {
@@ -115,9 +118,9 @@ internal class ReaderProgressLayout private constructor(
         val index = chapters.indexAt(fraction)
         val chapter = chapters[index]
         val original = segment(index)
-        val width = max(original.span + 8f / trackWidthDp, if (expanded) 32f / trackWidthDp else 0f)
+        val width = max(original.span + ReaderProgressFocusPaddingDp * 2f / trackWidthDp, if (expanded) 32f / trackWidthDp else 0f)
             .coerceAtMost(0.95f)
-        val padding = min(4f / trackWidthDp, width / 2f)
+        val padding = min(ReaderProgressFocusPaddingDp / trackWidthDp, width / 2f)
         val pivot = anchor?.takeIf { it.chapterIndex == index }
             ?: ReaderProgressAnchor(index, fraction, trackFraction(fraction))
         val local = if (chapter.span > 0f) {
