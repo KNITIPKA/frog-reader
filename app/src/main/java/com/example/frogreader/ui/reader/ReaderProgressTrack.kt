@@ -168,7 +168,7 @@ internal fun ReaderSegmentedProgressTrack(
             val width = size.width
             if (width <= 0f) return@Canvas
             val y = size.height / 2f
-            val trackHeight = 8.dp.toPx()
+            val trackHeight = 9.dp.toPx()
             val cursor = width * if (rtl) 1f - value else value
 
             fun capsule(start: Float, end: Float, height: Float) {
@@ -177,7 +177,7 @@ internal fun ReaderSegmentedProgressTrack(
                 if (right <= left) return
                 val topLeft = Offset(left, y - height / 2f)
                 val capsuleSize = Size(right - left, height)
-                val radius = CornerRadius(min(height, right - left) / 2f)
+                val radius = CornerRadius(min(1.5.dp.toPx(), min(height, right - left) / 2f))
                 drawRoundRect(colors.track, topLeft, capsuleSize, radius)
                 if (enabled) {
                     clipRect(left = if (rtl) cursor else 0f, right = if (rtl) width else cursor) {
@@ -205,7 +205,7 @@ internal fun ReaderSegmentedProgressTrack(
             if (detail == 0f) {
                 capsule(0f, width, trackHeight)
             } else {
-                val gap = 1.6.dp.toPx() * detail
+                val gap = 2.dp.toPx() * detail
                 for (index in 0 until chapters.size) {
                     val start = layout.boundaries[index]
                     val end = layout.boundaries[index + 1]
@@ -228,13 +228,14 @@ internal fun ReaderSegmentedProgressTrack(
                 val right = width * if (rtl) 1f - chapter.start else chapter.end
                 val focusHeight = (17f + expansion * 2f).dp.toPx()
                 val stroke = 1.dp.toPx()
+                val focusRadius = min(4.dp.toPx(), min(focusHeight, right - left) / 2f)
                 // The outline and its backing stay inside this chapter's allocated span.
                 drawRoundRect(
                     colors.chrome, Offset(left, y - focusHeight / 2f), Size(right - left, focusHeight),
-                    CornerRadius(focusHeight / 2f),
+                    CornerRadius(focusRadius),
                 )
                 val inset = layout.inset(index) * width
-                capsule(chapter.start * width + inset, chapter.end * width - inset, 10.dp.toPx())
+                capsule(chapter.start * width + inset, chapter.end * width - inset, trackHeight)
                 // At a finger anchor the padding can briefly shrink during
                 // expansion. Clip the cursor to the capsule interior, never
                 // to a separate thumb box extending into its neighbours.
@@ -243,7 +244,7 @@ internal fun ReaderSegmentedProgressTrack(
                         addRoundRect(RoundRect(
                             left + stroke, y - focusHeight / 2f + stroke,
                             right - stroke, y + focusHeight / 2f - stroke,
-                            CornerRadius((focusHeight / 2f - stroke).coerceAtLeast(0f)),
+                            CornerRadius((focusRadius - stroke).coerceAtLeast(0f)),
                         ))
                     }
                     clipPath(interior) { marker() }
@@ -252,7 +253,7 @@ internal fun ReaderSegmentedProgressTrack(
                     colors.accent,
                     Offset(left + stroke / 2f, y - focusHeight / 2f + stroke / 2f),
                     Size((right - left - stroke).coerceAtLeast(0f), focusHeight - stroke),
-                    CornerRadius(focusHeight / 2f),
+                    CornerRadius(focusRadius),
                     style = Stroke(stroke),
                 )
             } else {

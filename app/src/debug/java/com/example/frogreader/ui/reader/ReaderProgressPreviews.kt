@@ -5,6 +5,10 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,6 +32,34 @@ import kotlin.math.roundToInt
 private val lastWishVolumes = listOf(1565, 52588, 10252, 52673, 8504, 68713, 8156, 73682, 11809, 73725, 11696, 96014, 15406)
 private val lastWishStops = lastWishVolumes.runningFold(0, Int::plus).dropLast(1)
     .map { it.toFloat() / lastWishVolumes.sum() }
+
+@Preview(name = "Progress · rectangular reference · 56 of 147", widthDp = 393, heightDp = 64)
+@Composable
+private fun RectangularProgressReferencePreview() {
+    FrogReaderTheme(AppTheme.OLED) {
+        val colors = readerColors(AppTheme.OLED)
+        val starts = listOf(0, 7, 14, 21, 29, 37, 46, 60, 71, 82, 93, 104, 115, 126, 135, 139, 143)
+        Box(Modifier.background(colors.background).padding(horizontal = 12.dp)) {
+            Surface(color = colors.chrome, shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 10.dp)) {
+                    ReaderSegmentedProgressSlider(
+                        fraction = 55f / 146f, chapterStops = starts.map { it / 146f }, positionCount = 147,
+                        adjusting = false, enabled = true, colors = colors,
+                        interactionSource = remember { MutableInteractionSource() },
+                        label = "Book progress", progressDescription = "56/147",
+                        onValueChange = {}, onValueChangeFinished = {},
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp).height(26.dp),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("4 pages left in chapter", color = colors.onChromeVariant, style = MaterialTheme.typography.labelSmall)
+                        Text("56/147", color = colors.onChromeVariant, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Preview(name = "Progress · selected mock", widthDp = 393, heightDp = 180)
 @Composable

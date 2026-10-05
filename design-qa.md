@@ -68,3 +68,30 @@ The profile hero is redesigned as an 84 dp avatar/name/menu row above a full-wid
 Native Android Studio Compose Preview was inspected after refresh: Profile at 393 dp light/OLED, 360 dp with a long Cyrillic name, and 360 dp at 150% text; Library in light/OLED, expanded-add-menu, and 150% text states. Profile controls and names fit the hero. At 360 × 800 dp, the lower dashboard requires scrolling; the 393 × 852 dp default-text profile fits. No emulator or physical device was controlled.
 
 Validation: JBR `./gradlew test :app:assembleDebug` passed (940 tests, 0 failures/errors, 5 skipped); after final name-sizing and search-color polish, `:app:assembleDebug` passed again. `git diff --check` passed. These are native preview/build results, not physical-device validation.
+
+
+## 2026-10-05 — Reader progress: rectangular segments
+
+Scope: the user selected a new shape for the existing native Android progress control. This pass covers segment and focus-outline shape, spacing, and cursor containment; it retains the existing book-coordinate map, gestures, palette, typography, and compact reader panel. No web prototype or raster assets are needed for this native control.
+
+Source visual truth: `/Users/frog/Downloads/Screenshot_20261005-231044.png` (1080 × 171 px).
+Implementation screenshot: `/Users/frog/AndroidStudioProjects/FrogReader/.artifacts/reader-progress-segments/native/com/example/frogreader/ui/reader/ReaderProgressPreviewsKt/rectangular_reference_0.png` (1032 × 168 px).
+Full-view comparison evidence: `/Users/frog/AndroidStudioProjects/FrogReader/.artifacts/reader-progress-segments/rectangular-shape-comparison.png`.
+Viewport/state: native Compose, 393 × 64 dp, OLED, page 56/147, four pages remaining, selected chapter, 17 segments. Source density is inferred from 1080 px / 393 dp; renderer density is approximately 2.625. The implementation is scaled uniformly to 1080 × 176 px for comparison. CSS/browser sizing is inapplicable. The supplied source is already a focused component crop; its corners, outline and cursor remain readable at normalized pixel scale, so a second detail crop was unnecessary.
+
+Findings: no actionable P0/P1/P2 shape differences in the requested scope.
+
+- Fonts/typography: the preview uses the existing reader's Material typography. Both counters are legible and fit without wrapping. The source's exact font rendering/weight is outside this shape-only request; production typography is retained.
+- Spacing/layout rhythm: 9 dp rectangular segment bodies, 1.5 dp corner radii, 2 dp preferred gaps, and a 4 dp focus-outline radius match the reference's shallow segment corners and softer rectangular focus. Focus height remains 17–19 dp; the panel's dimensions remain stable.
+- Colors/tokens: existing ReaderColors foreground, accent, track, and chrome roles are retained. The reference's more saturated mint and textured background are intentional differences outside the requested shape change; no palette values are introduced.
+- Image/asset quality: the visual consists of native standard UI controls. No new icons, illustrations, photos, generated assets or placeholders are used. Native rendering remains sharp at the inspected density.
+- Copy/content: the reference comparison fixture shows the same `4 pages left in chapter` and `56/147` labels. Real production text and counters retain their existing source.
+- Dynamic geometry: the reference does not provide the book's chapter-start map, so the fixture uses plausible chapter spans. Exact segment widths and cursor position within the selected chapter remain governed by real pagination rather than being forced to match a screenshot.
+
+Comparison history: the previously accepted control used capsule corners. The user's new reference requests rectangles. After changing segment, outline, and interior clipping radii, the combined source/native comparison passes on its first review; no QA-driven corrective iteration was required.
+
+Additional native states: OLED, Light with enlarged text, Beige, landscape, dense TOC, short-chapter expansion, first/last-page cursor positions, terminal one-page chapter, and RTL render successfully (15 previews, no reported render errors). Selected OLED, Beige and both edge-direction previews were inspected. The cursor remains inside the selected outline at the inspected edge positions. The existing seek mapping, interrupted-drag, cancellation, page-turn and short-chapter tests pass: 1088 passed, 5 skipped, no failures/errors. No emulator or physical device was controlled; touch feel and phone acceptance remain owner checks.
+
+Implementation checklist: segment corners updated; focus and cursor clipping corners synchronized; gaps and body height matched; native comparison captured; regression suite and APK build passed.
+
+final result: passed
