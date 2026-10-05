@@ -234,8 +234,9 @@ internal fun ReaderChapterFooter(
     ) { activeLabel, activeParents ->
         ReaderPanelHandle(colors, panelExpanded, onTogglePanel, headerDrag)
         panelContent()
-        val heading = remember(activeLabel) { readerChapterHeading(activeLabel) }
-        val context = listOfNotNull(activeParents.lastOrNull(), heading.label).joinToString(" · ")
+        val heading = remember(activeLabel, activeParents) {
+            resolveReaderBottomBarHeading(activeLabel, activeParents)
+        }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -254,22 +255,23 @@ internal fun ReaderChapterFooter(
                     .padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalArrangement = Arrangement.Center,
             ) {
-                if (context.isNotEmpty()) {
+                if (heading.context.isNotEmpty()) {
                     Text(
-                        text = context,
+                        text = heading.context,
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.onChromeVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         autoSize = TextAutoSize.StepBased(
-                            minFontSize = 9.sp,
+                            minFontSize = 8.sp,
                             maxFontSize = 11.sp,
                             stepSize = 0.5.sp,
                         ),
                         modifier = Modifier
+                            .fillMaxWidth()
                             .padding(bottom = 1.dp)
                             .clearAndSetSemantics {
-                                contentDescription = (activeParents + listOfNotNull(heading.label)).joinToString(" › ")
+                                contentDescription = heading.context
                             },
                     )
                 }
@@ -283,10 +285,15 @@ internal fun ReaderChapterFooter(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     autoSize = TextAutoSize.StepBased(
-                        minFontSize = 10.sp,
-                        maxFontSize = 15.sp,
+                        minFontSize = 8.5.sp,
+                        maxFontSize = 14.sp,
                         stepSize = 0.5.sp,
                     ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clearAndSetSemantics {
+                            contentDescription = heading.title
+                        },
                 )
             }
             ReaderChromeButton(

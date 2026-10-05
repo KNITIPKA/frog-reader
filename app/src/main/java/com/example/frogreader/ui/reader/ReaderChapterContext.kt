@@ -66,9 +66,12 @@ private val numberedChapter = Regex(
 private val bareChapterNumber = Regex("^(?:[IVXLCDM]+|\\d+(?:\\.\\d+)*)(?=[.:：](?!\\d))")
 private val chapterTitleSeparator = Regex("^\\s*[.:：—–-]?\\s*")
 
+internal fun cleanChapterTitle(text: String): String =
+    text.replace('\u00A0', ' ').trim().replace(Regex("""\s+"""), " ")
+
 /** Split only recognizable numbering; an ordinary title must never lose its first word. */
 internal fun readerChapterHeading(text: String): ReaderChapterHeading {
-    val normalized = text.trim().replace(Regex("\\s+"), " ")
+    val normalized = cleanChapterTitle(text)
     val prefix = numberedChapter.find(normalized) ?: bareChapterNumber.find(normalized)
         ?: return ReaderChapterHeading(null, normalized)
     val title = normalized.substring(prefix.range.last + 1).replaceFirst(chapterTitleSeparator, "")
@@ -76,11 +79,70 @@ internal fun readerChapterHeading(text: String): ReaderChapterHeading {
         else ReaderChapterHeading(prefix.value, title)
 }
 
+internal data class ReaderBottomBarHeading(val context: String, val title: String)
+
+private val bareSubchapter = Regex(
+    """^(?:[0-9]+(?:\.[0-9]+)*|[ivxlcdm]+|§\s*[0-9]+)$""",
+    RegexOption.IGNORE_CASE,
+)
+
+/**
+ * Resolves context line and title line for the reader bottom bar.
+ * Ensures:
+ * - No raw newlines or unnormalized whitespace cause premature line truncation
+ * - Subchapters like "15" inside "Глава 1: Миссис Тассенбаум..." promote the real chapter name
+ *   to the title line while showing chapter and section numbers in the context line
+ * - Long titles stay strictly single-line and adapt font size rather than expanding bottom bar height
+ */
+internal fun resolveReaderBottomBarHeading(
+    activeLabel: String,
+    activeParents: List<String>,
+): ReaderBottomBarHeading {
+    val cleanLabel = cleanChapterTitle(activeLabel)
+    val cleanParents = activeParents.map(::cleanChapterTitle).filter(String::isNotBlank)
+
+    if (cleanLabel.matches(bareSubchapter) && cleanParents.isNotEmpty()) {
+        val parentHeading = readerChapterHeading(cleanParents.last())
+        if (parentHeading.label != null) {
+            val ancestorContext = cleanParents.dropLast(1).lastOrNull()?.let { anc ->
+                val ancHeading = readerChapterHeading(anc)
+                ancHeading.label ?: ancHeading.title
+            }
+            val context = listOfNotNull(ancestorContext, parentHeading.label, cleanLabel).joinToString(" · ")
+            return ReaderBottomBarHeading(context = context, title = parentHeading.title)
+        } else {
+            val ancestorContext = cleanParents.dropLast(1).lastOrNull()?.let { anc ->
+                val ancHeading = readerChapterHeading(anc)
+                ancHeading.label ?: ancHeading.title
+            }
+            val context = listOfNotNull(ancestorContext, cleanParents.last()).joinToString(" · ")
+            return ReaderBottomBarHeading(context = context, title = cleanLabel)
+        }
+    }
+
+    val heading = readerChapterHeading(cleanLabel)
+    if (heading.label != null) {
+        val parentContext = cleanParents.lastOrNull()?.let { anc ->
+            val ancHeading = readerChapterHeading(anc)
+            ancHeading.label ?: ancHeading.title
+        }
+        val context = listOfNotNull(parentContext, heading.label).joinToString(" · ")
+        return ReaderBottomBarHeading(context = context, title = heading.title)
+    } else {
+        val parentContext = cleanParents.lastOrNull()?.let { anc ->
+            val ancHeading = readerChapterHeading(anc)
+            ancHeading.label ?: ancHeading.title
+        }
+        val context = parentContext.orEmpty()
+        return ReaderBottomBarHeading(context = context, title = heading.title)
+    }
+}
+
 /** A nav root sometimes repeats the publication title rather than naming a part. */
 internal fun readerVisibleChapterParents(bookTitle: String, parents: List<String>): List<String> {
     fun identity(text: String) = text.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
     val book = identity(bookTitle)
-    return parents.dropWhile { book.isNotEmpty() && identity(it) == book }
+    return parents.map(::cleanChapterTitle).dropWhile { book.isNotEmpty() && identity(it) == book }
 }
 
 /** The current TOC section, including its enclosing books/parts/chapters. */

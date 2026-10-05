@@ -14,6 +14,9 @@ import com.example.frogreader.ui.reader.ReaderChapterPreview
 import com.example.frogreader.ui.reader.resolveReaderChapterPreview
 import com.example.frogreader.ui.reader.readerChapterPagesLeft
 import com.example.frogreader.ui.reader.readerChapterPercentRemaining
+import com.example.frogreader.ui.reader.ReaderBottomBarHeading
+import com.example.frogreader.ui.reader.resolveReaderBottomBarHeading
+import com.example.frogreader.ui.reader.cleanChapterTitle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -298,6 +301,58 @@ class ReaderChapterContextTest {
         )
         assertEquals("Chapter 3", scrollPreview.label)
         assertEquals(listOf("Part Two"), scrollPreview.parents)
+    }
+
+    @Test
+    fun `resolveReaderBottomBarHeading properly formats Dark Tower subchapter 15`() {
+        val heading = resolveReaderBottomBarHeading(
+            activeLabel = "15",
+            activeParents = listOf(
+                "Часть 3\nВ этом зелено-золотом мареве Вес'-ка Ган",
+                "Глава 1\nМиссис Тассенбаум едет на юг",
+            ),
+        )
+        // Subchapter number and parent chapter label appear on the context line,
+        // while the descriptive title is promoted to the main title line.
+        assertEquals("Часть 3 · Глава 1 · 15", heading.context)
+        assertEquals("Миссис Тассенбаум едет на юг", heading.title)
+    }
+
+    @Test
+    fun `resolveReaderBottomBarHeading formats chapter start with parent part`() {
+        val heading = resolveReaderBottomBarHeading(
+            activeLabel = "Глава 1\nМиссис Тассенбаум едет на юг",
+            activeParents = listOf(
+                "Часть 3\nВ этом зелено-золотом мареве Вес'-ка Ган",
+            ),
+        )
+        assertEquals("Часть 3 · Глава 1", heading.context)
+        assertEquals("Миссис Тассенбаум едет на юг", heading.title)
+    }
+
+    @Test
+    fun `resolveReaderBottomBarHeading normalizes whitespace and removes newlines`() {
+        val heading = resolveReaderBottomBarHeading(
+            activeLabel = "Розділ  4\n  Навпростець   по гриби  ",
+            activeParents = listOf("Книга   перша\n  "),
+        )
+        assertEquals("Книга перша · Розділ 4", heading.context)
+        assertEquals("Навпростець по гриби", heading.title)
+    }
+
+    @Test
+    fun `resolveReaderBottomBarHeading handles simple chapters with and without numbering`() {
+        val numbered = resolveReaderBottomBarHeading("Chapter IV: A long tale", emptyList())
+        assertEquals("Chapter IV", numbered.context)
+        assertEquals("A long tale", numbered.title)
+
+        val unnumbered = resolveReaderBottomBarHeading("Пролог", emptyList())
+        assertEquals("", unnumbered.context)
+        assertEquals("Пролог", unnumbered.title)
+
+        val numberedNoSubtitle = resolveReaderBottomBarHeading("Глава 12", emptyList())
+        assertEquals("", numberedNoSubtitle.context)
+        assertEquals("Глава 12", numberedNoSubtitle.title)
     }
 }
 
