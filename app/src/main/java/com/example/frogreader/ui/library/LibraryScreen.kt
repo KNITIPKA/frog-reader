@@ -108,7 +108,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.ui.util.lerp
@@ -1089,43 +1088,11 @@ private fun HeroCard(
             )
 
             Column(modifier = Modifier.weight(1f)) {
-                // The title block takes whatever the progress and the buttons
-                // leave, and the title sizes itself to it: a short title is set
-                // large on one line, a long one steps down until two lines hold
-                // it, and only a truly long one is cut. The card stays one
-                // height either way — it is shared geometry with the profile
-                // tab, and a header that jumps with the book is worse than a
-                // title that shrinks.
-                Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    Text(
-                        text = book.title,
-                        fontWeight = FontWeight.SemiBold,
-                        lineHeight = 1.16.em,
-                        letterSpacing = (-0.3).sp,
-                        color = frog.ink,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        autoSize = TextAutoSize.StepBased(
-                            minFontSize = 14.sp,
-                            maxFontSize = 20.sp,
-                            stepSize = 0.5.sp,
-                        ),
-                        // Weighted, so the author is measured first and the
-                        // title is sized against what is left after it.
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    book.author?.let { author ->
-                        Spacer(Modifier.height(3.dp))
-                        Text(
-                            text = author,
-                            fontSize = 12.5.sp,
-                            lineHeight = 16.sp,
-                            color = scheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+                HeroBookHeading(
+                    title = book.title,
+                    author = book.author,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
 
                 Spacer(Modifier.height(8.dp))
                 Box(
@@ -1882,7 +1849,7 @@ private fun BookListRow(
                     lineHeight = 10.sp,
                     fontWeight = FontWeight.Medium,
                     letterSpacing = 0.7.sp,
-                    color = frog.ink2.copy(alpha = 0.6f),
+                    color = scheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -1971,7 +1938,7 @@ private fun ShelfListRow(
                     lineHeight = 10.sp,
                     fontWeight = FontWeight.Medium,
                     letterSpacing = 0.7.sp,
-                    color = frog.ink2.copy(alpha = 0.6f),
+                    color = scheme.onSurfaceVariant,
                     maxLines = 1,
                 )
             }

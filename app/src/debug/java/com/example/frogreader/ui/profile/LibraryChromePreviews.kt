@@ -42,9 +42,79 @@ private fun LargeTextLibraryChromePreview() = LibraryChrome(AppTheme.WHITE, expa
 @Composable
 private fun ListLibraryChromePreview() = LibraryChrome(AppTheme.WHITE, expanded = false, mode = LibraryViewMode.LIST)
 
+@Preview(name = "Beige · library grid", widthDp = 393, heightDp = 882, showSystemUi = true)
 @Composable
-private fun LibraryChrome(theme: AppTheme, expanded: Boolean, mode: LibraryViewMode = LibraryViewMode.GRID) {
-    val viewModel = remember(mode) { LibraryViewModel(PreviewLibraryRepository()).apply { setViewMode(mode) } }
+private fun BeigeLibraryChromePreview() = LibraryChrome(AppTheme.SEPIA, expanded = false)
+
+@Preview(name = "Beige · library list", widthDp = 393, heightDp = 882, showSystemUi = true)
+@Composable
+private fun BeigeListLibraryChromePreview() = LibraryChrome(AppTheme.SEPIA, expanded = false, mode = LibraryViewMode.LIST)
+
+@Preview(name = "Beige · add menu", widthDp = 393, heightDp = 882, showSystemUi = true)
+@Composable
+private fun BeigeLibraryMenuPreview() = LibraryChrome(AppTheme.SEPIA, expanded = true)
+
+@Preview(name = "Beige · library · large text", widthDp = 360, heightDp = 800, showSystemUi = true, fontScale = 1.5f)
+@Composable
+private fun BeigeLargeTextLibraryChromePreview() = LibraryChrome(AppTheme.SEPIA, expanded = false)
+
+@Preview(name = "Hero · screenshot title", widthDp = 393, heightDp = 852, showSystemUi = true)
+@Composable
+private fun ScreenshotHeroPreview() = LibraryChrome(
+    AppTheme.OLED, expanded = false, heroTitle = "Последнее желание", heroAuthor = "Анджей Сапковский",
+)
+
+@Preview(name = "Hero · short title", widthDp = 360, heightDp = 800, showSystemUi = true)
+@Composable
+private fun ShortHeroPreview() = LibraryChrome(
+    AppTheme.WHITE, expanded = false, heroTitle = "Dune", heroAuthor = "Frank Herbert",
+)
+
+@Preview(name = "Hero · balanced short title", widthDp = 360, heightDp = 800, showSystemUi = true)
+@Composable
+private fun BalancedShortHeroPreview() = LibraryChrome(
+    AppTheme.WHITE, expanded = false, heroTitle = "Animal Farm", heroAuthor = "George Orwell",
+)
+
+@Preview(name = "Hero · long metadata · 320dp", widthDp = 320, heightDp = 800, showSystemUi = true)
+@Composable
+private fun LongHeroPreview() = LibraryChrome(
+    AppTheme.WHITE, expanded = false,
+    heroTitle = "The Lord of the Rings: The Fellowship of the Ring",
+    heroAuthor = "John Ronald Reuel Tolkien",
+)
+
+@Preview(name = "Hero · no author", widthDp = 360, heightDp = 800, showSystemUi = true)
+@Composable
+private fun NoAuthorHeroPreview() = LibraryChrome(
+    AppTheme.WHITE, expanded = false, heroTitle = "Dune", heroAuthor = null,
+)
+
+@Preview(name = "Hero · landscape", widthDp = 800, heightDp = 400, showSystemUi = true)
+@Composable
+private fun LandscapeHeroPreview() = LibraryChrome(
+    AppTheme.OLED, expanded = false, heroTitle = "Последнее желание", heroAuthor = "Анджей Сапковский",
+)
+
+@Preview(name = "Hero · long metadata · large text", widthDp = 360, heightDp = 800, fontScale = 1.5f)
+@Composable
+private fun LargeTextLongHeroPreview() = LibraryChrome(
+    AppTheme.WHITE, expanded = false,
+    heroTitle = "The Lord of the Rings: The Fellowship of the Ring",
+    heroAuthor = "John Ronald Reuel Tolkien",
+)
+
+@Composable
+private fun LibraryChrome(
+    theme: AppTheme,
+    expanded: Boolean,
+    mode: LibraryViewMode = LibraryViewMode.GRID,
+    heroTitle: String = "The Time Machine",
+    heroAuthor: String? = "H. G. Wells",
+) {
+    val viewModel = remember(mode, heroTitle, heroAuthor) {
+        LibraryViewModel(PreviewLibraryRepository(heroTitle, heroAuthor)).apply { setViewMode(mode) }
+    }
     var menuExpanded by remember { mutableStateOf(expanded) }
     FrogReaderTheme(theme) {
         FrogMainScaffold(
@@ -65,9 +135,9 @@ private fun LibraryChrome(theme: AppTheme, expanded: Boolean, mode: LibraryViewM
 }
 
 /** In-memory fixtures only; previewing must never touch the user's library. */
-private class PreviewLibraryRepository : BookRepository() {
+private class PreviewLibraryRepository(heroTitle: String, heroAuthor: String?) : BookRepository() {
     override val books = MutableStateFlow(listOf(
-        "The Time Machine" to "H. G. Wells",
+        heroTitle to heroAuthor,
         "Pride and Prejudice" to "Jane Austen",
         "The Secret Garden" to "Frances Hodgson Burnett",
         "Treasure Island" to "Robert Louis Stevenson",
@@ -81,8 +151,9 @@ private class PreviewLibraryRepository : BookRepository() {
         Book(
             id = "preview-$index", title = title, author = author,
             format = BookFormat.EPUB, fileName = "preview.epub", addedAtMillis = 0,
-            progress = ReadingProgress(fraction = if (index == 0) 0.42f else 0f),
-            status = if (index == 0) ReadingStatus.READING else ReadingStatus.NONE,
+            progress = ReadingProgress(fraction = listOf(0.84f, 0.41f, 0.66f, 0.49f, 0.57f, 0.11f, 0.01f).getOrElse(index) { 0f }),
+            status = if (index < 7) ReadingStatus.READING else ReadingStatus.NONE,
+            lastOpenedAtMillis = if (index == 0) 1_700_000_000_000L else null,
         )
     })
     override val shelves = MutableStateFlow<List<Shelf>>(emptyList())

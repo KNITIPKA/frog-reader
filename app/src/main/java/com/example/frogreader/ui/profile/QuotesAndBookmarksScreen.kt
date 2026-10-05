@@ -302,8 +302,8 @@ private fun QuotesAndBookmarksTabs(selected: Int, quoteCount: Int, bookmarkCount
                     Tab(
                         selected = selected == index, onClick = { onSelect(index) },
                         modifier = Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
-                            .background(if (selected == index) colors.inverseSurface else colors.surfaceContainer),
-                        selectedContentColor = colors.inverseOnSurface,
+                            .background(if (selected == index) colors.primary else colors.surfaceContainer),
+                        selectedContentColor = colors.onPrimary,
                         unselectedContentColor = colors.onSurfaceVariant,
                         text = {
                             Text(stringResource(R.string.quotes_bookmarks_tab_count, stringResource(label), count),
