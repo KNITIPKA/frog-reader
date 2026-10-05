@@ -377,7 +377,7 @@ private fun ReaderBookProgress(
             lastScrubbedChapterId = null
         })
     }
-    val shown = (draft?.fraction ?: fraction).coerceIn(0f, 1f)
+    val shown = draft?.fraction ?: readerProgressPageFraction(fraction, pageCount)
     // Hold a committed position while navigation catches up, without adding
     // history for a cancelled gesture or a seek to the page already displayed.
     LaunchedEffect(fraction, adjusting, draft, pageCount, itemCount) {
@@ -394,7 +394,10 @@ private fun ReaderBookProgress(
         }
     }
 
-    val currentPreview = draft?.preview
+    val pagePreview = remember(shown, draft != null, pageCount, chapterAtFraction) {
+        if (pageCount != null && draft == null) chapterAtFraction?.invoke(shown) else null
+    }
+    val currentPreview = draft?.preview ?: pagePreview
     val activeLabel = currentPreview?.label ?: defaultChapterLabel
     val activeParents = currentPreview?.parents ?: defaultChapterParents
 

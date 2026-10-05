@@ -1,7 +1,7 @@
 package com.example.frogreader.ui.reader
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
@@ -43,13 +43,14 @@ import kotlin.math.min
 import kotlin.math.max
 
 private val ProgressThumbWidth = 24.dp
+private const val ProgressFocusDurationMillis = 100
 
 /** The thumb's layout width is also subtracted when calculating the shared track scale. */
 @Composable
 internal fun ReaderProgressThumb(colors: ReaderColors, enabled: Boolean) {
     Box(Modifier.size(width = ProgressThumbWidth, height = 32.dp), contentAlignment = Alignment.Center) {
         Box(
-            Modifier.size(width = 6.dp, height = 9.dp)
+            Modifier.size(width = 6.dp, height = 13.dp)
                 .background(colors.chrome, RoundedCornerShape(3.dp))
                 .padding(1.dp),
         ) {
@@ -89,20 +90,29 @@ internal fun ReaderSegmentedProgressSlider(
         val short = base.chapters[index].span * trackWidth < 28f
         val seekAnchor = anchor.takeIf { adjusting }
         val expanded = adjusting && short
-        val target = remember(base, index, expanded, seekAnchor, enabled, fraction.takeIf { seekAnchor == null }) {
-            if (enabled) base.focused(fraction, expanded, seekAnchor) else base
+        val focusFraction = if (seekAnchor == null && !expanded) {
+            val chapter = base.chapters[index]
+            chapter.start + chapter.span / 2f
+        } else fraction
+        val target = remember(base, index, expanded, seekAnchor, enabled, focusFraction.takeIf { expanded && seekAnchor == null }) {
+            if (enabled) base.focused(focusFraction, expanded, seekAnchor) else base
         }
         val phase = remember(base) { Animatable(1f) }
         var transition by remember(base) { mutableStateOf(ReaderProgressTransition(target, target)) }
         LaunchedEffect(target) {
-            val next = ReaderProgressTransition(transition.frame(phase.value), target)
-            phase.snapTo(0f)
-            transition = next
-            phase.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
+            if (!adjusting && transition.focusedIndex != target.focusedIndex) {
+                transition = ReaderProgressTransition(target, target)
+                phase.snapTo(1f)
+            } else {
+                val next = ReaderProgressTransition(transition.frame(phase.value), target)
+                phase.snapTo(0f)
+                transition = next
+                phase.animateTo(1f, tween(ProgressFocusDurationMillis, easing = LinearOutSlowInEasing))
+            }
         }
-        // Only the animation phase changes on a frame. The book map and the
-        // destination geometry stay cached until the selected chapter changes.
-        val layout = transition.frame(phase.value, target)
+        // Normal page turns never wait for a shape animation to select a
+        // chapter. A drag still uses the same animated scale for drawing/input.
+        val layout = transition.frame(phase.value, target, animateChapterChange = adjusting)
         Slider(
             value = layout.trackFraction(fraction),
             onValueChange = { visual ->
@@ -160,11 +170,11 @@ internal fun ReaderSegmentedProgressTrack(
     val index = chapters.indexAt(fraction)
     val chapter = layout.segment(index)
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-    Box(modifier.fillMaxWidth().height(16.dp)) {
+    Box(modifier.fillMaxWidth().height(22.dp)) {
         val shortChapter = chapters[index].span * layout.trackWidthDp < 28f
         val expansion by animateFloatAsState(
             targetValue = if (enabled && adjusting && shortChapter) 1f else 0f,
-            animationSpec = tween(180, easing = FastOutSlowInEasing),
+            animationSpec = tween(ProgressFocusDurationMillis, easing = LinearOutSlowInEasing),
             label = "readerShortChapterFocus",
         )
         val detail = layout.detail
@@ -172,7 +182,7 @@ internal fun ReaderSegmentedProgressTrack(
             val width = size.width
             if (width <= 0f) return@Canvas
             val y = size.height / 2f
-            val trackHeight = 5.dp.toPx()
+            val trackHeight = 8.dp.toPx()
             val cursor = width * if (rtl) 1f - value else value
 
             fun capsule(start: Float, end: Float, height: Float) {
@@ -214,7 +224,7 @@ internal fun ReaderSegmentedProgressTrack(
             if (enabled && layout.focusedIndex != null && chapter.span > 0f) {
                 val left = width * if (rtl) 1f - chapter.end else chapter.start
                 val right = width * if (rtl) 1f - chapter.start else chapter.end
-                val focusHeight = (11f + expansion).dp.toPx()
+                val focusHeight = (17f + expansion * 2f).dp.toPx()
                 val stroke = 1.dp.toPx()
                 // The outline and its backing stay inside this chapter's allocated span.
                 drawRoundRect(
@@ -222,7 +232,7 @@ internal fun ReaderSegmentedProgressTrack(
                     CornerRadius(focusHeight / 2f),
                 )
                 val inset = layout.inset(index) * width
-                capsule(chapter.start * width + inset, chapter.end * width - inset, 6.dp.toPx())
+                capsule(chapter.start * width + inset, chapter.end * width - inset, 10.dp.toPx())
                 drawRoundRect(
                     colors.accent,
                     Offset(left + stroke / 2f, y - focusHeight / 2f + stroke / 2f),

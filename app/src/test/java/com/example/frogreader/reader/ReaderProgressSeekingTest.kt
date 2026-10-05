@@ -8,6 +8,8 @@ import com.example.frogreader.ui.reader.ReaderProgressLayout
 import com.example.frogreader.ui.reader.ReaderProgressAnchor
 import com.example.frogreader.ui.reader.resolveReaderChapterPreview
 import com.example.frogreader.ui.reader.readerProgressSeekReached
+import com.example.frogreader.ui.reader.readerProgressPageFraction
+import com.example.frogreader.ui.reader.readerChapterPagesLeft
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -16,6 +18,47 @@ import org.junit.Test
 import kotlin.math.roundToInt
 
 class ReaderProgressSeekingTest {
+    @Test
+    fun `page counter preview and capsule switch together before a page turn settles`() {
+        val starts = listOf(0, 10, 11, 85, 100)
+        val titles = listOf("First", "One page", "Long middle", "Last", "Final page")
+        val pages = List(101) { BookPage(emptyList(), firstItemIndex = it) }
+        val contexts = ReaderChapterContexts(emptyList(), starts, titles, List(starts.size) { 0 }, 101)
+        val base = ReaderProgressLayout(starts.map { it / 100f }, 300f, 101)
+        for ((livePage, expected) in listOf(9.49f to 9, 9.51f to 10, 10.51f to 11, 10.49f to 10,
+            9.49f to 9, 84.51f to 85, 85.49f to 85, 99.51f to 100)) {
+            val shown = readerProgressPageFraction(livePage / 100f, 101)
+            val chapter = starts.indexOfLast { it <= expected }
+            assertEquals(expected, ReaderNavigationPolicy.progressTargetIndex(shown, 0, 100))
+            assertEquals(chapter, base.chapters.indexAt(shown))
+            val preview = resolveReaderChapterPreview(shown, true, 101, pages, starts, starts, 101,
+                { item -> starts.indexOfLast { it <= item } }, contexts, "Test book", { titles[it] })
+            assertEquals(titles[chapter], preview.label)
+            val end = (starts.getOrNull(chapter + 1)?.minus(1) ?: 100)
+            assertEquals(end - expected, readerChapterPagesLeft(starts, 101, shown))
+        }
+        // Scrolling/unknown pagination keeps its continuous position.
+        assertEquals(0.34567f, readerProgressPageFraction(0.34567f, null), 0f)
+    }
+
+    @Test
+    fun `ordinary chapter changes never wait for an interrupted capsule animation`() {
+        val base = ReaderProgressLayout(listOf(0f, 0.1f, 0.11f, 0.85f, 1f), 300f, 101)
+        val previous = base.focused(0.1f, true)
+        val pending = ReaderProgressTransition(base.focused(0.09f, false), previous)
+        for (page in listOf(9, 11, 85, 100)) {
+            val fraction = page / 100f
+            val next = base.focused(fraction, false)
+            for (phase in listOf(0f, 0.01f, 0.5f, 1f)) {
+                val frame = pending.frame(phase, next, animateChapterChange = false)
+                assertSame(next, frame)
+                assertEquals(base.chapters.indexAt(fraction), frame.focusedIndex)
+                assertEquals(page, ReaderNavigationPolicy.progressTargetIndex(
+                    frame.bookFraction(frame.trackFraction(fraction)), 0, 100))
+            }
+        }
+    }
+
     @Test
     fun `rapid animation reversals resume from the visible frame without rebuilding book coordinates`() {
         val base = ReaderProgressLayout(List(200) { it / 200f }, 300f, 10001)

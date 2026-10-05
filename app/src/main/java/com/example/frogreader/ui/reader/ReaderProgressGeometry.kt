@@ -213,7 +213,16 @@ internal class ReaderProgressTransition(from: ReaderProgressLayout, private val 
     private val fromInsets = from.insets.toFloatArray()
     private val toInsets = to.insets.toFloatArray()
 
-    fun frame(progress: Float, selection: ReaderProgressLayout = to): ReaderProgressLayout {
+    val focusedIndex: Int? get() = to.focusedIndex
+
+    fun frame(
+        progress: Float,
+        selection: ReaderProgressLayout = to,
+        animateChapterChange: Boolean = true,
+    ): ReaderProgressLayout {
+        // Page turns switch the chapter immediately. Interpolation is for
+        // a dragged capsule or its collapse after releasing the finger.
+        if (!animateChapterChange && selection.focusedIndex != to.focusedIndex) return selection
         val amount = progress.coerceIn(0f, 1f)
         if (amount == 1f) return if (selection === to) to else selection.withGeometry(to.boundaries, to.insets)
         return selection.withGeometry(
@@ -230,6 +239,14 @@ internal class ReaderProgressTransition(from: ReaderProgressLayout, private val 
         override val size: Int get() = to.size
         override fun get(index: Int): Float = from[index] + (to[index] - from[index]) * amount
     }
+}
+
+/** The capsule, page counter and chapter preview address the same page during a page turn. */
+internal fun readerProgressPageFraction(fraction: Float, pageCount: Int?): Float {
+    val safe = if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 0f
+    if (pageCount == null || pageCount <= 1) return safe
+    val lastPage = pageCount - 1
+    return ReaderNavigationPolicy.progressTargetIndex(safe, 0, lastPage).toFloat() / lastPage
 }
 
 /** A short chapter jump still waits for navigation to reach the selected page/item. */
