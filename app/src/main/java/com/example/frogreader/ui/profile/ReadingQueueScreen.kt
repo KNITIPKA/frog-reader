@@ -529,9 +529,9 @@ private fun ReadingQueueCard(
                             Text(stringResource(R.string.reading_queue_first), style = MaterialTheme.typography.labelSmall)
                         }
                     }
-                    Text(entry.title.uppercase(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                    Text(entry.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
                         maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    if (entry.author.isNotBlank()) Text(entry.author.uppercase(), style = MaterialTheme.typography.bodySmall,
+                    if (entry.author.isNotBlank()) Text(entry.author, style = MaterialTheme.typography.bodySmall,
                         color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 // Anchor both controls to the card's top edge, independently of title/note height.

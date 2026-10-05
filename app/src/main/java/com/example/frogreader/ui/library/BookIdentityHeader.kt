@@ -104,8 +104,8 @@ internal fun BookIdentityHeader(
             }
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title.uppercase().ifBlank { stringResource(R.string.edit_field_title) }, style = MaterialTheme.typography.titleLarge)
-            if (!author.isNullOrBlank()) Text(author.uppercase(), style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+            Text(title.ifBlank { stringResource(R.string.edit_field_title) }, style = MaterialTheme.typography.titleLarge)
+            if (!author.isNullOrBlank()) Text(author, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
             if (!series.isNullOrBlank()) Text(series, style = MaterialTheme.typography.labelMedium, color = scheme.onSurfaceVariant)
         }
     }

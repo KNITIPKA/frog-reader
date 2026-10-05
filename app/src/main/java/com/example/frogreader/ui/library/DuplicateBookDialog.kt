@@ -235,7 +235,7 @@ private fun SharedIdentity(
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = title.uppercase(),
+                text = title,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 maxLines = 3,
@@ -243,7 +243,7 @@ private fun SharedIdentity(
             )
             if (author != null) {
                 Text(
-                    text = author.uppercase(),
+                    text = author,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -363,14 +363,14 @@ private fun ComparisonColumn(
         if (title != null) {
             Spacer(Modifier.height(8.dp))
             Text(
-                text = title.uppercase(),
+                text = title,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = author?.uppercase() ?: stringResource(R.string.import_author_unknown),
+                text = author ?: stringResource(R.string.import_author_unknown),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

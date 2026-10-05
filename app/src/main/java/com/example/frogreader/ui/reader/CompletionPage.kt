@@ -80,10 +80,10 @@ fun CompletionPage(
                 }
                 Spacer(Modifier.width(18.dp))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(book.title.uppercase(), style = MaterialTheme.typography.titleLarge, color = colors.text,
+                    Text(book.title, style = MaterialTheme.typography.titleLarge, color = colors.text,
                         maxLines = 3, overflow = TextOverflow.Ellipsis)
                     book.author?.takeIf(String::isNotBlank)?.let {
-                        Text(it.uppercase(), style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText,
+                        Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText,
                             maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                     book.series?.takeIf(String::isNotBlank)?.let {

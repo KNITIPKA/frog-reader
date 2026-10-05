@@ -456,7 +456,7 @@ private fun ScanRowCard(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = row.title.uppercase(),
+                    text = row.title,
                     fontSize = 13.5.sp,
                     lineHeight = 17.sp,
                     fontWeight = FontWeight.Medium,
@@ -466,7 +466,7 @@ private fun ScanRowCard(
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = row.author?.uppercase() ?: stringResource(R.string.import_author_unknown),
+                    text = row.author ?: stringResource(R.string.import_author_unknown),
                     fontSize = 11.5.sp,
                     lineHeight = 15.sp,
                     color = scheme.onSurfaceVariant,

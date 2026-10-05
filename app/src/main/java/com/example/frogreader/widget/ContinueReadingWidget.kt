@@ -65,7 +65,7 @@ class ContinueReadingWidget : GlanceAppWidget() {
                         )
                     } else {
                         Text(
-                            text = book.title.uppercase(),
+                            text = book.title,
                             maxLines = 2,
                             style = TextStyle(
                                 color = GlanceTheme.colors.onSurface,
@@ -74,7 +74,7 @@ class ContinueReadingWidget : GlanceAppWidget() {
                         )
                         book.author?.let { author ->
                             Text(
-                                text = author.uppercase(),
+                                text = author,
                                 maxLines = 1,
                                 style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant),
                             )

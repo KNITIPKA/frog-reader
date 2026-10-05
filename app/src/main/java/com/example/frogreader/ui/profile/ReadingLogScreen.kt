@@ -295,8 +295,8 @@ private fun ReadingLogCard(entry: ReadingLogEntry, cover: File?, held: Boolean, 
                 Box(Modifier.width(60.dp).height(90.dp).clip(RoundedCornerShape(9.dp))) { BookCover(book, cover, 9.sp, 5.dp) }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(entry.title.uppercase(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    if (entry.author.isNotBlank()) Text(entry.author.uppercase(), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(entry.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (entry.author.isNotBlank()) Text(entry.author, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (entry.series.isNotBlank()) Text(entry.series, style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     ReadingLogBadges(entry)
                 }
