@@ -3,11 +3,13 @@ package com.example.frogreader.ui.reader
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -69,6 +71,53 @@ private fun ExpansionComparisonPreview() {
 private fun ManyShortChaptersPreview() = FocusTrackPreview(
     stops = List(38) { it / 38f }, fraction = 292f / 706f, positionCount = 707, caption = "Many short chapters",
 )
+
+@Preview(name = "Progress · after long drag right", widthDp = 393, heightDp = 90)
+@Composable
+private fun LongDragRightPreview() = LongDragTrackPreview(reverse = false)
+
+@Preview(name = "Progress · after long drag left", widthDp = 393, heightDp = 90)
+@Composable
+private fun LongDragLeftPreview() = LongDragTrackPreview(reverse = true)
+
+/** End state of an uninterrupted gesture, rather than starting directly on a chapter. */
+@Composable
+private fun LongDragTrackPreview(reverse: Boolean) {
+    FrogReaderTheme(AppTheme.OLED) {
+        val colors = readerColors(AppTheme.OLED)
+        Surface(color = colors.chrome) {
+            Column(Modifier.padding(16.dp)) {
+                Text(if (reverse) "Long drag ←" else "Long drag →", color = colors.onChrome, style = MaterialTheme.typography.labelLarge)
+                BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                    val width = (maxWidth - 24.dp).value
+                    val (book, layout) = remember(width, reverse) {
+                        val starts = List(38) { (it * 706f / 38f).roundToInt() }
+                        val base = ReaderProgressLayout(starts.map { it / 706f }, width, 707)
+                        var fraction = if (reverse) 1f else 0f
+                        var current = base.focused(fraction, true)
+                        var anchor: ReaderProgressAnchor? = null
+                        val positions = if (reverse) width.toInt() downTo (width * 0.18f).toInt()
+                            else 0..(width * 0.82f).toInt()
+                        for (pixel in positions) {
+                            val finger = pixel / width
+                            fraction = current.bookFraction(finger)
+                            val selected = base.chapters.indexAt(fraction)
+                            if (anchor?.chapterIndex != selected) anchor = ReaderProgressAnchor(selected, fraction, finger)
+                            current = base.focused(fraction, true, anchor)
+                        }
+                        fraction to current
+                    }
+                    Slider(
+                        value = layout.trackFraction(book), onValueChange = {},
+                        modifier = Modifier.fillMaxWidth(),
+                        thumb = { ReaderProgressThumb(colors, true) },
+                        track = { ReaderSegmentedProgressTrack(book, layout, true, true, colors) },
+                    )
+                }
+            }
+        }
+    }
+}
 
 @Preview(name = "Progress · expanded · RTL", widthDp = 320, heightDp = 90)
 @Composable

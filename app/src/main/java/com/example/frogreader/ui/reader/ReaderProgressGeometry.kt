@@ -110,10 +110,19 @@ internal class ReaderProgressLayout(
         val local = if (chapter.span > 0f) {
             ((pivot.bookFraction - chapter.start) / chapter.span).coerceIn(0f, 1f)
         } else 1f
-        // Keep chapters on either side reachable, even near the ends of the rail.
-        val reserve = min(4f / trackWidthDp, (1f - width) / (chapters.size - 1) / 2f)
+        // Reserve a share of every chapter's resting width. A fixed reserve
+        // per side lets successive finger anchors squeeze the far chapters
+        // more and more. This common lower bound is independent of the
+        // selected chapter and remains valid throughout a continuous drag.
+        val minimumScale = (0 until chapters.size).minOf { candidate ->
+            val span = segment(candidate).span
+            val largestFocus = max(span + 8f / trackWidthDp, 32f / trackWidthDp).coerceAtMost(0.95f)
+            if (span < 1f) ((1f - largestFocus) / (1f - span)).coerceIn(0f, 1f) else 1f
+        }
+        val minimumStart = original.start * minimumScale
+        val maximumStart = (1f - width - (1f - original.end) * minimumScale).coerceAtLeast(0f)
         val start = (pivot.trackFraction - padding - local * (width - padding * 2f))
-            .coerceIn(index * reserve, 1f - width - (chapters.size - index - 1) * reserve)
+            .coerceIn(min(minimumStart, maximumStart), maximumStart)
         val end = start + width
         val bounds = List(chapters.size + 1) { boundary ->
             when {

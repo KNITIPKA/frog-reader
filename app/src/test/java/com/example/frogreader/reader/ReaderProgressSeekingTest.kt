@@ -11,8 +11,44 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import org.junit.Test
+import kotlin.math.roundToInt
 
 class ReaderProgressSeekingTest {
+    @Test
+    fun `continuous drag in either direction does not crush distant chapters`() {
+        val starts = List(38) { (it * 706f / 38f).roundToInt() }
+        val base = ReaderProgressLayout(starts.map { it / 706f }, 305f, 707)
+        for (positions in listOf(0..305, 305 downTo 0)) {
+            var layout = base.focused(if (positions.first == 0) 0f else 1f, true)
+            var anchor: ReaderProgressAnchor? = null
+            val visited = mutableSetOf<Int>()
+            for (pixel in positions) {
+                val finger = pixel / 305f
+                val book = layout.bookFraction(finger)
+                val selected = base.chapters.indexAt(book)
+                visited += selected
+                if (anchor?.chapterIndex != selected) anchor = ReaderProgressAnchor(selected, book, finger)
+                val target = base.focused(book, true, anchor)
+                for (step in 0..10) {
+                    val t = step / 10f
+                    val frame = target.withGeometry(
+                        layout.boundaries.zip(target.boundaries) { a, b -> a + (b - a) * t },
+                        layout.insets.zip(target.insets) { a, b -> a + (b - a) * t },
+                    )
+                    for (chapter in 0 until base.chapters.size) {
+                        assertTrue("drag ${positions.first} at $pixel, chapter $chapter, frame $step",
+                            frame.segment(chapter).span >= base.segment(chapter).span * 0.9f - 0.00001f)
+                    }
+                    assertEquals("page under stationary finger at $pixel, frame $step",
+                        ReaderNavigationPolicy.progressTargetIndex(book, 0, 706),
+                        ReaderNavigationPolicy.progressTargetIndex(frame.bookFraction(finger), 0, 706))
+                }
+                layout = target
+            }
+            assertEquals((0 until base.chapters.size).toSet(), visited)
+        }
+    }
+
     @Test
     fun `selected capsule actually grows and its outline contains no neighbouring capsule`() {
         val base = ReaderProgressLayout(listOf(0f, 100f / 201f, 102f / 201f), 300f, 202)
