@@ -184,7 +184,7 @@ fun ImportPreviewScreen(
             // искусств. Путеводитель по миру паранормальных явлений» cut off at
             // "Путеводит…" answers nothing.
             Text(
-                text = staged.title,
+                text = staged.title.uppercase(),
                 fontSize = 26.sp,
                 lineHeight = 31.sp,
                 fontWeight = FontWeight.Bold,
@@ -204,7 +204,7 @@ fun ImportPreviewScreen(
             staged.author?.let { author ->
                 Spacer(Modifier.height(7.dp))
                 Text(
-                    text = author,
+                    text = author.uppercase(),
                     fontSize = 15.sp,
                     lineHeight = 20.sp,
                     color = scheme.onSurfaceVariant,

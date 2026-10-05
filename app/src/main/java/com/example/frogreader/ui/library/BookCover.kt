@@ -172,7 +172,7 @@ internal fun BoxScope.CoverCaption(
             .padding(start = padding, end = padding, top = CaptionFade, bottom = padding),
     ) {
         Text(
-            text = title,
+            text = title.uppercase(),
             style = CaptionStyle,
             fontSize = titleSize,
             lineHeight = 1.22.em,
@@ -185,7 +185,7 @@ internal fun BoxScope.CoverCaption(
         if (!author.isNullOrBlank()) {
             Spacer(Modifier.height(3.dp))
             Text(
-                text = author,
+                text = author.uppercase(),
                 style = CaptionStyle,
                 fontSize = authorSize,
                 lineHeight = 1.25.em,

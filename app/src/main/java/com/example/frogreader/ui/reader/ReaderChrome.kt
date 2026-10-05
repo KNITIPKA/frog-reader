@@ -134,7 +134,7 @@ internal fun ReaderBookHeader(
                 .padding(horizontal = 8.dp, vertical = 2.dp),
         ) {
             ReaderChromeText(
-                text = title,
+                text = title.uppercase(),
                 style = MaterialTheme.typography.titleMedium.copy(
                     fontWeight = FontWeight.Medium, textAlign = TextAlign.Center, lineBreak = LineBreak.Heading,
                 ),
@@ -145,7 +145,7 @@ internal fun ReaderBookHeader(
             )
             if (!author.isNullOrBlank()) {
                 ReaderChromeText(
-                    text = author,
+                    text = author.uppercase(),
                     style = MaterialTheme.typography.bodySmall.copy(textAlign = TextAlign.Center),
                     color = colors.onChromeVariant,
                     preferredLines = 1,

@@ -26,7 +26,8 @@ import kotlin.math.abs
 /** Keeps normal type sizes, balancing short titles over two lines in compact cards. */
 @Composable
 internal fun HeroBookHeading(title: String, author: String?, modifier: Modifier = Modifier) {
-    val shownAuthor = author?.takeIf { it.isNotBlank() }
+    val shownTitle = title.uppercase()
+    val shownAuthor = author?.takeIf { it.isNotBlank() }?.uppercase()
     val baseStyle = LocalTextStyle.current
     val titleStyle = baseStyle.copy(
         fontSize = 20.sp,
@@ -44,7 +45,7 @@ internal fun HeroBookHeading(title: String, author: String?, modifier: Modifier 
     val density = LocalDensity.current
 
     BoxWithConstraints(modifier) {
-        val heading = remember(title, shownAuthor, titleStyle, authorStyle, constraints, measurer, density) {
+        val heading = remember(shownTitle, shownAuthor, titleStyle, authorStyle, constraints, measurer, density) {
             val widthConstraints = Constraints(maxWidth = constraints.maxWidth)
             val authorHeight = if (shownAuthor == null) 0 else with(density) { 3.dp.roundToPx() } +
                 measurer.measure(
@@ -58,7 +59,7 @@ internal fun HeroBookHeading(title: String, author: String?, modifier: Modifier 
                 maxHeight = (constraints.maxHeight - authorHeight).coerceAtLeast(0),
             )
             val naturalLayout = measurer.measure(
-                text = title, style = titleStyle, maxLines = 2, constraints = widthConstraints,
+                text = shownTitle, style = titleStyle, maxLines = 2, constraints = widthConstraints,
             )
 
             // Only reflow a short, single-line title on compact screens.
@@ -66,7 +67,7 @@ internal fun HeroBookHeading(title: String, author: String?, modifier: Modifier 
             val displayTitle = if (constraints.maxWidth <= with(density) { 360.dp.roundToPx() } &&
                 naturalLayout.lineCount == 1 && !naturalLayout.hasVisualOverflow
             ) {
-                heroTitleBreakCandidates(title).mapNotNull { candidate ->
+                heroTitleBreakCandidates(shownTitle).mapNotNull { candidate ->
                     val layout = measurer.measure(
                         text = candidate, style = titleStyle, maxLines = 2, constraints = widthConstraints,
                     )
@@ -76,8 +77,8 @@ internal fun HeroBookHeading(title: String, author: String?, modifier: Modifier 
                     // Avoid a tiny orphan word opposite a much longer line.
                     if (minOf(first, second) < maxOf(first, second) * 0.35f) null
                     else candidate to abs(first - second)
-                }.minByOrNull { it.second }?.first ?: title
-            } else title
+                }.minByOrNull { it.second }?.first ?: shownTitle
+            } else shownTitle
 
             var titleSp = 20f
             while (titleSp > 14f && measurer.measure(

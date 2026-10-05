@@ -1837,10 +1837,10 @@ private fun BookListRow(
             }
 
             Column(modifier = Modifier.weight(1f)) {
-                TileTitle(text = book.title, fontSize = 13.5.sp)
+                TileTitle(text = book.title.uppercase(), fontSize = 13.5.sp)
                 book.author?.let { author ->
                     Spacer(Modifier.height(2.dp))
-                    TileSubtitle(text = author, fontSize = 11.5.sp)
+                    TileSubtitle(text = author.uppercase(), fontSize = 11.5.sp)
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(

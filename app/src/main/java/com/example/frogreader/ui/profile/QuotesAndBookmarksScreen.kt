@@ -338,9 +338,9 @@ private fun SavedBookCard(book: Book, coverOf: (Book) -> File?, onClick: () -> U
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             AnnotationBookCover(book, coverOf)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(book.title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(book.title.uppercase(), style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 book.author?.takeIf { it.isNotBlank() }?.let { author ->
-                    Text(author, style = MaterialTheme.typography.bodySmall,
+                    Text(author.uppercase(), style = MaterialTheme.typography.bodySmall,
                         color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 val quotes = pluralStringResource(R.plurals.quotes_bookmarks_quotes_count, book.quotes.size, book.quotes.size)
@@ -361,10 +361,10 @@ private fun BookQuotesAndBookmarksHeader(book: Book, coverOf: (Book) -> File?) {
     ) {
         AnnotationBookCover(book, coverOf)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(book.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
+            Text(book.title.uppercase(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
             book.author?.takeIf { it.isNotBlank() }?.let { author ->
-                Text(author, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Text(author.uppercase(), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -434,7 +434,7 @@ private fun QuoteCard(
                 maxLines = if (expanded) Int.MAX_VALUE else 5, overflow = TextOverflow.Ellipsis,
                 onTextLayout = { if (!expanded) hasOverflow = it.hasVisualOverflow })
             Text(
-                listOfNotNull(book.title, book.author?.takeIf { it.isNotBlank() }).joinToString(" · "),
+                listOfNotNull(book.title, book.author?.takeIf { it.isNotBlank() }).joinToString(" · ").uppercase(),
                 style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant,
                 modifier = Modifier.padding(top = 2.dp),
             )
@@ -527,7 +527,7 @@ private fun BookmarkCard(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(stringResource(R.string.reader_chapter_n, bookmark.chapterIndex + 1),
                         style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    Text(listOfNotNull(book.title, book.author?.takeIf { it.isNotBlank() }).joinToString(" · "),
+                    Text(listOfNotNull(book.title, book.author?.takeIf { it.isNotBlank() }).joinToString(" · ").uppercase(),
                         style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant,
                         maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }

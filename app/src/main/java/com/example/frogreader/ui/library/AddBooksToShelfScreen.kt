@@ -261,10 +261,10 @@ private fun CandidateRow(
         }
 
         Column(modifier = Modifier.weight(1f)) {
-            TileTitle(text = book.title, fontSize = 13.5.sp)
+            TileTitle(text = book.title.uppercase(), fontSize = 13.5.sp)
             book.author?.let { author ->
                 Spacer(Modifier.height(2.dp))
-                TileSubtitle(text = author, fontSize = 11.5.sp)
+                TileSubtitle(text = author.uppercase(), fontSize = 11.5.sp)
             }
             // A book lives on one shelf at a time, so say which one it is about
             // to leave rather than silently moving it.
