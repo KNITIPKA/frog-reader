@@ -1,6 +1,5 @@
 package com.example.frogreader.ui.reader
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.DragInteraction
@@ -47,8 +46,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -69,7 +66,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -490,99 +486,16 @@ private fun ReaderBookProgress(
                 .height(26.dp)
                 .semantics { contentDescription = label },
             thumb = {
-                // Vertical-dash thumb replacing the round dot / horizontal pill.
-                Box(
-                    modifier = Modifier.size(width = 24.dp, height = 32.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(width = 7.dp, height = if (adjusting) 24.dp else 22.dp)
-                            .background(colors.chrome, RoundedCornerShape(3.5.dp))
-                            .padding(horizontal = 1.5.dp, vertical = 2.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    if (enabled) colors.accent else colors.onChromeVariant,
-                                    RoundedCornerShape(2.dp),
-                                ),
-                        )
-                    }
-                }
+                ReaderProgressThumb(colors, enabled)
             },
             track = { state ->
-                Canvas(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(16.dp),
-                ) {
-                    val rtl = layoutDirection == LayoutDirection.Rtl
-                    fun x(f: Float) = size.width * if (rtl) 1f - f else f
-                    val y = size.height / 2f
-                    val trackHeight = 4.dp.toPx()
-                    val tickHeight = 7.dp.toPx()
-
-                    // Background track (full book)
-                    drawLine(
-                        color = colors.track,
-                        start = Offset(0f, y),
-                        end = Offset(size.width, y),
-                        strokeWidth = trackHeight,
-                        cap = StrokeCap.Round,
-                    )
-
-                    val currentVal = state.value.coerceIn(0f, 1f)
-                    val activeEnd = x(currentVal)
-                    // Active track (read so far)
-                    if (enabled && (if (rtl) activeEnd < size.width else activeEnd > 0f)) {
-                        drawLine(
-                            color = colors.accent,
-                            start = Offset(x(0f), y),
-                            end = Offset(activeEnd, y),
-                            strokeWidth = trackHeight,
-                            cap = StrokeCap.Round,
-                        )
-                    }
-
-                    // Chapter tick marks in the line
-                    val minSpacingPx = 8.dp.toPx()
-                    var lastX = Float.NEGATIVE_INFINITY
-                    val validStops = chapterStops
-                        .filter { it in 0.015f..0.985f }
-                        .distinct()
-                        .sorted()
-
-                    validStops.forEach { stop ->
-                        val sx = x(stop)
-                        val physicalDistance = if (lastX == Float.NEGATIVE_INFINITY) Float.MAX_VALUE else abs(sx - lastX)
-                        if (physicalDistance >= minSpacingPx) {
-                            val isPassed = if (rtl) stop >= currentVal else stop <= currentVal
-                            if (isPassed) {
-                                // On the active track: a clean notch cutting through the accent line
-                                drawLine(
-                                    color = colors.chrome,
-                                    start = Offset(sx, y - tickHeight / 2f),
-                                    end = Offset(sx, y + tickHeight / 2f),
-                                    strokeWidth = 2.dp.toPx(),
-                                    cap = StrokeCap.Round,
-                                )
-                            } else {
-                                // On the inactive track: a distinct, clear tick mark
-                                drawLine(
-                                    color = colors.onChromeVariant.copy(alpha = 0.55f),
-                                    start = Offset(sx, y - tickHeight / 2f),
-                                    end = Offset(sx, y + tickHeight / 2f),
-                                    strokeWidth = 1.5.dp.toPx(),
-                                    cap = StrokeCap.Round,
-                                )
-                            }
-                            lastX = sx
-                        }
-                    }
-                }
+                ReaderSegmentedProgressTrack(
+                    fraction = state.value,
+                    chapterStops = chapterStops,
+                    adjusting = adjusting,
+                    enabled = enabled,
+                    colors = colors,
+                )
             },
         )
         Row(

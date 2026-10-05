@@ -1,0 +1,118 @@
+package com.example.frogreader.ui.reader
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+import com.example.frogreader.data.AppTheme
+import com.example.frogreader.ui.theme.FrogReaderTheme
+import kotlin.math.roundToInt
+
+// Relative text volumes from the supplied FB2; page counts still come from native pagination.
+private val lastWishVolumes = listOf(1565, 52588, 10252, 52673, 8504, 68713, 8156, 73682, 11809, 73725, 11696, 96014, 15406)
+private val lastWishStops = lastWishVolumes.runningFold(0, Int::plus).dropLast(1)
+    .map { it.toFloat() / lastWishVolumes.sum() }
+
+@Preview(name = "Progress · selected mock", widthDp = 393, heightDp = 180)
+@Composable
+private fun SegmentedReaderProgressPreview() = ProgressFooterPreview(AppTheme.OLED)
+
+@Preview(name = "Progress · Last Wish · short interludes", widthDp = 393, heightDp = 180)
+@Composable
+private fun LastWishReaderProgressPreview() = ProgressFooterPreview(AppTheme.OLED, stops = lastWishStops, lastWish = true)
+
+@Preview(name = "Progress · Light · narrow large text", widthDp = 320, heightDp = 180, fontScale = 1.6f)
+@Composable
+private fun NarrowReaderProgressPreview() = ProgressFooterPreview(AppTheme.WHITE, stops = lastWishStops, lastWish = true)
+
+@Preview(name = "Progress · Beige", widthDp = 393, heightDp = 180)
+@Composable
+private fun BeigeReaderProgressPreview() = ProgressFooterPreview(AppTheme.SEPIA)
+
+@Preview(name = "Progress · landscape", widthDp = 760, heightDp = 180)
+@Composable
+private fun LandscapeReaderProgressPreview() = ProgressFooterPreview(AppTheme.OLED, stops = lastWishStops, lastWish = true)
+
+@Preview(name = "Progress · 200 chapters", widthDp = 393, heightDp = 180)
+@Composable
+private fun DenseReaderProgressPreview() = ProgressFooterPreview(AppTheme.OLED, stops = List(200) { it / 200f })
+
+@Preview(name = "Progress · two page interlude · expanded", widthDp = 320, heightDp = 90)
+@Composable
+private fun ExpandedReaderProgressPreview() = FocusTrackPreview()
+
+@Preview(name = "Progress · expanded · RTL", widthDp = 320, heightDp = 90)
+@Composable
+private fun RtlExpandedReaderProgressPreview() = CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+    FocusTrackPreview()
+}
+
+@Composable
+private fun ProgressFooterPreview(
+    theme: AppTheme,
+    stops: List<Float> = listOf(0f, 0.045f, 0.12f, 0.225f, 0.30f, 0.445f, 0.49f, 408f / 706f, 0.67f, 0.73f, 0.9f),
+    lastWish: Boolean = false,
+) {
+    FrogReaderTheme(theme) {
+        val colors = readerColors(theme)
+        Box(Modifier.background(colors.background).padding(16.dp)) {
+            Surface(color = colors.chrome, shape = RoundedCornerShape(28.dp)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    ReaderChapterFooter(
+                        chapterLabel = if (lastWish) "Глас рассудка IV" else "Розділ 1. Багато зустрічей",
+                        chapterParents = if (lastWish) listOf("Последнее желание") else listOf("Книга друга"),
+                        bookFraction = if (lastWish) 0.4092f else 395f / 706f,
+                        bookPageCount = if (lastWish) null else 707,
+                        chapterStartPages = if (lastWish) null else stops.map { (it * 706).roundToInt() },
+                        chapterStops = stops,
+                        progressValuesReady = true,
+                        colors = colors,
+                        contentsSelected = false,
+                        settingsSelected = false,
+                        onContents = {}, onSettings = {}, onSeekBook = { false },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FocusTrackPreview() {
+    FrogReaderTheme(AppTheme.OLED) {
+        val colors = readerColors(AppTheme.OLED)
+        Surface(color = colors.chrome) {
+            Column(Modifier.padding(16.dp)) {
+                Text("100 → 2 → 100", color = colors.onChrome, style = MaterialTheme.typography.labelLarge)
+                Slider(
+                    value = 0.5f,
+                    onValueChange = {},
+                    modifier = Modifier.padding(top = 12.dp),
+                    thumb = { ReaderProgressThumb(colors, enabled = true) },
+                    track = { state ->
+                        ReaderSegmentedProgressTrack(
+                            fraction = state.value,
+                            chapterStops = listOf(0f, 100f / 202f, 102f / 202f),
+                            adjusting = true,
+                            enabled = true,
+                            colors = colors,
+                        )
+                    },
+                )
+            }
+        }
+    }
+}
