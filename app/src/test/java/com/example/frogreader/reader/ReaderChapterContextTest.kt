@@ -304,7 +304,7 @@ class ReaderChapterContextTest {
     }
 
     @Test
-    fun `resolveReaderBottomBarHeading properly formats Dark Tower subchapter 15`() {
+    fun `resolveReaderBottomBarHeading properly formats nested bare numbered subchapter`() {
         val heading = resolveReaderBottomBarHeading(
             activeLabel = "15",
             activeParents = listOf(
@@ -316,6 +316,14 @@ class ReaderChapterContextTest {
         // while the descriptive title is promoted to the main title line.
         assertEquals("Часть 3 · Глава 1 · 15", heading.context)
         assertEquals("Миссис Тассенбаум едет на юг", heading.title)
+
+        // Same for keyword section indices like "Раздел 2" or "Section 3"
+        val sectionHeading = resolveReaderBottomBarHeading(
+            activeLabel = "Раздел 2",
+            activeParents = listOf("Глава 4. Основы физики"),
+        )
+        assertEquals("Глава 4 · Раздел 2", sectionHeading.context)
+        assertEquals("Основы физики", sectionHeading.title)
     }
 
     @Test

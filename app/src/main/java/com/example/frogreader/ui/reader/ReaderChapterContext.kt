@@ -86,11 +86,19 @@ private val bareSubchapter = Regex(
     RegexOption.IGNORE_CASE,
 )
 
+/** True when the entry is merely a numbering marker without its own descriptive subtitle. */
+private fun isIndexWithoutTitle(text: String): Boolean {
+    if (text.matches(bareSubchapter)) return true
+    val prefix = numberedChapter.find(text) ?: bareChapterNumber.find(text) ?: return false
+    val title = text.substring(prefix.range.last + 1).replaceFirst(chapterTitleSeparator, "").trim()
+    return title.isEmpty()
+}
+
 /**
  * Resolves context line and title line for the reader bottom bar.
  * Ensures:
  * - No raw newlines or unnormalized whitespace cause premature line truncation
- * - Subchapters like "15" inside "Глава 1: Миссис Тассенбаум..." promote the real chapter name
+ * - Subchapters like "15" or "Раздел 1" inside "Глава 1: Миссис Тассенбаум..." promote the real chapter name
  *   to the title line while showing chapter and section numbers in the context line
  * - Long titles stay strictly single-line and adapt font size rather than expanding bottom bar height
  */
@@ -101,7 +109,7 @@ internal fun resolveReaderBottomBarHeading(
     val cleanLabel = cleanChapterTitle(activeLabel)
     val cleanParents = activeParents.map(::cleanChapterTitle).filter(String::isNotBlank)
 
-    if (cleanLabel.matches(bareSubchapter) && cleanParents.isNotEmpty()) {
+    if (isIndexWithoutTitle(cleanLabel) && cleanParents.isNotEmpty()) {
         val parentHeading = readerChapterHeading(cleanParents.last())
         if (parentHeading.label != null) {
             val ancestorContext = cleanParents.dropLast(1).lastOrNull()?.let { anc ->
