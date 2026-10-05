@@ -2,11 +2,13 @@ package com.example.frogreader.reader
 
 import com.example.frogreader.ui.reader.ReaderProgressChapters
 import com.example.frogreader.ui.reader.ReaderProgressLayout
+import com.example.frogreader.ui.reader.ReaderProgressTransition
 import com.example.frogreader.ui.reader.readerProgressBoundaryGap
 import com.example.frogreader.ui.reader.readerProgressSegmentDetail
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 class ReaderProgressGeometryTest {
@@ -56,14 +58,64 @@ class ReaderProgressGeometryTest {
         for (count in listOf(38, 100, 200, 1000)) {
             val stops = List(count) { it / count.toFloat() }
             assertFalse(ReaderProgressLayout(stops, count * 8f - 0.1f).segmented)
-            assertTrue(ReaderProgressLayout(stops, count * 8f).segmented)
+            assertTrue(ReaderProgressLayout(stops, count * 20f).segmented)
         }
-        assertTrue(ReaderProgressLayout(List(38) { it / 38f }, 305f).segmented)
+        assertFalse(ReaderProgressLayout(List(38) { it / 38f }, 305f).segmented)
+        assertTrue(ReaderProgressLayout(List(38) { it / 38f }, 600f).segmented)
         for (width in listOf(240f, 300f, 720f)) {
             assertFalse(ReaderProgressLayout(List(100) { it / 100f }, width).segmented)
         }
         for (width in listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY)) {
             assertFalse(ReaderProgressLayout(listOf(0f, 0.5f), width).segmented)
+        }
+    }
+
+    @Test
+    fun `thirty chapters fall back on a phone but remain segmented on a wide screen`() {
+        val stops = List(30) { it / 30f }
+        assertFalse(ReaderProgressLayout(stops, 305f).segmented)
+        assertTrue(ReaderProgressLayout(stops, 720f).segmented)
+    }
+
+    @Test
+    fun `a cluster of narrow chapters falls back even when most chapters are wide`() {
+        val clustered = listOf(30, 30) + List(6) { 1 } + List(5) { 30 }
+        assertFalse(ReaderProgressLayout(stopsFor(clustered), 305f).segmented)
+        // The same chapter count with isolated short interludes stays useful.
+        val lastWish = listOf(1565, 52588, 10252, 52673, 8504, 68713, 8156, 73682, 11809, 73725, 11696, 96014, 15406)
+        assertTrue(ReaderProgressLayout(stopsFor(lastWish), 305f).segmented)
+    }
+
+    @Test
+    fun `mostly narrow chapters fall back even without a consecutive cluster`() {
+        val mostlyShort = List(10) { listOf(1, 1, 30) }.flatten()
+        assertFalse(ReaderProgressLayout(stopsFor(mostlyShort), 500f).segmented)
+        assertTrue(ReaderProgressLayout(List(30) { it / 30f }, 500f).segmented)
+    }
+
+    @Test
+    fun `readability includes the space reserved by an expanded chapter`() {
+        // Resting bodies would exceed 12 dp in both cases. Focus compression
+        // makes the 21-chapter rail too tight, before the first drag happens.
+        assertTrue(ReaderProgressLayout(List(20) { it / 20f }, 305f).segmented)
+        assertFalse(ReaderProgressLayout(List(21) { it / 21f }, 305f).segmented)
+    }
+
+    @Test
+    fun `focus and interrupted animation frames reuse the book readability plan`() {
+        val base = ReaderProgressLayout(List(38) { it / 38f }, 600f)
+        assertTrue(base.segmented)
+        var visible = base
+        for (chapter in 0 until base.chapters.size) {
+            val target = base.focused(chapter / 38f, expanded = true)
+            assertSame(base.segmentPlan, target.segmentPlan)
+            val transition = ReaderProgressTransition(visible, target)
+            for (phase in listOf(0f, 0.25f, 0.75f, 1f)) {
+                val frame = transition.frame(phase)
+                assertSame(base.segmentPlan, frame.segmentPlan)
+                assertTrue(frame.segmented)
+            }
+            visible = transition.frame(0.5f)
         }
     }
 
@@ -75,4 +127,7 @@ class ReaderProgressGeometryTest {
         assertEquals(1f, chapters.at(0.5f).end, 0f)
         assertEquals(0f, readerProgressSegmentDetail(chapters.size, 300f), 0f)
     }
+
+    private fun stopsFor(volumes: List<Int>): List<Float> = volumes.runningFold(0, Int::plus).dropLast(1)
+        .map { it.toFloat() / volumes.sum() }
 }

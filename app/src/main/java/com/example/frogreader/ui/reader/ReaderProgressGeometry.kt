@@ -40,6 +40,58 @@ internal data class ReaderProgressChapter(val start: Float, val end: Float) {
 
 internal data class ReaderProgressAnchor(val chapterIndex: Int, val bookFraction: Float, val trackFraction: Float)
 
+/** Resting geometry and its readability decision, shared by every focus/animation frame. */
+internal class ReaderProgressSegmentPlan(
+    val detail: Float,
+    val boundaries: List<Float>,
+    val minimumScale: Float,
+)
+
+private fun readerProgressSegmentPlan(chapters: ReaderProgressChapters, widthDp: Float): ReaderProgressSegmentPlan {
+    val detail = readerProgressSegmentDetail(chapters.size, widthDp)
+    fun continuous() = ReaderProgressSegmentPlan(0f, List(chapters.size) { chapters[it].start } + 1f, 1f)
+    if (detail == 0f) return continuous()
+
+    // Water filling: reserve a minimum for short chapters, then scale the long ones to fit.
+    val minimumSpan = min(8f / widthDp, 0.8f / chapters.size)
+    var low = 0f
+    var high = 1f
+    repeat(32) {
+        val scale = (low + high) / 2f
+        val sum = (0 until chapters.size).sumOf { max(minimumSpan, chapters[it].span * scale).toDouble() }
+        if (sum > 1.0) high = scale else low = scale
+    }
+    var start = 0f
+    val bounds = List(chapters.size) { index ->
+        start.also { start += max(minimumSpan, chapters[index].span * low) }
+    } + 1f
+    val minimumScale = (0 until chapters.size).minOf { index ->
+        val span = bounds[index + 1] - bounds[index]
+        val largestFocus = max(span + ReaderProgressFocusPaddingDp * 2f / widthDp, 32f / widthDp).coerceAtMost(0.95f)
+        if (span < 1f) ((1f - largestFocus) / (1f - span)).coerceIn(0f, 1f) else 1f
+    }
+
+    // Judge the visible bodies after gaps and the worst permitted focus compression.
+    // A 9 dp tall body narrower than 12 dp starts looking like a tick, not a chapter.
+    val widths = List(chapters.size) { (bounds[it + 1] - bounds[it]) * widthDp * minimumScale }
+    val gap = 2f * detail
+    var thinCount = 0
+    var thinRun = 0
+    var longestThinRun = 0
+    for (index in widths.indices) {
+        val leftGap = if (index == 0) 0f else readerProgressBoundaryGap(widths[index - 1], widths[index], gap) / 2f
+        val rightGap = if (index == widths.lastIndex) 0f else readerProgressBoundaryGap(widths[index], widths[index + 1], gap) / 2f
+        val thin = widths[index] - leftGap - rightGap < 12f
+        if (thin) thinCount++
+        thinRun = if (thin) thinRun + 1 else 0
+        longestThinRun = max(longestThinRun, thinRun)
+    }
+    // Preserve isolated interludes and small TOCs. Reject a picket fence or a book
+    // whose segmented rail consists mostly of ticks, even when its average width fits.
+    val crowded = longestThinRun >= 5 || (chapters.size >= 12 && thinCount * 3 >= chapters.size * 2)
+    return if (crowded) continuous() else ReaderProgressSegmentPlan(detail, bounds, minimumScale)
+}
+
 /**
  * One scale for drawing, the cursor and touch input, including intermediate
  * animation frames. A focused chapter reserves space rather than covering its
@@ -53,46 +105,18 @@ internal class ReaderProgressLayout private constructor(
     val focusedIndex: Int? = null,
     private val animatedInsets: List<Float>? = null,
     private val seekAnchor: ReaderProgressAnchor? = null,
+    val segmentPlan: ReaderProgressSegmentPlan = readerProgressSegmentPlan(chapters, trackWidthDp),
 ) {
     constructor(stops: List<Float>, trackWidthDp: Float, positionCount: Int? = null) :
         this(ReaderProgressChapters(stops), trackWidthDp, positionCount)
 
-    val detail = readerProgressSegmentDetail(chapters.size, trackWidthDp)
+    val detail = segmentPlan.detail
     val segmented: Boolean get() = detail > 0f
-    private val minimumSpan = if (detail > 0f && trackWidthDp > 0f) {
-        min(8f / trackWidthDp, 0.8f / chapters.size)
-    } else 0f
-    val boundaries: List<Float> = animatedBoundaries ?: run {
-        if (minimumSpan == 0f) {
-            List(chapters.size) { chapters[it].start } + 1f
-        } else {
-            // Water filling: reserve a minimum for small chapters, then fit
-            // the remaining widths with one common factor for long chapters.
-            var low = 0f
-            var high = 1f
-            repeat(32) {
-                val scale = (low + high) / 2f
-                val sum = (0 until chapters.size).sumOf {
-                    max(minimumSpan, chapters[it].span * scale).toDouble()
-                }
-                if (sum > 1.0) high = scale else low = scale
-            }
-            var start = 0f
-            List(chapters.size) { index ->
-                start.also { start += max(minimumSpan, chapters[index].span * low) }
-            } + 1f
-        }
-    }
+    val boundaries: List<Float> = animatedBoundaries ?: segmentPlan.boundaries
 
     fun segment(index: Int) = ReaderProgressChapter(boundaries[index], boundaries[index + 1])
 
-    private val minimumScale by lazy(LazyThreadSafetyMode.NONE) {
-        (0 until chapters.size).minOf { candidate ->
-            val span = boundaries[candidate + 1] - boundaries[candidate]
-            val largestFocus = max(span + ReaderProgressFocusPaddingDp * 2f / trackWidthDp, 32f / trackWidthDp).coerceAtMost(0.95f)
-            if (span < 1f) ((1f - largestFocus) / (1f - span)).coerceIn(0f, 1f) else 1f
-        }
-    }
+    private val minimumScale: Float get() = segmentPlan.minimumScale
 
     val insets: List<Float> = animatedInsets ?: List(chapters.size) { index ->
         if (focusedIndex == index && trackWidthDp > 0f) min(ReaderProgressFocusPaddingDp / trackWidthDp, segment(index).span / 2f) else 0f
@@ -146,11 +170,11 @@ internal class ReaderProgressLayout private constructor(
                 else -> 1f
             }
         }
-        return ReaderProgressLayout(chapters, trackWidthDp, positionCount, bounds, index, seekAnchor = anchor)
+        return ReaderProgressLayout(chapters, trackWidthDp, positionCount, bounds, index, seekAnchor = anchor, segmentPlan = segmentPlan)
     }
 
     fun withGeometry(bounds: List<Float>, padding: List<Float>) =
-        if (segmented) ReaderProgressLayout(chapters, trackWidthDp, positionCount, bounds, focusedIndex, padding, seekAnchor)
+        if (segmented) ReaderProgressLayout(chapters, trackWidthDp, positionCount, bounds, focusedIndex, padding, seekAnchor, segmentPlan)
         else this
 
     private fun chapterLocal(index: Int, fraction: Float): Float {
@@ -271,7 +295,7 @@ internal fun readerProgressSeekReached(actual: Float, target: Float, positionCou
     } else abs(actual - target) < 0.00001f
 }
 
-/** Fall back before individual chapters become illegible; adapt to the available rail width. */
+/** Cheap capacity gate; the segment plan also checks the actual distribution and focused geometry. */
 internal fun readerProgressSegmentDetail(chapterCount: Int, trackWidthDp: Float): Float {
     if (chapterCount <= 1 || !trackWidthDp.isFinite() || trackWidthDp <= 0f) return 0f
     val averageWidth = trackWidthDp / chapterCount

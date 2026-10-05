@@ -173,6 +173,41 @@ private fun LandscapeReaderProgressPreview() = ProgressFooterPreview(AppTheme.OL
 @Composable
 private fun DenseReaderProgressPreview() = ProgressFooterPreview(AppTheme.OLED, stops = List(200) { it / 200f })
 
+@Preview(name = "Progress · 30 chapters · phone fallback", widthDp = 393, heightDp = 180)
+@Composable
+private fun ThirtyChapterProgressPreview() = ThirtyChapterFooter()
+
+@Preview(name = "Progress · 30 chapters · wide segmented", widthDp = 760, heightDp = 180)
+@Composable
+private fun ThirtyChapterLandscapeProgressPreview() = ThirtyChapterFooter()
+
+@Composable
+private fun ThirtyChapterFooter() = ProgressFooterPreview(
+    AppTheme.OLED,
+    // Representative 30-chapter fixture matching the screenshot's page/caption;
+    // the actual Frankenstein chapter boundaries depend on native pagination.
+    stops = List(30) {
+        when (it) {
+            15 -> 162f / 314f
+            16 -> 170f / 314f
+            else -> (it * 314f / 30f).roundToInt() / 314f
+        }
+    },
+    bookFraction = 162f / 314f,
+    bookPageCount = 315,
+    chapterLabel = "Chapter XIII",
+    chapterParents = emptyList(),
+)
+
+@Preview(name = "Progress · clustered short chapters · fallback", widthDp = 393, heightDp = 180)
+@Composable
+private fun ClusteredShortChapterProgressPreview() {
+    val volumes = listOf(30, 30) + List(6) { 1 } + List(5) { 30 }
+    val stops = volumes.runningFold(0, Int::plus).dropLast(1).map { it.toFloat() / volumes.sum() }
+    ProgressFooterPreview(AppTheme.OLED, stops = stops, bookFraction = 63f / 216f, bookPageCount = 217,
+        chapterLabel = "Short interlude", chapterParents = emptyList())
+}
+
 @Preview(name = "Progress · 100 chapters · continuous fallback", widthDp = 393, heightDp = 180)
 @Composable
 private fun HundredChapterProgressPreview() = ProgressFooterPreview(
@@ -243,19 +278,27 @@ private fun CapsuleEdgeTracks() {
     }
 }
 
-@Preview(name = "Progress · many small chapters · expanded", widthDp = 393, heightDp = 90)
+@Preview(name = "Progress · 38 small chapters · fallback", widthDp = 393, heightDp = 90)
 @Composable
 private fun ManyShortChaptersPreview() = FocusTrackPreview(
-    stops = List(38) { it / 38f }, fraction = 292f / 706f, positionCount = 707, caption = "Many short chapters",
+    stops = List(38) { it / 38f }, fraction = 292f / 706f, positionCount = 707, caption = "38 chapters · fallback",
 )
 
-@Preview(name = "Progress · after long drag right", widthDp = 393, heightDp = 90)
+@Preview(name = "Progress · fallback after long drag right", widthDp = 393, heightDp = 90)
 @Composable
 private fun LongDragRightPreview() = LongDragTrackPreview(reverse = false)
 
-@Preview(name = "Progress · after long drag left", widthDp = 393, heightDp = 90)
+@Preview(name = "Progress · fallback after long drag left", widthDp = 393, heightDp = 90)
 @Composable
 private fun LongDragLeftPreview() = LongDragTrackPreview(reverse = true)
+
+@Preview(name = "Progress · wide segmented after long drag right", widthDp = 760, heightDp = 90)
+@Composable
+private fun WideLongDragRightPreview() = LongDragTrackPreview(reverse = false)
+
+@Preview(name = "Progress · wide segmented after long drag left", widthDp = 760, heightDp = 90)
+@Composable
+private fun WideLongDragLeftPreview() = LongDragTrackPreview(reverse = true)
 
 /** End state of an uninterrupted gesture, rather than starting directly on a chapter. */
 @Composable

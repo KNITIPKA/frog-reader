@@ -62,7 +62,7 @@ class ReaderProgressSeekingTest {
     @Test
     fun `rapid animation reversals resume from the visible frame without rebuilding book coordinates`() {
         // Keep testing actual animations, even though this TOC falls back on a phone.
-        val base = ReaderProgressLayout(List(200) { it / 200f }, 2000f, 10001)
+        val base = ReaderProgressLayout(List(200) { it / 200f }, 4000f, 10001)
         assertTrue(base.segmented)
         var visible = base
         repeat(1000) { step ->
@@ -89,13 +89,14 @@ class ReaderProgressSeekingTest {
     @Test
     fun `continuous drag in either direction does not crush distant chapters`() {
         val starts = List(38) { (it * 706f / 38f).roundToInt() }
-        val base = ReaderProgressLayout(starts.map { it / 706f }, 305f, 707)
-        for (positions in listOf(0..305, 305 downTo 0)) {
+        val base = ReaderProgressLayout(starts.map { it / 706f }, 600f, 707)
+        assertTrue(base.segmented)
+        for (positions in listOf(0..600, 600 downTo 0)) {
             var layout = base.focused(if (positions.first == 0) 0f else 1f, true)
             var anchor: ReaderProgressAnchor? = null
             val visited = mutableSetOf<Int>()
             for (pixel in positions) {
-                val finger = pixel / 305f
+                val finger = pixel / 600f
                 val book = layout.bookFraction(finger)
                 val selected = base.chapters.indexAt(book)
                 visited += selected
@@ -161,7 +162,8 @@ class ReaderProgressSeekingTest {
     @Test
     fun `switching between expanded neighbours keeps the selected page through every frame`() {
         val starts = (0..37).map { it * 18 }
-        val base = ReaderProgressLayout(starts.map { it / 706f }, 305f, 707)
+        val base = ReaderProgressLayout(starts.map { it / 706f }, 600f, 707)
+        assertTrue(base.segmented)
         for (previous in starts.indices) {
             val old = base.focused(starts[previous] / 706f, true)
             for (next in listOf(previous - 1, previous + 1).filter { it in starts.indices }) {
@@ -264,6 +266,7 @@ class ReaderProgressSeekingTest {
         val starts = volumes.runningFold(0, Int::plus).dropLast(1)
         val lastItem = volumes.sum()
         val layout = ReaderProgressLayout(starts.map { it.toFloat() / lastItem }, 305f, lastItem + 1)
+        assertTrue(layout.segmented)
         for (chapter in starts.indices) {
             val segment = layout.segment(chapter)
             assertTrue(segment.span * 305f >= 8f - 0.0001f)
@@ -348,9 +351,34 @@ class ReaderProgressSeekingTest {
     }
 
     @Test
+    fun `moderately crowded fallback stays linear and keeps every page destination`() {
+        val lastPage = 314
+        val starts = List(30) { (it * lastPage.toFloat() / 30f).roundToInt() }
+        val base = ReaderProgressLayout(starts.map { it / lastPage.toFloat() }, 305f, lastPage + 1)
+        assertFalse(base.segmented)
+        for (positions in listOf(0..305, 305 downTo 0)) {
+            for (pixel in positions) {
+                val finger = pixel / 305f
+                val book = base.bookFraction(finger)
+                val selected = base.chapters.indexAt(book)
+                val focused = base.focused(book, true, ReaderProgressAnchor(selected, book, finger))
+                assertSame(base, focused)
+                assertEquals(ReaderNavigationPolicy.progressTargetIndex(finger, 0, lastPage),
+                    ReaderNavigationPolicy.progressTargetIndex(book, 0, lastPage))
+                assertEquals(book, focused.trackFraction(book), 0f)
+            }
+        }
+        for (page in 0..lastPage) {
+            val book = page / lastPage.toFloat()
+            assertEquals(page, ReaderNavigationPolicy.progressTargetIndex(base.bookFraction(base.trackFraction(book)), 0, lastPage))
+            assertEquals(starts.indexOfLast { it <= page }, base.chapters.indexAt(book))
+        }
+    }
+
+    @Test
     fun `dense layout cannot inherit a focus animation after narrowing the track`() {
         val stops = List(100) { it / 100f } + 1f
-        val wide = ReaderProgressLayout(stops, 1000f, 10001).focused(0.56f, true)
+        val wide = ReaderProgressLayout(stops, 2000f, 10001).focused(0.56f, true)
         assertTrue(wide.focusedIndex != null)
         val narrow = ReaderProgressLayout(stops, 300f, 10001)
         val transition = ReaderProgressTransition(wide, narrow)
