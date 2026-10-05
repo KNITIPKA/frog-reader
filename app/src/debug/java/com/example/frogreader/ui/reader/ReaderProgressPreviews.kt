@@ -75,6 +75,44 @@ private fun NarrowCaptionMotionPreview() = CaptionMotionStates(AppTheme.WHITE)
 @Composable
 private fun BeigeCaptionMotionPreview() = CaptionMotionStates(AppTheme.SEPIA)
 
+@Preview(name = "Progress · motion blur · transition frames", widthDp = 393, heightDp = 210)
+@Composable
+private fun CaptionBlurFramesPreview() = CaptionBlurFrames(AppTheme.OLED)
+
+@Preview(name = "Progress · motion blur · Light narrow large text", widthDp = 320, heightDp = 270, fontScale = 1.6f)
+@Composable
+private fun NarrowCaptionBlurFramesPreview() = CaptionBlurFrames(AppTheme.WHITE)
+
+@Preview(name = "Progress · motion blur · Beige transition frames", widthDp = 393, heightDp = 210)
+@Composable
+private fun BeigeCaptionBlurFramesPreview() = CaptionBlurFrames(AppTheme.SEPIA)
+
+@Composable
+private fun CaptionBlurFrames(theme: AppTheme) {
+    FrogReaderTheme(theme) {
+        val colors = readerColors(theme)
+        Surface(Modifier.fillMaxSize(), color = colors.chrome) {
+            Column(Modifier.padding(16.dp)) {
+                for ((phase, opacity) in listOf("Чётко" to 1f, "Переход · motion blur" to 0.55f, "Быстрое движение" to 0f)) {
+                    Text(phase, style = MaterialTheme.typography.labelLarge, color = colors.onChrome)
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        ReaderProgressCaptionLayer(
+                            "3 pages left in chapter", "3 pages left in chapter", colors, { opacity },
+                            Modifier.weight(1f, fill = false),
+                        )
+                        Spacer(Modifier.padding(horizontal = 4.dp))
+                        Text("653/1289", color = colors.onChromeVariant, style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum",
+                        ))
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
+        }
+    }
+}
+
 /** Static endpoints of the local fade; the live gesture/animation is checked on the phone. */
 @Composable
 private fun CaptionMotionStates(theme: AppTheme) {

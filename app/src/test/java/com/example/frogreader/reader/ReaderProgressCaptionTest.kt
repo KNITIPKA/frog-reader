@@ -2,12 +2,37 @@ package com.example.frogreader.reader
 
 import com.example.frogreader.ui.reader.ReaderProgressCaptionPolicy
 import com.example.frogreader.ui.reader.ReaderProgressCaptionSettleMillis
+import com.example.frogreader.ui.reader.ReaderProgressCaptionBlurSteps
+import com.example.frogreader.ui.reader.readerProgressCaptionBlurIndex
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReaderProgressCaptionTest {
+    @Test
+    fun `motion blur switches off at rest and when the caption cannot be seen`() {
+        for (opacity in listOf(1f, 0.995f, 0.05f, 0f, -1f, 2f, Float.NaN, Float.POSITIVE_INFINITY)) {
+            assertEquals(0, readerProgressCaptionBlurIndex(opacity))
+        }
+        assertTrue(readerProgressCaptionBlurIndex(0.5f) > 0)
+    }
+
+    @Test
+    fun `repeated fades use only the bounded blur levels`() {
+        val visited = mutableSetOf<Int>()
+        repeat(100) {
+            for (step in 0..100) {
+                val opacity = step / 100f
+                val index = readerProgressCaptionBlurIndex(opacity)
+                assertTrue(index in 0..ReaderProgressCaptionBlurSteps)
+                assertEquals(index, readerProgressCaptionBlurIndex(opacity))
+                visited += index
+            }
+        }
+        assertEquals((0..ReaderProgressCaptionBlurSteps).toSet(), visited)
+    }
+
     @Test
     fun `rapid scrubbing freezes one text face and reveals only the final caption after a pause`() {
         val policy = ReaderProgressCaptionPolicy("12 pages left")
