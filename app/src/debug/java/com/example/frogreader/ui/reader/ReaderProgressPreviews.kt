@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.example.frogreader.data.AppTheme
@@ -55,6 +57,54 @@ private fun RectangularProgressReferencePreview() {
                         Text("4 pages left in chapter", color = colors.onChromeVariant, style = MaterialTheme.typography.labelSmall)
                         Text("56/147", color = colors.onChromeVariant, style = MaterialTheme.typography.labelSmall)
                     }
+                }
+            }
+        }
+    }
+}
+
+@Preview(name = "Progress · remaining caption motion states", widthDp = 393, heightDp = 320)
+@Composable
+private fun RemainingCaptionMotionPreview() = CaptionMotionStates(AppTheme.OLED)
+
+@Preview(name = "Progress · caption motion · Light narrow large text", widthDp = 320, heightDp = 390, fontScale = 1.6f)
+@Composable
+private fun NarrowCaptionMotionPreview() = CaptionMotionStates(AppTheme.WHITE)
+
+@Preview(name = "Progress · caption motion · Beige", widthDp = 393, heightDp = 320)
+@Composable
+private fun BeigeCaptionMotionPreview() = CaptionMotionStates(AppTheme.SEPIA)
+
+/** Static endpoints of the local fade; the live gesture/animation is checked on the phone. */
+@Composable
+private fun CaptionMotionStates(theme: AppTheme) {
+    FrogReaderTheme(theme) {
+        val colors = readerColors(theme)
+        Surface(Modifier.fillMaxSize(), color = colors.chrome) {
+            Column(Modifier.padding(16.dp)) {
+                val states = listOf(
+                    Triple("Медленное движение", ReaderProgressCaptionPresentation("3 pages left in chapter"), 525),
+                    Triple("Быстрое движение", ReaderProgressCaptionPresentation("3 pages left in chapter", subdued = true), 653),
+                    Triple("Пауза или отпускание", ReaderProgressCaptionPresentation("Last page of the chapter"), 653),
+                )
+                for ((phase, caption, page) in states) {
+                    Text(phase, style = MaterialTheme.typography.labelLarge, color = colors.onChrome)
+                    ReaderSegmentedProgressSlider(
+                        fraction = (page - 1) / 1288f, chapterStops = List(100) { it / 100f }, positionCount = 1289,
+                        adjusting = caption.subdued, enabled = true, colors = colors,
+                        interactionSource = remember { MutableInteractionSource() },
+                        label = "Book progress", progressDescription = "$page/1289",
+                        onValueChange = {}, onValueChangeFinished = {},
+                        modifier = Modifier.fillMaxWidth().height(36.dp),
+                    )
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        ReaderProgressCaptionText(caption, caption.text, colors, Modifier.weight(1f, fill = false))
+                        Spacer(Modifier.padding(horizontal = 4.dp))
+                        Text("$page/1289", color = colors.onChromeVariant, style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum",
+                        ))
+                    }
+                    Spacer(Modifier.height(24.dp))
                 }
             }
         }
