@@ -14,7 +14,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.BlurEffect
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.LayerOutsets
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
@@ -32,15 +31,15 @@ private const val ReaderProgressCaptionBurstMillis = 90L
 internal const val ReaderProgressCaptionBlurSteps = 8
 private const val ReaderProgressCaptionBlurRadiusDp = 4f
 
-/** No blur work at rest or once the caption is effectively invisible. */
-internal fun readerProgressCaptionBlurIndex(opacity: Float): Int {
-    if (!opacity.isFinite() || opacity <= 0.05f || opacity >= 0.995f) return 0
-    return ((1f - opacity) * ReaderProgressCaptionBlurSteps).roundToInt().coerceIn(1, ReaderProgressCaptionBlurSteps)
+/** No blur work at rest; full motion keeps the strongest cached effect active. */
+internal fun readerProgressCaptionBlurIndex(amount: Float): Int {
+    if (!amount.isFinite() || amount <= 0.005f) return 0
+    return (amount.coerceAtMost(1f) * ReaderProgressCaptionBlurSteps).roundToInt().coerceIn(1, ReaderProgressCaptionBlurSteps)
 }
 
-internal data class ReaderProgressCaptionPresentation(val text: String, val subdued: Boolean = false)
+internal data class ReaderProgressCaptionPresentation(val text: String, val blurred: Boolean = false)
 
-/** Suppress unreadable bursts of changing captions, independently of seek/navigation state. */
+/** Detect bursts without delaying or freezing the live caption or navigation. */
 internal class ReaderProgressCaptionPolicy(initialText: String) {
     private var latestText = initialText
     private var lastChangeMillis: Long? = null
@@ -53,14 +52,12 @@ internal class ReaderProgressCaptionPolicy(initialText: String) {
             lastChangeMillis = null
             presentation = ReaderProgressCaptionPresentation(text)
         } else if (text != latestText) {
-            val burst = lastChangeMillis?.let { nowMillis - it in 0 until ReaderProgressCaptionBurstMillis } == true
+            val elapsed = lastChangeMillis?.let { nowMillis - it }
+            val burst = elapsed != null && elapsed in 0 until ReaderProgressCaptionBurstMillis
+            val continuing = presentation.blurred && elapsed != null && elapsed in 0 until ReaderProgressCaptionSettleMillis
             latestText = text
             lastChangeMillis = nowMillis
-            presentation = when {
-                burst -> presentation.copy(subdued = true)
-                presentation.subdued -> presentation
-                else -> ReaderProgressCaptionPresentation(text)
-            }
+            presentation = ReaderProgressCaptionPresentation(text, blurred = burst || continuing)
         }
         return presentation
     }
@@ -85,13 +82,13 @@ internal fun ReaderProgressRemainingCaption(
     var presentation by remember { mutableStateOf(policy.presentation) }
     LaunchedEffect(text, adjusting) {
         presentation = policy.update(text, adjusting, SystemClock.uptimeMillis())
-        if (presentation.subdued) {
+        if (presentation.blurred) {
             delay(ReaderProgressCaptionSettleMillis)
             presentation = policy.settle(SystemClock.uptimeMillis())
         }
     }
-    // Page turns and release show the actual caption immediately, even before the effect runs.
-    val shown = if (adjusting) presentation else ReaderProgressCaptionPresentation(text)
+    // The actual value stays visible on every update, including before the effect runs.
+    val shown = ReaderProgressCaptionPresentation(text, blurred = adjusting && presentation.blurred)
     ReaderProgressCaptionText(shown, text, colors, modifier)
 }
 
@@ -102,21 +99,21 @@ internal fun ReaderProgressCaptionText(
     colors: ReaderColors,
     modifier: Modifier = Modifier,
 ) {
-    val opacity = animateFloatAsState(
-        targetValue = if (presentation.subdued) 0f else 1f,
-        animationSpec = tween(if (presentation.subdued) 80 else 120),
-        label = "readerRemainingCaptionOpacity",
+    val blurAmount = animateFloatAsState(
+        targetValue = if (presentation.blurred && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 1f else 0f,
+        animationSpec = tween(if (presentation.blurred) 80 else 120),
+        label = "readerRemainingCaptionMotionBlur",
     )
-    ReaderProgressCaptionLayer(presentation.text, description, colors, { opacity.value }, modifier)
+    ReaderProgressCaptionLayer(presentation.text, description, colors, { blurAmount.value }, modifier)
 }
 
-/** A small caption layer shares one animation clock for opacity and horizontal motion blur. */
+/** A small caption layer animates horizontal motion blur at constant opacity. */
 @Composable
 internal fun ReaderProgressCaptionLayer(
     text: String,
     description: String,
     colors: ReaderColors,
-    opacity: () -> Float,
+    blurAmount: () -> Float,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current.density
@@ -135,7 +132,7 @@ internal fun ReaderProgressCaptionLayer(
         }
     }
     val blurOutsets = remember { LayerOutsets(horizontal = 6.dp, vertical = 2.dp) }
-    // One text face: freeze it while fading out, then reveal only the latest value.
+    // One live text face; no fading, overlapping copies or fullscreen blur.
     Text(
         text = text,
         style = MaterialTheme.typography.labelSmall.copy(
@@ -147,14 +144,9 @@ internal fun ReaderProgressCaptionLayer(
         overflow = TextOverflow.Ellipsis,
         modifier = modifier
             .graphicsLayer {
-                val visibility = opacity()
-                alpha = visibility
-                val step = if (supportsBlur) readerProgressCaptionBlurIndex(visibility) else 0
+                val step = if (supportsBlur) readerProgressCaptionBlurIndex(blurAmount()) else 0
                 renderEffect = if (step > 0) effects.value[step - 1] else null
                 outsets = if (step > 0) blurOutsets else LayerOutsets.Zero
-                // The caption is a single text face. Fade alone needs no offscreen buffer;
-                // an active RenderEffect opts into a small offscreen layer automatically.
-                compositingStrategy = CompositingStrategy.ModulateAlpha
             }
             .clearAndSetSemantics { contentDescription = description },
     )

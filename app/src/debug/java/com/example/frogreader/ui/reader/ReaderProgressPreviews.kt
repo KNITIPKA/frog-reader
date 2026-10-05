@@ -93,12 +93,12 @@ private fun CaptionBlurFrames(theme: AppTheme) {
         val colors = readerColors(theme)
         Surface(Modifier.fillMaxSize(), color = colors.chrome) {
             Column(Modifier.padding(16.dp)) {
-                for ((phase, opacity) in listOf("Чётко" to 1f, "Переход · motion blur" to 0.55f, "Быстрое движение" to 0f)) {
+                for ((phase, blurAmount) in listOf("Чётко" to 0f, "Переход · motion blur" to 0.5f, "Быстрое движение" to 1f)) {
                     Text(phase, style = MaterialTheme.typography.labelLarge, color = colors.onChrome)
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                         ReaderProgressCaptionLayer(
-                            "3 pages left in chapter", "3 pages left in chapter", colors, { opacity },
+                            "3 pages left in chapter", "3 pages left in chapter", colors, { blurAmount },
                             Modifier.weight(1f, fill = false),
                         )
                         Spacer(Modifier.padding(horizontal = 4.dp))
@@ -113,7 +113,7 @@ private fun CaptionBlurFrames(theme: AppTheme) {
     }
 }
 
-/** Static endpoints of the local fade; the live gesture/animation is checked on the phone. */
+/** Static blur states; the live gesture/animation is checked on the phone. */
 @Composable
 private fun CaptionMotionStates(theme: AppTheme) {
     FrogReaderTheme(theme) {
@@ -122,14 +122,14 @@ private fun CaptionMotionStates(theme: AppTheme) {
             Column(Modifier.padding(16.dp)) {
                 val states = listOf(
                     Triple("Медленное движение", ReaderProgressCaptionPresentation("3 pages left in chapter"), 525),
-                    Triple("Быстрое движение", ReaderProgressCaptionPresentation("3 pages left in chapter", subdued = true), 653),
+                    Triple("Быстрое движение", ReaderProgressCaptionPresentation("Last page of the chapter", blurred = true), 653),
                     Triple("Пауза или отпускание", ReaderProgressCaptionPresentation("Last page of the chapter"), 653),
                 )
                 for ((phase, caption, page) in states) {
                     Text(phase, style = MaterialTheme.typography.labelLarge, color = colors.onChrome)
                     ReaderSegmentedProgressSlider(
                         fraction = (page - 1) / 1288f, chapterStops = List(100) { it / 100f }, positionCount = 1289,
-                        adjusting = caption.subdued, enabled = true, colors = colors,
+                        adjusting = caption.blurred, enabled = true, colors = colors,
                         interactionSource = remember { MutableInteractionSource() },
                         label = "Book progress", progressDescription = "$page/1289",
                         onValueChange = {}, onValueChangeFinished = {},
