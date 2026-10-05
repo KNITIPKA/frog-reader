@@ -13,7 +13,9 @@ internal class ReaderProgressChapters(stops: List<Float>) {
 
     val size: Int get() = boundaries.size - 1
 
-    operator fun get(index: Int) = ReaderProgressChapter(boundaries[index], boundaries[index + 1])
+    private val ranges = List(size) { ReaderProgressChapter(boundaries[it], boundaries[it + 1]) }
+
+    operator fun get(index: Int) = ranges[index]
 
     fun indexAt(fraction: Float): Int {
         val value = if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 0f
@@ -40,8 +42,8 @@ internal data class ReaderProgressAnchor(val chapterIndex: Int, val bookFraction
  * animation frames. A focused chapter reserves space rather than covering its
  * neighbours. Its expansion is anchored to the finger when entering a chapter.
  */
-internal class ReaderProgressLayout(
-    private val stops: List<Float>,
+internal class ReaderProgressLayout private constructor(
+    val chapters: ReaderProgressChapters,
     val trackWidthDp: Float,
     private val positionCount: Int? = null,
     private val animatedBoundaries: List<Float>? = null,
@@ -49,7 +51,9 @@ internal class ReaderProgressLayout(
     private val animatedInsets: List<Float>? = null,
     private val seekAnchor: ReaderProgressAnchor? = null,
 ) {
-    val chapters = ReaderProgressChapters(stops)
+    constructor(stops: List<Float>, trackWidthDp: Float, positionCount: Int? = null) :
+        this(ReaderProgressChapters(stops), trackWidthDp, positionCount)
+
     val detail = readerProgressSegmentDetail(chapters.size, trackWidthDp)
     private val minimumSpan = if (detail > 0f && trackWidthDp > 0f) {
         min(8f / trackWidthDp, 0.8f / chapters.size)
@@ -78,20 +82,29 @@ internal class ReaderProgressLayout(
 
     fun segment(index: Int) = ReaderProgressChapter(boundaries[index], boundaries[index + 1])
 
+    private val minimumScale by lazy(LazyThreadSafetyMode.NONE) {
+        (0 until chapters.size).minOf { candidate ->
+            val span = boundaries[candidate + 1] - boundaries[candidate]
+            val largestFocus = max(span + 8f / trackWidthDp, 32f / trackWidthDp).coerceAtMost(0.95f)
+            if (span < 1f) ((1f - largestFocus) / (1f - span)).coerceIn(0f, 1f) else 1f
+        }
+    }
+
     val insets: List<Float> = animatedInsets ?: List(chapters.size) { index ->
         if (focusedIndex == index && trackWidthDp > 0f) min(4f / trackWidthDp, segment(index).span / 2f) else 0f
     }
 
     fun inset(index: Int): Float {
-        val segment = segment(index)
-        var padding = min(insets[index], segment.span / 2f)
+        val start = boundaries[index]
+        val end = boundaries[index + 1]
+        var padding = min(insets[index], (end - start) / 2f)
         val anchor = seekAnchor?.takeIf { it.chapterIndex == index }
         if (anchor != null) {
             val local = chapterLocal(index, anchor.bookFraction)
             if (local > 0f && local < 1f) {
                 // Near a rail edge, keep a nonzero interval on both sides of
                 // the finger instead of changing pages as the capsule grows.
-                padding = min(padding, min(anchor.trackFraction - segment.start, segment.end - anchor.trackFraction).coerceAtLeast(0f) / 2f)
+                padding = min(padding, min(anchor.trackFraction - start, end - anchor.trackFraction).coerceAtLeast(0f) / 2f)
             }
         }
         return padding
@@ -114,11 +127,6 @@ internal class ReaderProgressLayout(
         // per side lets successive finger anchors squeeze the far chapters
         // more and more. This common lower bound is independent of the
         // selected chapter and remains valid throughout a continuous drag.
-        val minimumScale = (0 until chapters.size).minOf { candidate ->
-            val span = segment(candidate).span
-            val largestFocus = max(span + 8f / trackWidthDp, 32f / trackWidthDp).coerceAtMost(0.95f)
-            if (span < 1f) ((1f - largestFocus) / (1f - span)).coerceIn(0f, 1f) else 1f
-        }
         val minimumStart = original.start * minimumScale
         val maximumStart = (1f - width - (1f - original.end) * minimumScale).coerceAtLeast(0f)
         val start = (pivot.trackFraction - padding - local * (width - padding * 2f))
@@ -132,11 +140,11 @@ internal class ReaderProgressLayout(
                 else -> 1f
             }
         }
-        return ReaderProgressLayout(stops, trackWidthDp, positionCount, bounds, index, seekAnchor = anchor)
+        return ReaderProgressLayout(chapters, trackWidthDp, positionCount, bounds, index, seekAnchor = anchor)
     }
 
     fun withGeometry(bounds: List<Float>, padding: List<Float>) =
-        ReaderProgressLayout(stops, trackWidthDp, positionCount, bounds, focusedIndex, padding, seekAnchor)
+        ReaderProgressLayout(chapters, trackWidthDp, positionCount, bounds, focusedIndex, padding, seekAnchor)
 
     private fun chapterLocal(index: Int, fraction: Float): Float {
         val chapter = chapters[index]
@@ -194,6 +202,34 @@ internal class ReaderProgressLayout(
     }
 
     private fun safeFraction(value: Float) = if (value.isFinite()) value.coerceIn(0f, 1f) else 0f
+}
+
+/** One animation clock moves every boundary and inset together, including interrupted drags. */
+internal class ReaderProgressTransition(from: ReaderProgressLayout, private val to: ReaderProgressLayout) {
+    // Flatten the interrupted frame once. Keeping an interpolated list here
+    // would accumulate a chain of old transitions during a fast drag.
+    private val fromBounds = from.boundaries.toFloatArray()
+    private val toBounds = to.boundaries.toFloatArray()
+    private val fromInsets = from.insets.toFloatArray()
+    private val toInsets = to.insets.toFloatArray()
+
+    fun frame(progress: Float, selection: ReaderProgressLayout = to): ReaderProgressLayout {
+        val amount = progress.coerceIn(0f, 1f)
+        if (amount == 1f) return if (selection === to) to else selection.withGeometry(to.boundaries, to.insets)
+        return selection.withGeometry(
+            InterpolatedCoordinates(fromBounds, toBounds, amount),
+            InterpolatedCoordinates(fromInsets, toInsets, amount),
+        )
+    }
+
+    private class InterpolatedCoordinates(
+        private val from: FloatArray,
+        private val to: FloatArray,
+        private val amount: Float,
+    ) : AbstractList<Float>() {
+        override val size: Int get() = to.size
+        override fun get(index: Int): Float = from[index] + (to[index] - from[index]) * amount
+    }
 }
 
 /** A short chapter jump still waits for navigation to reach the selected page/item. */

@@ -345,6 +345,8 @@ private fun ReaderChromeText(
     }
 }
 
+private data class ReaderProgressDraft(val fraction: Float, val preview: ReaderChapterPreview?)
+
 @Composable
 private fun ReaderBookProgress(
     fraction: Float,
@@ -365,7 +367,7 @@ private fun ReaderBookProgress(
     ) -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
-    var draft by remember { mutableStateOf<Float?>(null) }
+    var draft by remember { mutableStateOf<ReaderProgressDraft?>(null) }
     var adjusting by remember { mutableStateOf(false) }
     var lastScrubbedChapterId by remember { mutableStateOf<Any?>(null) }
     val interaction = remember {
@@ -375,13 +377,13 @@ private fun ReaderBookProgress(
             lastScrubbedChapterId = null
         })
     }
-    val shown = (draft ?: fraction).coerceIn(0f, 1f)
+    val shown = (draft?.fraction ?: fraction).coerceIn(0f, 1f)
     // Hold a committed position while navigation catches up, without adding
     // history for a cancelled gesture or a seek to the page already displayed.
     LaunchedEffect(fraction, adjusting, draft, pageCount, itemCount) {
         val pending = draft
         if (!adjusting && pending != null) {
-            if (!readerProgressSeekReached(fraction, pending, pageCount ?: itemCount)) delay(600)
+            if (!readerProgressSeekReached(fraction, pending.fraction, pageCount ?: itemCount)) delay(600)
             draft = null
         }
     }
@@ -392,12 +394,7 @@ private fun ReaderBookProgress(
         }
     }
 
-    val previewing = draft != null
-    val currentPreview = remember(shown, previewing, chapterAtFraction) {
-        if (previewing && chapterAtFraction != null) {
-            chapterAtFraction(shown)
-        } else null
-    }
+    val currentPreview = draft?.preview
     val activeLabel = currentPreview?.label ?: defaultChapterLabel
     val activeParents = currentPreview?.parents ?: defaultChapterParents
 
@@ -443,28 +440,31 @@ private fun ReaderBookProgress(
             positionCount = pageCount ?: itemCount,
             adjusting = adjusting,
             onValueChange = { newVal ->
-                adjusting = true
-                draft = newVal
-                val currentId = if (chapterAtFraction != null) {
-                    chapterAtFraction(newVal.coerceIn(0f, 1f)).chapterId
-                } else if (chapterStops.isNotEmpty()) {
-                    chapterStops.indexOfLast { it <= newVal.coerceIn(0f, 1f) }.coerceAtLeast(0)
-                } else null
+                if (!adjusting || draft?.fraction != newVal) {
+                    adjusting = true
+                    // Resolve once per new position and reuse it for both the
+                    // title and haptics. Repeated moves within a page do no work.
+                    val preview = chapterAtFraction?.invoke(newVal)
+                    draft = ReaderProgressDraft(newVal, preview)
+                    val currentId = preview?.chapterId ?: if (chapterStops.isNotEmpty()) {
+                        chapterStops.indexOfLast { it <= newVal }.coerceAtLeast(0)
+                    } else null
 
-                if (currentId != null) {
-                    val lastId = lastScrubbedChapterId
-                    if (lastId == null) {
-                        lastScrubbedChapterId = currentId
-                    } else if (lastId != currentId) {
-                        lastScrubbedChapterId = currentId
-                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                    if (currentId != null) {
+                        val lastId = lastScrubbedChapterId
+                        if (lastId == null) {
+                            lastScrubbedChapterId = currentId
+                        } else if (lastId != currentId) {
+                            lastScrubbedChapterId = currentId
+                            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                        }
                     }
                 }
             },
             onValueChangeFinished = {
                 adjusting = false
                 lastScrubbedChapterId = null
-                if (draft?.let(onSeek) == true) {
+                if (draft?.fraction?.let(onSeek) == true) {
                     haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                 } else {
                     draft = null

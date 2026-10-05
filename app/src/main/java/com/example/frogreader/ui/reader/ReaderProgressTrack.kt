@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.reader
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -18,7 +19,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -86,26 +87,22 @@ internal fun ReaderSegmentedProgressSlider(
         var anchor by remember(base) { mutableStateOf<ReaderProgressAnchor?>(null) }
         val index = base.chapters.indexAt(fraction)
         val short = base.chapters[index].span * trackWidth < 28f
-        val target = if (enabled) base.focused(
-            fraction, adjusting && short, anchor.takeIf { adjusting },
-        ) else base
-        val bounds = target.boundaries.mapIndexed { boundary, value ->
-            key(base, boundary) {
-                val animated by animateFloatAsState(
-                    value, tween(180, easing = FastOutSlowInEasing), label = "readerChapterBoundary$boundary",
-                )
-                animated
-            }
+        val seekAnchor = anchor.takeIf { adjusting }
+        val expanded = adjusting && short
+        val target = remember(base, index, expanded, seekAnchor, enabled, fraction.takeIf { seekAnchor == null }) {
+            if (enabled) base.focused(fraction, expanded, seekAnchor) else base
         }
-        val insets = target.insets.mapIndexed { chapter, value ->
-            key(base, chapter) {
-                val animated by animateFloatAsState(
-                    value, tween(180, easing = FastOutSlowInEasing), label = "readerChapterInset$chapter",
-                )
-                animated
-            }
+        val phase = remember(base) { Animatable(1f) }
+        var transition by remember(base) { mutableStateOf(ReaderProgressTransition(target, target)) }
+        LaunchedEffect(target) {
+            val next = ReaderProgressTransition(transition.frame(phase.value), target)
+            phase.snapTo(0f)
+            transition = next
+            phase.animateTo(1f, tween(180, easing = FastOutSlowInEasing))
         }
-        val layout = target.withGeometry(bounds, insets)
+        // Only the animation phase changes on a frame. The book map and the
+        // destination geometry stay cached until the selected chapter changes.
+        val layout = transition.frame(phase.value, target)
         Slider(
             value = layout.trackFraction(fraction),
             onValueChange = { visual ->
@@ -198,17 +195,18 @@ internal fun ReaderSegmentedProgressTrack(
             } else {
                 val gap = 1.6.dp.toPx() * detail
                 for (index in 0 until chapters.size) {
-                    val segment = layout.segment(index)
-                    val spanPx = segment.span * width
+                    val start = layout.boundaries[index]
+                    val end = layout.boundaries[index + 1]
+                    val spanPx = (end - start) * width
                     val leftGap = if (index == 0) 0f else readerProgressBoundaryGap(
-                        layout.segment(index - 1).span * width, spanPx, gap,
+                        (start - layout.boundaries[index - 1]) * width, spanPx, gap,
                     ) / 2f
                     val rightGap = if (index == chapters.size - 1) 0f else readerProgressBoundaryGap(
-                        spanPx, layout.segment(index + 1).span * width, gap,
+                        spanPx, (layout.boundaries[index + 2] - end) * width, gap,
                     ) / 2f
                     if (!enabled || index != layout.focusedIndex) {
                         val inset = layout.inset(index) * width
-                        capsule(segment.start * width + max(leftGap, inset), segment.end * width - max(rightGap, inset), trackHeight)
+                        capsule(start * width + max(leftGap, inset), end * width - max(rightGap, inset), trackHeight)
                     }
                 }
             }

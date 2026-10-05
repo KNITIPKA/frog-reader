@@ -3,17 +3,44 @@ package com.example.frogreader.reader
 import com.example.frogreader.ui.reader.BookPage
 import com.example.frogreader.ui.reader.ReaderChapterContexts
 import com.example.frogreader.ui.reader.ReaderNavigationPolicy
+import com.example.frogreader.ui.reader.ReaderProgressTransition
 import com.example.frogreader.ui.reader.ReaderProgressLayout
 import com.example.frogreader.ui.reader.ReaderProgressAnchor
 import com.example.frogreader.ui.reader.resolveReaderChapterPreview
 import com.example.frogreader.ui.reader.readerProgressSeekReached
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import org.junit.Test
 import kotlin.math.roundToInt
 
 class ReaderProgressSeekingTest {
+    @Test
+    fun `rapid animation reversals resume from the visible frame without rebuilding book coordinates`() {
+        val base = ReaderProgressLayout(List(200) { it / 200f }, 300f, 10001)
+        var visible = base
+        repeat(1000) { step ->
+            val finger = if (step % 2 == 0) 0.15f else 0.85f
+            val book = visible.bookFraction(finger)
+            val index = base.chapters.indexAt(book)
+            val target = base.focused(book, true, ReaderProgressAnchor(index, book, finger))
+            val motion = ReaderProgressTransition(visible, target)
+            val start = motion.frame(0f)
+            assertEquals(visible.boundaries, start.boundaries)
+            assertEquals(visible.insets, start.insets)
+            assertSame(base.chapters, start.chapters)
+            // Reverse before the previous expansion has finished.
+            visible = motion.frame(0.25f)
+            assertSame(base.chapters, visible.chapters)
+            assertEquals(ReaderNavigationPolicy.progressTargetIndex(book, 0, 10000),
+                ReaderNavigationPolicy.progressTargetIndex(visible.bookFraction(finger), 0, 10000))
+            for (chapter in 0 until base.chapters.size) {
+                assertTrue(visible.segment(chapter).span >= base.segment(chapter).span * 0.89f - 0.00001f)
+            }
+        }
+    }
+
     @Test
     fun `continuous drag in either direction does not crush distant chapters`() {
         val starts = List(38) { (it * 706f / 38f).roundToInt() }
@@ -29,12 +56,10 @@ class ReaderProgressSeekingTest {
                 visited += selected
                 if (anchor?.chapterIndex != selected) anchor = ReaderProgressAnchor(selected, book, finger)
                 val target = base.focused(book, true, anchor)
+                val motion = ReaderProgressTransition(layout, target)
                 for (step in 0..10) {
                     val t = step / 10f
-                    val frame = target.withGeometry(
-                        layout.boundaries.zip(target.boundaries) { a, b -> a + (b - a) * t },
-                        layout.insets.zip(target.insets) { a, b -> a + (b - a) * t },
-                    )
+                    val frame = motion.frame(t)
                     for (chapter in 0 until base.chapters.size) {
                         assertTrue("drag ${positions.first} at $pixel, chapter $chapter, frame $step",
                             frame.segment(chapter).span >= base.segment(chapter).span * 0.9f - 0.00001f)
@@ -73,12 +98,10 @@ class ReaderProgressSeekingTest {
                 val finger = original.start + local * original.span
                 val selected = base.bookFraction(finger)
                 val target = base.focused(selected, true, ReaderProgressAnchor(chapter, selected, finger))
+                val motion = ReaderProgressTransition(base, target)
                 for (step in 0..20) {
                     val t = step / 20f
-                    val frame = target.withGeometry(
-                        base.boundaries.zip(target.boundaries) { a, b -> a + (b - a) * t },
-                        base.insets.zip(target.insets) { a, b -> a + (b - a) * t },
-                    )
+                    val frame = motion.frame(t)
                     val page = ReaderNavigationPolicy.progressTargetIndex(frame.bookFraction(finger), 0, 200)
                     assertEquals("chapter $chapter local $local frame $step", chapter, starts.indexOfLast { it <= page })
                     assertEquals("stationary page at frame $step", ReaderNavigationPolicy.progressTargetIndex(selected, 0, 200), page)
@@ -102,12 +125,10 @@ class ReaderProgressSeekingTest {
                     val finger = segment.start + local * segment.span
                     val selected = old.bookFraction(finger)
                     val target = base.focused(selected, true, ReaderProgressAnchor(next, selected, finger))
+                    val motion = ReaderProgressTransition(old, target)
                     for (step in 0..20) {
                         val t = step / 20f
-                        val frame = target.withGeometry(
-                            old.boundaries.zip(target.boundaries) { a, b -> a + (b - a) * t },
-                            old.insets.zip(target.insets) { a, b -> a + (b - a) * t },
-                        )
+                        val frame = motion.frame(t)
                         assertEquals("$previous to $next frame $step", ReaderNavigationPolicy.progressTargetIndex(selected, 0, 706),
                             ReaderNavigationPolicy.progressTargetIndex(frame.bookFraction(finger), 0, 706))
                     }
