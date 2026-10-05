@@ -72,40 +72,16 @@ internal fun ReaderSegmentedProgressSlider(
             ReaderProgressLayout(chapterStops, trackWidth, positionCount)
         }
         var anchor by remember(base) { mutableStateOf<ReaderProgressAnchor?>(null) }
-        val index = base.chapters.indexAt(fraction)
-        val short = base.chapters[index].span * trackWidth < 28f
-        val seekAnchor = anchor.takeIf { adjusting }
-        val expanded = adjusting && short
-        val focusFraction = if (seekAnchor == null && !expanded) {
-            val chapter = base.chapters[index]
-            chapter.start + chapter.span / 2f
-        } else fraction
-        val target = remember(base, index, expanded, seekAnchor, enabled, focusFraction.takeIf { expanded && seekAnchor == null }) {
-            if (enabled) base.focused(focusFraction, expanded, seekAnchor) else base
-        }
-        val phase = remember(base) { Animatable(1f) }
-        var transition by remember(base) { mutableStateOf(ReaderProgressTransition(target, target)) }
-        LaunchedEffect(target) {
-            if (!adjusting && transition.focusedIndex != target.focusedIndex) {
-                transition = ReaderProgressTransition(target, target)
-                phase.snapTo(1f)
-            } else {
-                val next = ReaderProgressTransition(transition.frame(phase.value), target)
-                phase.snapTo(0f)
-                transition = next
-                phase.animateTo(1f, tween(ProgressFocusDurationMillis, easing = LinearOutSlowInEasing))
-            }
-        }
-        // Normal page turns never wait for a shape animation to select a
-        // chapter. A drag still uses the same animated scale for drawing/input.
-        val layout = transition.frame(phase.value, target, animateChapterChange = adjusting)
+        val layout = rememberReaderProgressLayout(base, fraction, adjusting, enabled, anchor.takeIf { adjusting })
         Slider(
             value = layout.trackFraction(fraction),
             onValueChange = { visual ->
                 val book = layout.bookFraction(visual)
-                val selected = base.chapters.indexAt(book)
-                if (!adjusting || anchor?.chapterIndex != selected) {
-                    anchor = ReaderProgressAnchor(selected, book, visual)
+                if (base.segmented) {
+                    val selected = base.chapters.indexAt(book)
+                    if (!adjusting || anchor?.chapterIndex != selected) {
+                        anchor = ReaderProgressAnchor(selected, book, visual)
+                    }
                 }
                 onValueChange(book)
             },
@@ -143,6 +119,42 @@ internal fun ReaderSegmentedProgressSlider(
 }
 
 @Composable
+private fun rememberReaderProgressLayout(
+    base: ReaderProgressLayout,
+    fraction: Float,
+    adjusting: Boolean,
+    enabled: Boolean,
+    seekAnchor: ReaderProgressAnchor?,
+): ReaderProgressLayout {
+    // Continuous mode has no chapter geometry animation or finger anchors.
+    if (!base.segmented) return base
+    val index = base.chapters.indexAt(fraction)
+    val expanded = adjusting && base.chapters[index].span * base.trackWidthDp < 28f
+    val focusFraction = if (seekAnchor == null && !expanded) {
+        val chapter = base.chapters[index]
+        chapter.start + chapter.span / 2f
+    } else fraction
+    val target = remember(base, index, expanded, seekAnchor, enabled, focusFraction.takeIf { expanded && seekAnchor == null }) {
+        if (enabled) base.focused(focusFraction, expanded, seekAnchor) else base
+    }
+    val phase = remember(base) { Animatable(1f) }
+    var transition by remember(base) { mutableStateOf(ReaderProgressTransition(target, target)) }
+    LaunchedEffect(target) {
+        if (!adjusting && transition.focusedIndex != target.focusedIndex) {
+            transition = ReaderProgressTransition(target, target)
+            phase.snapTo(1f)
+        } else {
+            val next = ReaderProgressTransition(transition.frame(phase.value), target)
+            phase.snapTo(0f)
+            transition = next
+            phase.animateTo(1f, tween(ProgressFocusDurationMillis, easing = LinearOutSlowInEasing))
+        }
+    }
+    // Normal page turns never wait for a shape animation to select a chapter.
+    return transition.frame(phase.value, target, animateChapterChange = adjusting)
+}
+
+@Composable
 internal fun ReaderSegmentedProgressTrack(
     fraction: Float,
     layout: ReaderProgressLayout,
@@ -153,16 +165,15 @@ internal fun ReaderSegmentedProgressTrack(
 ) {
     val chapters = layout.chapters
     val value = layout.trackFraction(fraction)
-    val index = chapters.indexAt(fraction)
-    val chapter = layout.segment(index)
+    val index = if (layout.segmented) chapters.indexAt(fraction) else null
+    val chapter = index?.let(layout::segment)
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     Box(modifier.fillMaxWidth().height(22.dp)) {
-        val shortChapter = chapters[index].span * layout.trackWidthDp < 28f
-        val expansion by animateFloatAsState(
-            targetValue = if (enabled && adjusting && shortChapter) 1f else 0f,
+        val expansion = if (index != null) animateFloatAsState(
+            targetValue = if (enabled && adjusting && chapters[index].span * layout.trackWidthDp < 28f) 1f else 0f,
             animationSpec = tween(ProgressFocusDurationMillis, easing = LinearOutSlowInEasing),
             label = "readerShortChapterFocus",
-        )
+        ).value else 0f
         val detail = layout.detail
         Canvas(Modifier.fillMaxSize()) {
             val width = size.width
@@ -223,7 +234,7 @@ internal fun ReaderSegmentedProgressTrack(
                 }
             }
 
-            if (enabled && layout.focusedIndex != null && chapter.span > 0f) {
+            if (enabled && layout.focusedIndex != null && index != null && chapter != null && chapter.span > 0f) {
                 val left = width * if (rtl) 1f - chapter.end else chapter.start
                 val right = width * if (rtl) 1f - chapter.start else chapter.end
                 val focusHeight = (17f + expansion * 2f).dp.toPx()

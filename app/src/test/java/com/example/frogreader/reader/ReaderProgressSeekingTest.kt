@@ -61,7 +61,9 @@ class ReaderProgressSeekingTest {
 
     @Test
     fun `rapid animation reversals resume from the visible frame without rebuilding book coordinates`() {
-        val base = ReaderProgressLayout(List(200) { it / 200f }, 300f, 10001)
+        // Keep testing actual animations, even though this TOC falls back on a phone.
+        val base = ReaderProgressLayout(List(200) { it / 200f }, 2000f, 10001)
+        assertTrue(base.segmented)
         var visible = base
         repeat(1000) { step ->
             val finger = if (step % 2 == 0) 0.15f else 0.85f
@@ -308,6 +310,58 @@ class ReaderProgressSeekingTest {
             assertEquals(value, dense.bookFraction(value), 0.00001f)
             assertEquals(value, unknown.trackFraction(value), 0f)
             assertEquals(value, unknown.bookFraction(value), 0f)
+        }
+    }
+
+    @Test
+    fun `dense dragging is linear in both directions and cannot expand a chapter`() {
+        val lastPage = 1288
+        for (count in listOf(100, 200, 1000)) {
+            val starts = List(count) { (it * lastPage.toFloat() / count).roundToInt() } + lastPage
+            for (width in listOf(240f, 300f, 720f)) {
+                val base = ReaderProgressLayout(starts.map { it / lastPage.toFloat() }, width, lastPage + 1)
+                assertFalse(base.segmented)
+                for (positions in listOf(0..width.toInt(), width.toInt() downTo 0)) {
+                    var previous = if (positions.first == 0) 0 else lastPage
+                    for (pixel in positions) {
+                        val finger = pixel / width
+                        val book = base.bookFraction(finger)
+                        val expected = ReaderNavigationPolicy.progressTargetIndex(finger, 0, lastPage)
+                        val selected = base.chapters.indexAt(book)
+                        val focused = base.focused(book, true, ReaderProgressAnchor(selected, book, finger))
+                        assertSame(base, focused)
+                        assertEquals(null, focused.focusedIndex)
+                        assertEquals(expected, ReaderNavigationPolicy.progressTargetIndex(book, 0, lastPage))
+                        assertEquals(book, focused.trackFraction(book), 0f)
+                        if (positions.first == 0) assertTrue(expected >= previous) else assertTrue(expected <= previous)
+                        previous = expected
+                    }
+                }
+                // Every page remains addressable, including a final point chapter.
+                for (page in 0..lastPage) {
+                    val book = page / lastPage.toFloat()
+                    assertEquals(page, ReaderNavigationPolicy.progressTargetIndex(base.bookFraction(base.trackFraction(book)), 0, lastPage))
+                    assertEquals(starts.indexOfLast { it <= page }, base.chapters.indexAt(book))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `dense layout cannot inherit a focus animation after narrowing the track`() {
+        val stops = List(100) { it / 100f } + 1f
+        val wide = ReaderProgressLayout(stops, 1000f, 10001).focused(0.56f, true)
+        assertTrue(wide.focusedIndex != null)
+        val narrow = ReaderProgressLayout(stops, 300f, 10001)
+        val transition = ReaderProgressTransition(wide, narrow)
+        for (phase in listOf(0f, 0.25f, 0.5f, 1f)) {
+            val frame = transition.frame(phase)
+            assertSame(narrow, frame)
+            assertEquals(null, frame.focusedIndex)
+            for (value in listOf(0f, 0.15f, 0.56f, 0.95f, 1f)) {
+                assertEquals(value, frame.trackFraction(value), 0f)
+                assertEquals(value, frame.bookFraction(value), 0.00001f)
+            }
         }
     }
 }

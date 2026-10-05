@@ -1,10 +1,12 @@
 package com.example.frogreader.reader
 
 import com.example.frogreader.ui.reader.ReaderProgressChapters
+import com.example.frogreader.ui.reader.ReaderProgressLayout
 import com.example.frogreader.ui.reader.readerProgressBoundaryGap
 import com.example.frogreader.ui.reader.readerProgressSegmentDetail
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class ReaderProgressGeometryTest {
@@ -47,6 +49,22 @@ class ReaderProgressGeometryTest {
         assertEquals(0.555f, chapters.at(0.558f).start, 0.00001f)
         assertEquals(0.56f, chapters.at(0.558f).end, 0.00001f)
         assertEquals(1f, readerProgressSegmentDetail(13, 300f), 0f)
+    }
+
+    @Test
+    fun `fallback begins when the available width cannot support readable segments`() {
+        for (count in listOf(38, 100, 200, 1000)) {
+            val stops = List(count) { it / count.toFloat() }
+            assertFalse(ReaderProgressLayout(stops, count * 8f - 0.1f).segmented)
+            assertTrue(ReaderProgressLayout(stops, count * 8f).segmented)
+        }
+        assertTrue(ReaderProgressLayout(List(38) { it / 38f }, 305f).segmented)
+        for (width in listOf(240f, 300f, 720f)) {
+            assertFalse(ReaderProgressLayout(List(100) { it / 100f }, width).segmented)
+        }
+        for (width in listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY)) {
+            assertFalse(ReaderProgressLayout(listOf(0f, 0.5f), width).segmented)
+        }
     }
 
     @Test

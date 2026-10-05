@@ -85,6 +85,43 @@ private fun LandscapeReaderProgressPreview() = ProgressFooterPreview(AppTheme.OL
 @Composable
 private fun DenseReaderProgressPreview() = ProgressFooterPreview(AppTheme.OLED, stops = List(200) { it / 200f })
 
+@Preview(name = "Progress · 100 chapters · continuous fallback", widthDp = 393, heightDp = 180)
+@Composable
+private fun HundredChapterProgressPreview() = ProgressFooterPreview(
+    AppTheme.OLED,
+    stops = List(100) { if (it == 17) 210f / 1288f else (it * 1288f / 100f).roundToInt() / 1288f },
+    bookFraction = 209f / 1288f,
+    bookPageCount = 1289,
+    chapterLabel = "2",
+    chapterParents = listOf("Часть 1", "Глава 7. Воссоединение"),
+)
+
+@Preview(name = "Progress · 100 chapters · landscape drag", widthDp = 760, heightDp = 90)
+@Composable
+private fun DenseLandscapeDragPreview() = FocusTrackPreview(
+    stops = List(100) { it / 100f }, fraction = 209f / 1288f, positionCount = 1289, caption = "100 chapters · drag",
+)
+
+@Preview(name = "Progress · 200 chapters · continuous drag edges", widthDp = 320, heightDp = 360)
+@Composable
+private fun DenseDragEdgesPreview() = DenseEdgeTracks()
+
+@Preview(name = "Progress · 200 chapters · continuous drag edges · RTL", widthDp = 320, heightDp = 360)
+@Composable
+private fun RtlDenseDragEdgesPreview() = CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+    DenseEdgeTracks()
+}
+
+@Composable
+private fun DenseEdgeTracks() {
+    Column {
+        for (fraction in listOf(0f, 0.5f, 1f)) {
+            FocusTrackPreview(stops = List(200) { it / 200f } + 1f, fraction = fraction,
+                positionCount = 1289, caption = "200 chapters · ${(fraction * 100).roundToInt()}%")
+        }
+    }
+}
+
 @Preview(name = "Progress · two page interlude · expanded", widthDp = 320, heightDp = 90)
 @Composable
 private fun ExpandedReaderProgressPreview() = FocusTrackPreview()
@@ -182,6 +219,10 @@ private fun ProgressFooterPreview(
     theme: AppTheme,
     stops: List<Float> = listOf(0f, 0.045f, 0.12f, 0.225f, 0.30f, 0.445f, 0.49f, 408f / 706f, 0.67f, 0.73f, 0.9f),
     lastWish: Boolean = false,
+    bookFraction: Float = if (lastWish) 0.4092f else 395f / 706f,
+    bookPageCount: Int? = if (lastWish) null else 707,
+    chapterLabel: String = if (lastWish) "Глас рассудка IV" else "Розділ 1. Багато зустрічей",
+    chapterParents: List<String> = if (lastWish) listOf("Последнее желание") else listOf("Книга друга"),
 ) {
     FrogReaderTheme(theme) {
         val colors = readerColors(theme)
@@ -189,11 +230,11 @@ private fun ProgressFooterPreview(
             Surface(color = colors.chrome, shape = RoundedCornerShape(28.dp)) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
                     ReaderChapterFooter(
-                        chapterLabel = if (lastWish) "Глас рассудка IV" else "Розділ 1. Багато зустрічей",
-                        chapterParents = if (lastWish) listOf("Последнее желание") else listOf("Книга друга"),
-                        bookFraction = if (lastWish) 0.4092f else 395f / 706f,
-                        bookPageCount = if (lastWish) null else 707,
-                        chapterStartPages = if (lastWish) null else stops.map { (it * 706).roundToInt() },
+                        chapterLabel = chapterLabel,
+                        chapterParents = chapterParents,
+                        bookFraction = bookFraction,
+                        bookPageCount = bookPageCount,
+                        chapterStartPages = bookPageCount?.let { count -> stops.map { (it * (count - 1)).roundToInt() } },
                         chapterStops = stops,
                         progressValuesReady = true,
                         colors = colors,

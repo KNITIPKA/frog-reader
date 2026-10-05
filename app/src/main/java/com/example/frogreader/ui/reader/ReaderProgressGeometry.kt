@@ -58,6 +58,7 @@ internal class ReaderProgressLayout private constructor(
         this(ReaderProgressChapters(stops), trackWidthDp, positionCount)
 
     val detail = readerProgressSegmentDetail(chapters.size, trackWidthDp)
+    val segmented: Boolean get() = detail > 0f
     private val minimumSpan = if (detail > 0f && trackWidthDp > 0f) {
         min(8f / trackWidthDp, 0.8f / chapters.size)
     } else 0f
@@ -114,7 +115,9 @@ internal class ReaderProgressLayout private constructor(
     }
 
     fun focused(fraction: Float, expanded: Boolean, anchor: ReaderProgressAnchor? = null): ReaderProgressLayout {
-        if (chapters.size <= 1 || trackWidthDp <= 0f) return this
+        // Dense books use a linear whole-book rail, including during a drag.
+        // Hiding gaps alone would still leave chapter expansion and remapping active.
+        if (!segmented) return this
         val index = chapters.indexAt(fraction)
         val chapter = chapters[index]
         val original = segment(index)
@@ -147,7 +150,8 @@ internal class ReaderProgressLayout private constructor(
     }
 
     fun withGeometry(bounds: List<Float>, padding: List<Float>) =
-        ReaderProgressLayout(chapters, trackWidthDp, positionCount, bounds, focusedIndex, padding, seekAnchor)
+        if (segmented) ReaderProgressLayout(chapters, trackWidthDp, positionCount, bounds, focusedIndex, padding, seekAnchor)
+        else this
 
     private fun chapterLocal(index: Int, fraction: Float): Float {
         val chapter = chapters[index]
@@ -156,6 +160,7 @@ internal class ReaderProgressLayout private constructor(
 
     fun trackFraction(bookFraction: Float): Float {
         val value = safeFraction(bookFraction)
+        if (!segmented) return value
         val index = chapters.indexAt(value)
         val segment = segment(index)
         val local = chapterLocal(index, value)
@@ -175,6 +180,10 @@ internal class ReaderProgressLayout private constructor(
 
     fun bookFraction(trackFraction: Float): Float {
         val value = safeFraction(trackFraction)
+        if (!segmented) {
+            val lastPosition = positionCount?.minus(1)?.takeIf { it > 0 } ?: return value
+            return ReaderNavigationPolicy.progressTargetIndex(value, 0, lastPosition).toFloat() / lastPosition
+        }
         var low = 0
         var high = chapters.size - 1
         while (low < high) {
@@ -223,6 +232,7 @@ internal class ReaderProgressTransition(from: ReaderProgressLayout, private val 
         selection: ReaderProgressLayout = to,
         animateChapterChange: Boolean = true,
     ): ReaderProgressLayout {
+        if (!selection.segmented) return selection
         // Page turns switch the chapter immediately. Interpolation is for
         // a dragged capsule or its collapse after releasing the finger.
         if (!animateChapterChange && selection.focusedIndex != to.focusedIndex) return selection
@@ -261,10 +271,11 @@ internal fun readerProgressSeekReached(actual: Float, target: Float, positionCou
     } else abs(actual - target) < 0.00001f
 }
 
-/** Dense TOCs gradually lose decorative gaps instead of inventing equally sized chapters. */
+/** Fall back before individual chapters become illegible; adapt to the available rail width. */
 internal fun readerProgressSegmentDetail(chapterCount: Int, trackWidthDp: Float): Float {
     if (chapterCount <= 1 || !trackWidthDp.isFinite() || trackWidthDp <= 0f) return 0f
     val averageWidth = trackWidthDp / chapterCount
+    if (averageWidth < 8f) return 0f
     return ((averageWidth - 4f) / 5f).coerceIn(0f, 1f)
 }
 
