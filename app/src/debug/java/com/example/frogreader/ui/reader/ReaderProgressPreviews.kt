@@ -1,17 +1,18 @@
 package com.example.frogreader.ui.reader
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.tooling.preview.Preview
@@ -54,6 +55,21 @@ private fun DenseReaderProgressPreview() = ProgressFooterPreview(AppTheme.OLED, 
 @Composable
 private fun ExpandedReaderProgressPreview() = FocusTrackPreview()
 
+@Preview(name = "Progress · short chapter · before and during drag", widthDp = 320, heightDp = 190)
+@Composable
+private fun ExpansionComparisonPreview() {
+    Column {
+        FocusTrackPreview(adjusting = false, caption = "Before drag")
+        FocusTrackPreview(adjusting = true, caption = "During drag")
+    }
+}
+
+@Preview(name = "Progress · many small chapters · expanded", widthDp = 393, heightDp = 90)
+@Composable
+private fun ManyShortChaptersPreview() = FocusTrackPreview(
+    stops = List(38) { it / 38f }, fraction = 292f / 706f, positionCount = 707, caption = "Many short chapters",
+)
+
 @Preview(name = "Progress · expanded · RTL", widthDp = 320, heightDp = 90)
 @Composable
 private fun RtlExpandedReaderProgressPreview() = CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
@@ -91,26 +107,31 @@ private fun ProgressFooterPreview(
 }
 
 @Composable
-private fun FocusTrackPreview() {
+private fun FocusTrackPreview(
+    adjusting: Boolean = true,
+    stops: List<Float> = listOf(0f, 100f / 201f, 102f / 201f),
+    fraction: Float = 101f / 201f,
+    positionCount: Int = 202,
+    caption: String = "100 → 2 → 100",
+) {
     FrogReaderTheme(AppTheme.OLED) {
         val colors = readerColors(AppTheme.OLED)
         Surface(color = colors.chrome) {
             Column(Modifier.padding(16.dp)) {
-                Text("100 → 2 → 100", color = colors.onChrome, style = MaterialTheme.typography.labelLarge)
-                Slider(
-                    value = 0.5f,
+                Text(caption, color = colors.onChrome, style = MaterialTheme.typography.labelLarge)
+                ReaderSegmentedProgressSlider(
+                    fraction = fraction,
+                    chapterStops = stops,
+                    positionCount = positionCount,
+                    adjusting = adjusting,
+                    enabled = true,
+                    colors = colors,
+                    interactionSource = remember { MutableInteractionSource() },
+                    label = "Book progress",
+                    progressDescription = "101/202",
                     onValueChange = {},
+                    onValueChangeFinished = {},
                     modifier = Modifier.padding(top = 12.dp),
-                    thumb = { ReaderProgressThumb(colors, enabled = true) },
-                    track = { state ->
-                        ReaderSegmentedProgressTrack(
-                            fraction = state.value,
-                            chapterStops = listOf(0f, 100f / 202f, 102f / 202f),
-                            adjusting = true,
-                            enabled = true,
-                            colors = colors,
-                        )
-                    },
                 )
             }
         }

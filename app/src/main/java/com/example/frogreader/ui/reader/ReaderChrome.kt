@@ -33,8 +33,6 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -71,7 +69,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.frogreader.R
 import kotlinx.coroutines.delay
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** Consistent circular controls; the visible face sits inside a 48 dp hit target. */
@@ -381,10 +378,10 @@ private fun ReaderBookProgress(
     val shown = (draft ?: fraction).coerceIn(0f, 1f)
     // Hold a committed position while navigation catches up, without adding
     // history for a cancelled gesture or a seek to the page already displayed.
-    LaunchedEffect(fraction, adjusting, draft) {
+    LaunchedEffect(fraction, adjusting, draft, pageCount, itemCount) {
         val pending = draft
         if (!adjusting && pending != null) {
-            if (abs(fraction - pending) >= 0.02f) delay(600)
+            if (!readerProgressSeekReached(fraction, pending, pageCount ?: itemCount)) delay(600)
             draft = null
         }
     }
@@ -395,8 +392,9 @@ private fun ReaderBookProgress(
         }
     }
 
-    val currentPreview = remember(shown, adjusting, chapterAtFraction) {
-        if (adjusting && chapterAtFraction != null) {
+    val previewing = draft != null
+    val currentPreview = remember(shown, previewing, chapterAtFraction) {
+        if (previewing && chapterAtFraction != null) {
             chapterAtFraction(shown)
         } else null
     }
@@ -436,19 +434,14 @@ private fun ReaderBookProgress(
         else -> stringResource(R.string.reader_book_percent_position, (shown * 100).roundToInt())
     }
     val label = stringResource(R.string.reader_track_book)
-    val sliderColors = SliderDefaults.colors(
-        thumbColor = colors.accent,
-        activeTrackColor = colors.accent,
-        inactiveTrackColor = colors.track,
-        disabledThumbColor = colors.onChromeVariant,
-        disabledActiveTrackColor = colors.track,
-        disabledInactiveTrackColor = colors.track,
-    )
     Column {
         chapterHeader(activeLabel, activeParents)
         Spacer(Modifier.height(2.dp))
-        Slider(
-            value = shown,
+        ReaderSegmentedProgressSlider(
+            fraction = shown,
+            chapterStops = chapterStops,
+            positionCount = pageCount ?: itemCount,
+            adjusting = adjusting,
             onValueChange = { newVal ->
                 adjusting = true
                 draft = newVal
@@ -479,24 +472,13 @@ private fun ReaderBookProgress(
             },
             enabled = enabled,
             interactionSource = interaction,
-            colors = sliderColors,
+            colors = colors,
+            label = label,
+            progressDescription = position,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp)
-                .height(26.dp)
-                .semantics { contentDescription = label },
-            thumb = {
-                ReaderProgressThumb(colors, enabled)
-            },
-            track = { state ->
-                ReaderSegmentedProgressTrack(
-                    fraction = state.value,
-                    chapterStops = chapterStops,
-                    adjusting = adjusting,
-                    enabled = enabled,
-                    colors = colors,
-                )
-            },
+                .height(26.dp),
         )
         Row(
             modifier = Modifier

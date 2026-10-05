@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,9 +14,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.CornerRadius
@@ -24,14 +30,23 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlin.math.min
+import kotlin.math.max
 
-/** Keep the cursor inside the chapter outline; its layout box still supplies the original seek geometry. */
+private val ProgressThumbWidth = 24.dp
+
+/** The thumb's layout width is also subtracted when calculating the shared track scale. */
 @Composable
 internal fun ReaderProgressThumb(colors: ReaderColors, enabled: Boolean) {
-    Box(Modifier.size(width = 24.dp, height = 32.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(width = ProgressThumbWidth, height = 32.dp), contentAlignment = Alignment.Center) {
         Box(
             Modifier.size(width = 6.dp, height = 9.dp)
                 .background(colors.chrome, RoundedCornerShape(3.dp))
@@ -47,28 +62,115 @@ internal fun ReaderProgressThumb(colors: ReaderColors, enabled: Boolean) {
     }
 }
 
-/** Decorative track only: Material Slider retains touch, keyboard and accessibility seeking. */
+/** Material handles gestures; its visual coordinates are converted through the same scale as the track. */
+@Composable
+internal fun ReaderSegmentedProgressSlider(
+    fraction: Float,
+    chapterStops: List<Float>,
+    positionCount: Int?,
+    adjusting: Boolean,
+    enabled: Boolean,
+    colors: ReaderColors,
+    interactionSource: MutableInteractionSource,
+    label: String,
+    progressDescription: String,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    BoxWithConstraints(modifier) {
+        val trackWidth = (maxWidth - ProgressThumbWidth).value.coerceAtLeast(0f)
+        val base = remember(chapterStops, trackWidth, positionCount) {
+            ReaderProgressLayout(chapterStops, trackWidth, positionCount)
+        }
+        var anchor by remember(base) { mutableStateOf<ReaderProgressAnchor?>(null) }
+        val index = base.chapters.indexAt(fraction)
+        val short = base.chapters[index].span * trackWidth < 28f
+        val target = if (enabled) base.focused(
+            fraction, adjusting && short, anchor.takeIf { adjusting },
+        ) else base
+        val bounds = target.boundaries.mapIndexed { boundary, value ->
+            key(base, boundary) {
+                val animated by animateFloatAsState(
+                    value, tween(180, easing = FastOutSlowInEasing), label = "readerChapterBoundary$boundary",
+                )
+                animated
+            }
+        }
+        val insets = target.insets.mapIndexed { chapter, value ->
+            key(base, chapter) {
+                val animated by animateFloatAsState(
+                    value, tween(180, easing = FastOutSlowInEasing), label = "readerChapterInset$chapter",
+                )
+                animated
+            }
+        }
+        val layout = target.withGeometry(bounds, insets)
+        Slider(
+            value = layout.trackFraction(fraction),
+            onValueChange = { visual ->
+                val book = layout.bookFraction(visual)
+                val selected = base.chapters.indexAt(book)
+                if (!adjusting || anchor?.chapterIndex != selected) {
+                    anchor = ReaderProgressAnchor(selected, book, visual)
+                }
+                onValueChange(book)
+            },
+            onValueChangeFinished = onValueChangeFinished,
+            enabled = enabled,
+            interactionSource = interactionSource,
+            colors = SliderDefaults.colors(
+                thumbColor = colors.accent,
+                activeTrackColor = colors.accent,
+                inactiveTrackColor = colors.track,
+                disabledThumbColor = colors.onChromeVariant,
+                disabledActiveTrackColor = colors.track,
+                disabledInactiveTrackColor = colors.track,
+            ),
+            modifier = Modifier.fillMaxWidth().semantics {
+                contentDescription = label
+                stateDescription = progressDescription
+                // Accessibility percentages address real book coordinates.
+                progressBarRangeInfo = ProgressBarRangeInfo(fraction.coerceIn(0f, 1f), 0f..1f)
+                setProgress { target ->
+                    if (!enabled || !target.isFinite() || target.coerceIn(0f, 1f) == fraction) false
+                    else {
+                        onValueChange(target.coerceIn(0f, 1f))
+                        onValueChangeFinished()
+                        true
+                    }
+                }
+            },
+            thumb = { ReaderProgressThumb(colors, enabled) },
+            track = {
+                ReaderSegmentedProgressTrack(fraction, layout, adjusting, enabled, colors)
+            },
+        )
+    }
+}
+
 @Composable
 internal fun ReaderSegmentedProgressTrack(
     fraction: Float,
-    chapterStops: List<Float>,
+    layout: ReaderProgressLayout,
     adjusting: Boolean,
     enabled: Boolean,
     colors: ReaderColors,
     modifier: Modifier = Modifier,
 ) {
-    val chapters = remember(chapterStops) { ReaderProgressChapters(chapterStops) }
-    val value = if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 0f
-    val chapter = chapters.at(value)
+    val chapters = layout.chapters
+    val value = layout.trackFraction(fraction)
+    val index = chapters.indexAt(fraction)
+    val chapter = layout.segment(index)
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-    BoxWithConstraints(modifier.fillMaxWidth().height(16.dp)) {
-        val shortChapter = chapter.span * maxWidth.value < 28f
+    Box(modifier.fillMaxWidth().height(16.dp)) {
+        val shortChapter = chapters[index].span * layout.trackWidthDp < 28f
         val expansion by animateFloatAsState(
             targetValue = if (enabled && adjusting && shortChapter) 1f else 0f,
             animationSpec = tween(180, easing = FastOutSlowInEasing),
             label = "readerShortChapterFocus",
         )
-        val detail = readerProgressSegmentDetail(chapters.size, maxWidth.value)
+        val detail = layout.detail
         Canvas(Modifier.fillMaxSize()) {
             val width = size.width
             if (width <= 0f) return@Canvas
@@ -96,38 +198,33 @@ internal fun ReaderSegmentedProgressTrack(
             } else {
                 val gap = 1.6.dp.toPx() * detail
                 for (index in 0 until chapters.size) {
-                    val segment = chapters[index]
+                    val segment = layout.segment(index)
                     val spanPx = segment.span * width
                     val leftGap = if (index == 0) 0f else readerProgressBoundaryGap(
-                        chapters[index - 1].span * width, spanPx, gap,
+                        layout.segment(index - 1).span * width, spanPx, gap,
                     ) / 2f
                     val rightGap = if (index == chapters.size - 1) 0f else readerProgressBoundaryGap(
-                        spanPx, chapters[index + 1].span * width, gap,
+                        spanPx, layout.segment(index + 1).span * width, gap,
                     ) / 2f
-                    capsule(segment.start * width + leftGap, segment.end * width - rightGap, trackHeight)
+                    if (!enabled || index != layout.focusedIndex) {
+                        val inset = layout.inset(index) * width
+                        capsule(segment.start * width + max(leftGap, inset), segment.end * width - max(rightGap, inset), trackHeight)
+                    }
                 }
             }
 
-            if (enabled && chapters.size > 1) {
-                val inset = 4.dp.toPx()
-                val focus = readerProgressFocus(
-                    chapter = chapter,
-                    fraction = value,
-                    trackWidthPx = width,
-                    paddingPx = inset,
-                    minimumWidthPx = (8f + 20f * expansion).dp.toPx(),
-                    centering = expansion,
-                )
-                val left = if (rtl) width - focus.endPx else focus.startPx
-                val right = if (rtl) width - focus.startPx else focus.endPx
+            if (enabled && layout.focusedIndex != null && chapter.span > 0f) {
+                val left = width * if (rtl) 1f - chapter.end else chapter.start
+                val right = width * if (rtl) 1f - chapter.start else chapter.end
                 val focusHeight = (11f + expansion).dp.toPx()
                 val stroke = 1.dp.toPx()
-                // Opaque backing gives the focused chapter breathing room without moving its neighbours.
+                // The outline and its backing stay inside this chapter's allocated span.
                 drawRoundRect(
                     colors.chrome, Offset(left, y - focusHeight / 2f), Size(right - left, focusHeight),
                     CornerRadius(focusHeight / 2f),
                 )
-                capsule(focus.startPx + inset, focus.endPx - inset, 6.dp.toPx())
+                val inset = layout.inset(index) * width
+                capsule(chapter.start * width + inset, chapter.end * width - inset, 6.dp.toPx())
                 drawRoundRect(
                     colors.accent,
                     Offset(left + stroke / 2f, y - focusHeight / 2f + stroke / 2f),
