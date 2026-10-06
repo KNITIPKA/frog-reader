@@ -45,11 +45,31 @@ internal class ReaderProgressSegmentPlan(
     val detail: Float,
     val boundaries: List<Float>,
     val minimumScale: Float,
+    val fallbackTicks: List<Float> = emptyList(),
 )
+
+/** Keep actual chapter boundaries, but merge markers too close to read on the rail. */
+private fun readerProgressFallbackTicks(chapters: ReaderProgressChapters, widthDp: Float): List<Float> {
+    if (!widthDp.isFinite() || widthDp <= 0f) return emptyList()
+    val spacingDp = 10f
+    val edgePaddingDp = 4f
+    return buildList {
+        var previousDp = -spacingDp
+        for (index in 1 until chapters.size) {
+            val fraction = chapters[index].start
+            val positionDp = fraction * widthDp
+            if (positionDp < edgePaddingDp || positionDp > widthDp - edgePaddingDp) continue
+            if (positionDp - previousDp < spacingDp - 0.001f) continue
+            add(fraction)
+            previousDp = positionDp
+        }
+    }
+}
 
 private fun readerProgressSegmentPlan(chapters: ReaderProgressChapters, widthDp: Float): ReaderProgressSegmentPlan {
     val detail = readerProgressSegmentDetail(chapters.size, widthDp)
-    fun continuous() = ReaderProgressSegmentPlan(0f, List(chapters.size) { chapters[it].start } + 1f, 1f)
+    fun continuous() = ReaderProgressSegmentPlan(0f, List(chapters.size) { chapters[it].start } + 1f, 1f,
+        readerProgressFallbackTicks(chapters, widthDp))
     if (detail == 0f) return continuous()
 
     // Water filling: reserve a minimum for short chapters, then scale the long ones to fit.

@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlin.math.min
 import kotlin.math.max
+import kotlin.math.abs
 
 private val ProgressThumbWidth = 24.dp
 private const val ProgressFocusDurationMillis = 100
@@ -175,6 +176,8 @@ internal fun ReaderSegmentedProgressTrack(
             label = "readerShortChapterFocus",
         ).value else 0f
         val detail = layout.detail
+        val activeTick = colors.onAccent.copy(alpha = 0.45f)
+        val inactiveTick = colors.onChromeVariant.copy(alpha = 0.45f)
         Canvas(Modifier.fillMaxSize()) {
             val width = size.width
             if (width <= 0f) return@Canvas
@@ -215,6 +218,20 @@ internal fun ReaderSegmentedProgressTrack(
 
             if (detail == 0f) {
                 capsule(0f, width, trackHeight)
+                // Inset marks preserve the uninterrupted book scale. Their
+                // sparse positions are cached with the fallback geometry.
+                val tickWidth = 0.75.dp.toPx()
+                val tickHeight = 5.dp.toPx()
+                val cursorClearance = 4.dp.toPx()
+                for (stop in layout.segmentPlan.fallbackTicks) {
+                    val x = width * if (rtl) 1f - stop else stop
+                    if (abs(x - cursor) < cursorClearance) continue
+                    drawRoundRect(
+                        if (enabled && stop <= value) activeTick else inactiveTick,
+                        Offset(x - tickWidth / 2f, y - tickHeight / 2f),
+                        Size(tickWidth, tickHeight), CornerRadius(tickWidth / 2f),
+                    )
+                }
             } else {
                 val gap = 2.dp.toPx() * detail
                 for (index in 0 until chapters.size) {

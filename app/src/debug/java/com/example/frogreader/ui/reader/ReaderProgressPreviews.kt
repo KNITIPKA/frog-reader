@@ -181,6 +181,35 @@ private fun ThirtyChapterProgressPreview() = ThirtyChapterFooter()
 @Composable
 private fun ThirtyChapterLandscapeProgressPreview() = ThirtyChapterFooter()
 
+@Preview(name = "Progress · Light · inset fallback ticks", widthDp = 393, heightDp = 180)
+@Composable
+private fun LightFallbackTicksPreview() = FallbackTicksFooter(AppTheme.WHITE)
+
+@Preview(name = "Progress · Beige · inset fallback ticks", widthDp = 393, heightDp = 180)
+@Composable
+private fun BeigeFallbackTicksPreview() = FallbackTicksFooter(AppTheme.SEPIA)
+
+@Preview(name = "Progress · fallback ticks · narrow large text", widthDp = 320, heightDp = 180, fontScale = 1.6f)
+@Composable
+private fun NarrowFallbackTicksPreview() = FallbackTicksFooter(AppTheme.WHITE)
+
+@Composable
+private fun FallbackTicksFooter(theme: AppTheme) = ProgressFooterPreview(
+    theme,
+    // Representative boundaries for the supplied Light-theme screenshot.
+    stops = List(30) {
+        when (it) {
+            25 -> 250f / 294f
+            26 -> 260f / 294f
+            else -> (it * 294f / 30f).roundToInt() / 294f
+        }
+    },
+    bookFraction = 252f / 294f,
+    bookPageCount = 295,
+    chapterLabel = "XVII",
+    chapterParents = emptyList(),
+)
+
 @Composable
 private fun ThirtyChapterFooter() = ProgressFooterPreview(
     AppTheme.OLED,

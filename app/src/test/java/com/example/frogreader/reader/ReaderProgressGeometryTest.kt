@@ -120,6 +120,43 @@ class ReaderProgressGeometryTest {
     }
 
     @Test
+    fun `fallback ticks keep real boundaries and collapse a tight cluster without changing book positions`() {
+        val stops = listOf(0f, 0.05f, 0.051f, 0.052f, 0.053f, 0.054f, 0.055f, 0.2f, 0.5f, 0.9f, 1f)
+        val base = ReaderProgressLayout(stops, 305f)
+        assertFalse(base.segmented)
+        assertEquals(listOf(0.05f, 0.2f, 0.5f, 0.9f), base.segmentPlan.fallbackTicks)
+        for (fraction in listOf(0f, 0.051f, 0.3f, 0.9f, 1f)) {
+            assertEquals(fraction, base.trackFraction(fraction), 0f)
+            assertEquals(fraction, base.bookFraction(fraction), 0f)
+            assertSame(base, base.focused(fraction, expanded = true))
+        }
+    }
+
+    @Test
+    fun `dense fallback ticks remain sparse and inside the rail at every screen width`() {
+        for (width in listOf(232f, 305f, 720f)) {
+            for (count in listOf(30, 38, 100, 200, 1000)) {
+                val stops = List(count) { it / count.toFloat() } + 1f
+                val base = ReaderProgressLayout(stops, width)
+                val ticks = base.segmentPlan.fallbackTicks
+                if (base.segmented) {
+                    assertTrue(ticks.isEmpty())
+                    continue
+                }
+                assertTrue(ticks.isNotEmpty())
+                assertTrue(ticks.all { it in stops && it * width >= 4f && it * width <= width - 4f })
+                // Leave ample breathing room even with a thousand chapter boundaries.
+                assertTrue(ticks.zipWithNext().all { (left, right) -> (right - left) * width >= 8f })
+                assertTrue(ticks.size <= width.toInt() / 8)
+            }
+        }
+        for (width in listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY)) {
+            assertTrue(ReaderProgressLayout(listOf(0f, 0.5f, 1f), width).segmentPlan.fallbackTicks.isEmpty())
+        }
+        assertTrue(ReaderProgressLayout(emptyList(), 305f).segmentPlan.fallbackTicks.isEmpty())
+    }
+
+    @Test
     fun `unknown chapter structure remains a single full book rail`() {
         val chapters = ReaderProgressChapters(emptyList())
         assertEquals(1, chapters.size)
