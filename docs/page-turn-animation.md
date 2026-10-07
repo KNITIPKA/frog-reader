@@ -36,14 +36,22 @@ its contact shadow. During settling to the flat sheet, also straighten the
 crease continuously. An interior-height grab otherwise leaves a finite corner
 beyond its diagonal crease until the renderer's endpoint reset.
 
-Taps and volume-key turns take 480 ms with a quintic curve that starts and ends
+Taps and volume-key turns take 340 ms with a quintic curve that starts and ends
 at zero velocity and acceleration. Settling after UP uses a separate continuation:
 project both finger-velocity components onto the two-dimensional drag's progress,
 retain velocity towards the selected endpoint, and brake to rest without
 overshooting. A stopped finger or reversal starts gently. Distance and release
-speed select a 160–480 ms duration; tiny already-flat corrections finish directly.
+speed select a 100–340 ms duration; tiny already-flat corrections finish directly.
 The initial slope is bounded so even extreme flicks cannot reverse the animation
 or start another sheet. Compose still supplies frame timing and animator scale.
+
+A fresh DOWN can interrupt settling immediately. Finish the previous gesture's
+already chosen UP target, invalidate its ownership and cancel its job before
+accepting the next finger. The old coroutine can neither turn another page nor
+clear the new grip. For a tap-driven Pager animation, complete its selected
+`targetPage` and cancel its scroll through `requestScrollToPage` before starting
+the new tap/swipe. Never consume an entire new gesture just because an animation
+is still running. A currently held finger still owns one pair until its UP.
 
 For an interior-height grab, engage diagonal tilt gradually over the first 0.08
 of physical sheet progress. This removes the finite triangular fold that otherwise
@@ -56,7 +64,8 @@ rather than introducing a sharp change as the cylinder reaches its contact radiu
 
 - Keep the existing Compose `PagerState` as the navigation owner. A finger drag
   leaves Pager at its origin, paints the neighbouring pair in place and updates
-  Pager exactly once after the final commit/cancel frame. Persisted progress and
+  Pager once at the final commit/cancel frame, or at the next DOWN if settling
+  is interrupted. Persisted progress and
   completion still come from `settledPage`. Live progress follows the gesture,
   and chapter feedback uses the target chosen at release.
 - Record page content into a managed `GraphicsLayer`. An inner graphics layer
@@ -84,6 +93,8 @@ rather than introducing a sharp change as the cylinder reaches its contact radiu
   to the outer edge cannot turn the next or previous sheet. Resetting for a seek
   cancels the outstanding settle job so it cannot navigate later. Programmatic
   Pager animations retain `PageCurlSession` and its endpoint overshoot guard.
+  New pointer input and repeated accessibility page actions finish the pending
+  release target first, so they start from the newly selected page.
 - Restore page-left/right, scroll-by and scroll-to-index accessibility actions
   explicitly when disabling Pager's pointer scroll.
 
@@ -108,6 +119,10 @@ spine remains fixed through unfolding in portrait, narrow and landscape sizes.
 checks gradual tap/resting-release starts, retention of a moving finger's speed
 in both directions, bounded monotone commit/cancel paths even at extreme speeds,
 gentle terminal braking and the horizontal/vertical release-speed projection.
+Session tests also cover interruption at early/middle/late settling in both
+reading directions, commit and cancellation, 30 immediate forward/reverse turns,
+cancelled jobs and stale finish callbacks, partial Pager positions and rapid taps
+before the first visible frame of a programmatic animation.
 The geometry tests also bound the initial corner displacement when a small
 vertical movement inside the page first crosses touch slop.
 The CLI build verifies integration, not the phone's graphics driver or frame rate.
@@ -115,6 +130,8 @@ The CLI build verifies integration, not the phone's graphics driver or frame rat
 Owner phone checks: slow drags from upper/middle/lower text heights and the actual
 top/bottom corners, bottom-right pull upward then back to the right without UP,
 release before and after the halfway point, fast reversals,
+successive swipes and edge taps without waiting for settling, reversing the next
+gesture while the previous one is still settling,
 held corner near its reach limit, final cancellation frames from an interior
 text-height grab,
 forward/back edge taps, volume keys,

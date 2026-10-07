@@ -160,14 +160,31 @@ internal class PageCurlTouch {
         followsPointer = false
     }
 
+    /** A new DOWN finishes the previous UP decision, then owns the next sheet. */
+    fun completePendingTurn(pager: PagerState): Boolean {
+        if (pressed || pager.pageCount <= 0) return false
+        val target = releasePage ?: if (
+            pager.isScrollInProgress || abs(pager.currentPageOffsetFraction) > FLAT_EPSILON
+        ) pager.targetPage else return false
+        val page = target.coerceIn(0, pager.pageCount - 1)
+        reset(page)
+        // Synchronous position update; it also cancels an outstanding Pager
+        // tap/keyboard animation. DOWN remains available to taps and drags.
+        pager.requestScrollToPage(page)
+        return true
+    }
+
     fun reset(pageIndex: Int) {
-        settleJob?.cancel()
+        val previousJob = settleJob
         settleJob = null
         gesture = null
         releasePage = null
         clearDrag()
         session.begin(pageIndex)
         anchorY = 0.5f
+        // Invalidate ownership first: even an immediate cancellation's finally
+        // block must not clear the new session or perform stale navigation.
+        previousJob?.cancel()
     }
 }
 
@@ -178,15 +195,7 @@ internal fun Modifier.pageCurlGestures(touch: PageCurlTouch, pager: PagerState, 
             val gestureScope = this
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                // A finishing sheet cannot also begin a second turn on UP.
-                if (touch.gesture != null) {
-                    down.consume()
-                    do {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        event.changes.forEach { it.consume() }
-                    } while (event.changes.any { it.pressed })
-                    return@awaitEachGesture
-                }
+                touch.completePendingTurn(pager)
                 val width = size.width.coerceAtLeast(1).toFloat()
                 val height = size.height.coerceAtLeast(1).toFloat()
                 val origin = pager.currentPage
@@ -272,6 +281,7 @@ internal fun Modifier.paperPageSemantics(
     scope: CoroutineScope,
 ): Modifier {
     fun navigate(delta: Int): Boolean {
+        touch.completePendingTurn(pager)
         val target = pager.currentPage + delta
         if (target !in 0 until pager.pageCount) return false
         touch.reset(pager.currentPage)

@@ -1,18 +1,152 @@
 package com.example.frogreader.reader
 
+import androidx.compose.foundation.pager.PagerState
 import com.example.frogreader.ui.reader.PageCurlGeometry
 import com.example.frogreader.ui.reader.PageCurlGesture
 import com.example.frogreader.ui.reader.PageCurlSession
 import com.example.frogreader.ui.reader.PageCurlTouch
+import kotlinx.coroutines.Job
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.mockito.Mockito.mock
+import org.mockito.Mockito.verify
+import org.mockito.Mockito.`when`
 
 class PageCurlSessionTest {
+    @Test
+    fun `new input finishes the previous release decision and cancels its outstanding job`() {
+        for (rtl in listOf(false, true)) {
+            for (backward in listOf(false, true)) {
+                for (commit in listOf(false, true)) {
+                    for (settledFraction in listOf(0f, 0.4f, 0.99f)) {
+                        val pager = PagerState(currentPage = 143) { 369 }
+                        val touch = PageCurlTouch()
+                        val startX = if (rtl xor backward) 0.05f else 0.95f
+                        touch.begin(143, 0f, startX, 0.85f)
+                        touch.startGesture(143, 369, backward, rtl, 2f)
+                        touch.move(1f - startX, 0.65f)
+                        val old = touch.gesture!!
+                        touch.release(143, 0f, 369)
+                        val target = if (commit) old.neighbourPage else old.originPage
+                        touch.settleTo(old, target)
+                        val from = touch.gestureProgress
+                        touch.settleFrame(old, from + (old.endpoint(target) - from) * settledFraction)
+                        val oldJob = Job()
+                        touch.settleJob = oldJob
+
+                        assertTrue(touch.completePendingTurn(pager))
+                        assertTrue(oldJob.isCancelled)
+                        assertEquals(target, pager.currentPage)
+                        assertEquals(0f, pager.currentPageOffsetFraction, 0f)
+                        assertNull(touch.gesture)
+                        assertNull(touch.releasePage)
+                        assertNull(touch.settleJob)
+                        assertFalse(touch.completePendingTurn(pager))
+
+                        // The new finger is accepted immediately, before the
+                        // old job's finally block or another animation frame.
+                        touch.begin(pager.currentPage, pager.currentPageOffsetFraction, startX, 0.3f)
+                        assertTrue(touch.startGesture(target, 369, backward, rtl, 2f))
+                        touch.move(1f - startX, 0.4f)
+                        val next = touch.gesture!!
+                        val nextProgress = touch.gestureProgress
+                        touch.settleFrame(old, old.endpoint(target))
+                        touch.finishGesture(old, target)
+                        assertSame(next, touch.gesture)
+                        assertEquals(nextProgress, touch.gestureProgress, 0f)
+                        assertEquals(0.3f, touch.anchorY, 0f)
+                        assertTrue(touch.pressed)
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `rapid repeated forward and reverse inputs advance once per released gesture`() {
+        for (rtl in listOf(false, true)) {
+            val pager = PagerState(currentPage = 143) { 369 }
+            val touch = PageCurlTouch()
+            var expectedPage = 143
+            for (step in 0 until 30) {
+                val backward = step >= 15
+                val startX = if (rtl xor backward) 0.05f else 0.95f
+                touch.begin(pager.currentPage, 0f, startX, 0.7f)
+                assertTrue(touch.startGesture(pager.currentPage, 369, backward, rtl, 2f))
+                touch.move(1f - startX, 0.65f)
+                val old = touch.gesture!!
+                assertEquals(expectedPage, old.originPage)
+                assertEquals(expectedPage, pager.currentPage) // No navigation while held.
+                touch.release(expectedPage, 0f, 369)
+                val target = old.releaseTarget(0f)
+                expectedPage += if (backward) -1 else 1
+                assertEquals(expectedPage, target)
+                touch.settleTo(old, target)
+                assertTrue(touch.completePendingTurn(pager))
+                touch.settleFrame(old, 0.5f) // A stale animation cannot turn an extra page.
+                touch.finishGesture(old, old.originPage)
+                assertEquals(expectedPage, pager.currentPage)
+                assertFalse(touch.prepareFrame(pager.currentPage, 0f, 369))
+            }
+            assertEquals(143, pager.currentPage)
+        }
+    }
+
+    @Test
+    fun `a partial Pager turn is flattened before accepting a fresh finger`() {
+        for (offset in listOf(-0.4f, -0.01f, 0.01f, 0.4f)) {
+            val pager = PagerState(currentPage = 143, currentPageOffsetFraction = offset) { 369 }
+            val touch = PageCurlTouch()
+            assertTrue(touch.prepareFrame(143, offset, 369))
+            assertTrue(touch.completePendingTurn(pager))
+            assertEquals(0f, pager.currentPageOffsetFraction, 0f)
+            assertFalse(touch.prepareFrame(143, 0f, 369))
+            touch.begin(pager.currentPage, pager.currentPageOffsetFraction, 0.95f, 0.7f)
+            assertTrue(touch.startGesture(143, 369, backward = false, rtl = false, 2f))
+        }
+    }
+
+    @Test
+    fun `a rapid tap finishes the programmatic target even before its first visible frame`() {
+        for (target in listOf(142, 144)) {
+            for (current in listOf(143, target)) {
+                val pager = mock(PagerState::class.java)
+                `when`(pager.pageCount).thenReturn(369)
+                `when`(pager.currentPage).thenReturn(current)
+                `when`(pager.currentPageOffsetFraction).thenReturn(0f)
+                `when`(pager.targetPage).thenReturn(target)
+                `when`(pager.isScrollInProgress).thenReturn(true)
+                val touch = PageCurlTouch()
+                assertTrue(touch.completePendingTurn(pager))
+                verify(pager).requestScrollToPage(target, 0f)
+                assertFalse(touch.prepareFrame(target, 0f, 369))
+                touch.begin(target, 0f, 0.95f, 0.5f)
+                assertTrue(touch.startGesture(target, 369, backward = false, rtl = false, 2f))
+                assertEquals(target, touch.gesture!!.originPage)
+            }
+        }
+    }
+
+    @Test
+    fun `a held finger cannot finish or switch its page before release`() {
+        val pager = PagerState(currentPage = 143) { 369 }
+        val touch = PageCurlTouch()
+        touch.begin(143, 0f, 0.95f, 0.85f)
+        touch.startGesture(143, 369, backward = false, rtl = false, 2f)
+        touch.move(0.05f, 0.6f)
+        val held = touch.gesture!!
+        assertFalse(touch.completePendingTurn(pager))
+        assertSame(held, touch.gesture)
+        assertEquals(143, pager.currentPage)
+        assertTrue(touch.pressed)
+    }
+
     @Test
     fun `only a release ending on the flat sheet unfolds the crease and starts at the held shape`() {
         for (backward in listOf(false, true)) {

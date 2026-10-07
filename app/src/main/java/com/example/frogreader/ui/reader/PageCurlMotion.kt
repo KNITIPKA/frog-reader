@@ -10,7 +10,7 @@ import kotlin.math.sqrt
 
 /** Timing for a resting page and for the continuation of an already moving sheet. */
 internal object PageCurlMotion {
-    const val TURN_DURATION_MILLIS = 480
+    const val TURN_DURATION_MILLIS = 340
 
     private val restingEasing = continuationEasing(0f)
 
@@ -29,9 +29,9 @@ internal object PageCurlMotion {
         }
         // A small correction still needs time to accelerate and brake. The
         // old distance-proportional duration made short cancellations snap.
-        val restingMillis = 160f + 320f * sqrt(distance)
+        val restingMillis = 100f + 240f * sqrt(distance)
         val movingMillis = if (directedVelocity > 0f) {
-            (1800f * distance / directedVelocity).coerceAtLeast(160f)
+            (1800f * distance / directedVelocity).coerceAtLeast(100f)
         } else {
             restingMillis
         }

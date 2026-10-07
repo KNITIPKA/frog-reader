@@ -23,6 +23,8 @@ class PageCurlMotionTest {
             assertTrue(1f - animation.getValueFromNanos(animation.durationNanos - frameNanos) < 0.005f)
         }
         assertEquals(0f, animation.getValueFromNanos(0), 0f)
+        assertTrue("A tap still feels delayed after 50 ms", animation.getValueFromNanos(50_000_000L) >= 0.02f)
+        assertTrue("A full tap takes too long", animation.durationNanos <= 350_000_000L)
         assertEquals(0.5f, animation.getValueFromNanos(animation.durationNanos / 2), 0.00001f)
         assertEquals(1f, animation.getValueFromNanos(animation.durationNanos), 0f)
     }
@@ -58,7 +60,7 @@ class PageCurlMotionTest {
                 for (velocity in listOf(-100f, -5f, -0.2f, 0f, 0.2f, 5f, 100f, Float.NaN, Float.POSITIVE_INFINITY)) {
                     val spec = PageCurlMotion.settleSpec(from, to, velocity)
                     val animation = animation(spec, from, to)
-                    assertTrue(spec.durationMillis in 160..480)
+                    assertTrue(spec.durationMillis in 100..340)
                     var previous = from
                     for (sample in 0..1000) {
                         val value = animation.getValueFromNanos(animation.durationNanos * sample / 1000)
