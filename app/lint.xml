@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- Project SDK policy deliberately keeps targetSdk 36 while compiling with SDK 37.
+         Keep this exception confined to the SDK declaration, not application code. -->
+    <issue id="OldTargetApi">
+        <ignore path="build.gradle.kts" />
+    </issue>
+    <!-- Gradle 9.8 emits Configuration.setVisible deprecation from AGP 9.4.1
+         BasePlugin.createAndroidJdkImageConfiguration. Use verified 9.7 until
+         AGP fixes that call; other dependency update checks remain enabled. -->
+    <issue id="AndroidGradlePluginVersion">
+        <ignore path="../gradle/wrapper/gradle-wrapper.properties" />
+    </issue>
+</lint>

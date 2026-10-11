@@ -18,10 +18,22 @@ local.properties
 .kotlin/
 .testbooks/
 *.apk
+*.aab
+*.apks
+*.jks
+*.keystore
+/signing.properties
+/keystore.properties
+/release-signing.properties
 
 # Developer and tooling scratch directories
 .agents/
+.codex/
+.vscode/
 .gemini/
 .claude/
 .aider*
 AGENTS.md
+
+# Local session notes and unpublished review evidence
+/docs/epub-engine-next-session.md

@@ -1,4 +1,7 @@
 import java.util.Properties
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.tasks.Classpath
+import org.gradle.process.CommandLineArgumentProvider
 
 plugins {
     alias(libs.plugins.android.application)
@@ -7,12 +10,22 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-// App version lives in version.properties (repo root) and is bumped on every
-// release build, so Settings always shows which build is installed. Being a
-// file input, a bump also correctly invalidates Gradle's configuration cache.
+// Version changes are deliberate release commits. Rebuilding the same source
+// must not change the version or mutate tracked files.
 val versionProps = Properties().apply {
-    val file = rootProject.file("version.properties")
-    if (file.exists()) file.inputStream().use { load(it) }
+    rootProject.file("version.properties").inputStream().use { load(it) }
+}
+val releaseVersionCode = requireNotNull(versionProps.getProperty("code")).toInt()
+val releaseVersionName = requireNotNull(versionProps.getProperty("name"))
+require(releaseVersionCode > 0 && releaseVersionName.isNotBlank())
+
+// Private signing material stays outside Git. Without credentials, release
+// builds are unsigned; CI still verifies the optimized application.
+val releaseStorePath = providers.environmentVariable("FROGREADER_KEYSTORE_PATH").orNull
+val legacyReleaseSigning = providers.gradleProperty("legacyReleaseSigning")
+    .map { it.toBooleanStrict() }.getOrElse(false)
+fun signingValue(name: String) = requireNotNull(providers.environmentVariable(name).orNull) {
+    "Missing release signing environment variable: $name"
 }
 
 android {
@@ -25,20 +38,36 @@ android {
         applicationId = "knitipka.frogreader"
         minSdk = 26
         targetSdk = 36
-        versionCode = (versionProps.getProperty("code") ?: "3").toInt()
-        versionName = versionProps.getProperty("name") ?: "ALPHA 3"
+        versionCode = releaseVersionCode
+        versionName = releaseVersionName
+        // The welcome badge follows the same release label as About and Settings.
+        resValue("string", "welcome_release_label", versionName!!)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (releaseStorePath != null) {
+            create("externalRelease") {
+                storeFile = rootProject.file(releaseStorePath)
+                storePassword = signingValue("FROGREADER_KEYSTORE_PASSWORD")
+                keyAlias = signingValue("FROGREADER_KEY_ALIAS")
+                keyPassword = signingValue("FROGREADER_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
             optimization {
                 enable = true
             }
-            // Signed with the debug key: this is a personal app that is
-            // installed straight from Android Studio, not from Play.
-            signingConfig = signingConfigs.getByName("debug")
+            // Alpha releases used the maintainer's local debug certificate.
+            // BETA 1 explicitly reuses it so existing installs can update.
+            signingConfig = when {
+                releaseStorePath != null -> signingConfigs.getByName("externalRelease")
+                legacyReleaseSigning -> signingConfigs.getByName("debug")
+                else -> null
+            }
         }
     }
     compileOptions {
@@ -47,6 +76,18 @@ android {
     }
     buildFeatures {
         compose = true
+        resValues = true
+    }
+    packaging {
+        // Package known AndroidX native binaries as supplied. The app has no
+        // native compilation, so preserving their symbols avoids requiring a
+        // local NDK just to reprocess these vendor artifacts.
+        jniLibs.keepDebugSymbols += setOf(
+            "**/libandroidx.graphics.path.so",
+            "**/libdatastore_shared_counter.so",
+            "**/libimage_processing_util_jni.so",
+            "**/libsurface_util_jni.so",
+        )
     }
     testOptions {
         unitTests {
@@ -55,17 +96,39 @@ android {
     }
 }
 
-// The persistent FrogCompare corpus is generated only when explicitly asked.
-// Gradle project properties do not reach the forked unit-test JVM by default.
+val mockitoAgent = configurations.create("mockitoAgent") {
+    isCanBeConsumed = false
+    isTransitive = false
+}
+
+abstract class MockitoAgentArguments : CommandLineArgumentProvider {
+    @get:Classpath
+    abstract val agentClasspath: ConfigurableFileCollection
+
+    override fun asArguments() = listOf("-javaagent:${agentClasspath.singleFile.absolutePath}")
+}
+
 tasks.withType<Test>().configureEach {
+    // Attach Mockito at startup instead of dynamically attaching on newer JDKs.
+    jvmArgumentProviders.add(objects.newInstance<MockitoAgentArguments>().apply {
+        agentClasspath.from(mockitoAgent)
+    })
+    // Inline mocking appends bootstrap classes, which cannot use the CDS archive.
+    jvmArgs("-Xshare:off")
+    // The persistent FrogCompare corpus is generated only when explicitly asked.
+    // Project properties do not reach the forked unit-test JVM by default.
     systemProperty(
         "frogreader.generateTestBooks",
         providers.gradleProperty("generateTestBooks").getOrElse("false"),
     )
+    providers.gradleProperty("testBookDir").orNull?.let {
+        systemProperty("frogreader.testBookDir", it)
+    }
 }
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.exifinterface)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -100,9 +163,10 @@ dependencies {
     // Real XML pull parser for JVM unit tests (Android provides its own at runtime).
     testImplementation(libs.kxml2)
     testImplementation(libs.xmlpull)
-    testImplementation("org.mockito:mockito-core:5.11.0")
-    testImplementation("org.mockito.kotlin:mockito-kotlin:5.2.1")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")
+    testImplementation(libs.mockito.core)
+    mockitoAgent(libs.mockito.core)
+    testImplementation(libs.mockito.kotlin)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }
