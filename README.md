@@ -1,10 +1,11 @@
-# FrogReader
+# FrogReader 🐸📖
 
-[![Release](https://img.shields.io/badge/Release-BETA%201-2f7356)](https://github.com/KNITIPKA/frog-reader/releases/tag/beta-1)
-[![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
-[![Kotlin](https://img.shields.io/badge/Kotlin-2.x-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
-[![CI](https://img.shields.io/github/actions/workflow/status/KNITIPKA/frog-reader/ci.yml?branch=main&label=CI&logo=github)](https://github.com/KNITIPKA/frog-reader/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/License-GPL%203.0-blue)](LICENSE)
+[![Release](https://img.shields.io/badge/Release-BETA%201-2f7356.svg?style=for-the-badge&logo=android&logoColor=white)](https://github.com/KNITIPKA/frog-reader/releases/tag/beta-1)
+[![Android](https://img.shields.io/badge/Android-SDK%2026+-3DDC84.svg?style=for-the-badge&logo=android&logoColor=white)](https://developer.android.com/)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.0+-7F52FF.svg?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
+[![Compose](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4.svg?style=for-the-badge&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
+[![CI](https://img.shields.io/github/actions/workflow/status/KNITIPKA/frog-reader/ci.yml.svg?branch=main&label=CI&logo=github&style=for-the-badge)](https://github.com/KNITIPKA/frog-reader/actions/workflows/ci.yml)
+[![License: GPL 3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg?style=for-the-badge)](LICENSE)
 
 **FrogReader is a free, open-source Android e-book reader for reading, organizing books and keeping a personal reading history.** It supports EPUB, FB2, MOBI/KF8, TXT and Markdown, with native paged and continuous reading, publisher formatting, a reading queue, saved passages and local backups.
 
@@ -115,9 +116,18 @@ Build an optimized release with `./gradlew :app:assembleRelease`. Release signin
 
 The JVM suite covers parsers, publisher layout, pagination, selection, data persistence, backups, navigation and UI state. Local-book corpus tests are optional and skip when their external files are absent; synthetic regression fixtures run in CI. Builds and unit tests do not replace physical-device reading or gesture checks.
 
-## Contributing and planned work
+## Bug reports and feedback
 
-Bug reports, parser fixes, accessibility testing, documentation and translations are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow. Include the app version, Android/device details and steps to reproduce; share a sample book only when you have permission to redistribute it.
+If you run into any bugs, rendering glitches, or crashes, reporting them directly with diagnostic information is preferred:
+
+- **Telegram**: [@knitipka](https://t.me/knitipka)
+- **Signal**: [Direct message](https://signal.me/#eu/gXfCfTAgdX8qNuAaZ-L3ozxFAJ0qb1ObkD9t2TNTVr6iPYYMhVVOSrXw-5pjdEjb)
+- **Email**: [knitipka@proton.me](mailto:knitipka@proton.me)
+- **GitHub Issues**: [Open an issue](https://github.com/KNITIPKA/frog-reader/issues)
+
+Please copy diagnostic details using the **Copy diagnostic info** button in the app (**Settings → About**). You are completely free to share any sample book file (any source, public or pirated) that triggers the bug so it can be reproduced and fixed.
+
+Contributions, parser fixes, accessibility testing, documentation and translations are also welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Current priorities include broader rendering fidelity and performance, physical-device accessibility/gesture testing, dedicated statistics and achievements, additional widgets, localization and future format support. Planned features are not included in Beta 1 unless listed above.
 

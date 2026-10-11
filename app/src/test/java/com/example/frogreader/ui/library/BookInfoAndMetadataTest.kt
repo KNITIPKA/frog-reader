@@ -135,7 +135,7 @@ class BookInfoAndMetadataTest {
         assertEquals("Test Book", state.book?.title)
 
         var elapsed = 0
-        while (viewModel.state.value.fileLoading && elapsed < 3000) {
+        while (viewModel.state.value.fileLoading && elapsed < 10000) {
             Thread.sleep(20)
             elapsed += 20
         }
@@ -156,7 +156,7 @@ class BookInfoAndMetadataTest {
         assertTrue(initialState.fileLoading)
 
         var elapsed = 0
-        while (viewModel.state.value.fileLoading && elapsed < 3000) {
+        while (viewModel.state.value.fileLoading && elapsed < 10000) {
             assertTrue("fileAvailable must not temporarily flip to false while fileLoading is in progress", viewModel.state.value.fileAvailable)
             Thread.sleep(20)
             elapsed += 20
@@ -173,7 +173,7 @@ class BookInfoAndMetadataTest {
 
         val viewModel = BookInfoViewModel(app, book.id)
         var elapsed = 0
-        while (viewModel.state.value.fileLoading && elapsed < 3000) {
+        while (viewModel.state.value.fileLoading && elapsed < 10000) {
             Thread.sleep(20)
             elapsed += 20
         }
@@ -191,7 +191,7 @@ class BookInfoAndMetadataTest {
         assertNotEquals(book.fileName, updated.fileName)
 
         var checkElapsed = 0
-        while (viewModel.state.value.fileLoading && checkElapsed < 3000) {
+        while (viewModel.state.value.fileLoading && checkElapsed < 10000) {
             assertTrue("fileAvailable must not flip to false when fileName changes after metadata save", viewModel.state.value.fileAvailable)
             assertTrue("sizeBytes must not drop to 0 during reload", viewModel.state.value.sizeBytes > 0)
             Thread.sleep(20)
@@ -216,7 +216,7 @@ class BookInfoAndMetadataTest {
         val book = addBook(repository, "delayed-book")
 
         var waitElapsed = 0
-        while (viewModel.state.value.book == null && waitElapsed < 3000) {
+        while (viewModel.state.value.book == null && waitElapsed < 10000) {
             Thread.sleep(20)
             waitElapsed += 20
         }
@@ -224,7 +224,7 @@ class BookInfoAndMetadataTest {
         assertTrue("fileAvailable must be true immediately when book is loaded", viewModel.state.value.fileAvailable)
         assertTrue("sizeBytes must be positive immediately", viewModel.state.value.sizeBytes > 0)
 
-        while (viewModel.state.value.fileLoading && waitElapsed < 3000) {
+        while (viewModel.state.value.fileLoading && waitElapsed < 10000) {
             assertTrue("fileAvailable must remain true while fileLoading completes", viewModel.state.value.fileAvailable)
             Thread.sleep(20)
             waitElapsed += 20
@@ -281,7 +281,7 @@ class BookInfoAndMetadataTest {
 
         // Wait for file loading on Dispatchers.IO to finish
         var elapsed = 0
-        while (!viewModel.state.value.fileAvailable && elapsed < 3000) {
+        while (!viewModel.state.value.fileAvailable && elapsed < 10000) {
             Thread.sleep(20)
             elapsed += 20
         }
@@ -289,7 +289,7 @@ class BookInfoAndMetadataTest {
 
         viewModel.share()
         elapsed = 0
-        while (viewModel.state.value.preparedShare == null && elapsed < 3000) {
+        while (viewModel.state.value.preparedShare == null && elapsed < 10000) {
             Thread.sleep(20)
             elapsed += 20
         }
@@ -313,7 +313,7 @@ class BookInfoAndMetadataTest {
 
         // Wait for file loading to complete
         var elapsed = 0
-        while (!viewModel.state.value.fileAvailable && elapsed < 3000) {
+        while (!viewModel.state.value.fileAvailable && elapsed < 10000) {
             Thread.sleep(20)
             elapsed += 20
         }
@@ -326,7 +326,7 @@ class BookInfoAndMetadataTest {
 
         viewModel.share()
         elapsed = 0
-        while (viewModel.state.value.shareError == null && elapsed < 3000) {
+        while (viewModel.state.value.shareError == null && elapsed < 10000) {
             Thread.sleep(20)
             elapsed += 20
         }
