@@ -8,8 +8,8 @@ Final result: passed for the reviewed native Compose Preview states. Physical-de
 
 The latest two user images supersede the earlier navigation variants:
 
-- `/var/folders/f6/p25h1v7s0j1g0w7qr6mgkrhw0000gn/T/codex-clipboard-ee2c945d-88da-4178-82df-df7f0302b9b5.png` — light, 1044 × 698 pixels.
-- `/var/folders/f6/p25h1v7s0j1g0w7qr6mgkrhw0000gn/T/codex-clipboard-a832042e-117b-4aff-beba-eb519c870e8e.png` — dark, 1122 × 382 pixels.
+- Light reference: 1044 × 698 pixels.
+- Dark reference: 1122 × 382 pixels.
 
 Implemented a tinted floating capsule with icons above uppercase labels and a full selected-tab pill. A separate 60 dp add button has 20 dp corners and a 12 dp gap from navigation. The navigation surface is 72 dp tall at default text size, grows with larger text, and shares a centered row capped at 400 dp with the add button. Horizontal outer padding is 20 dp. Theme colors provide sage/mint in light mode and a near-black surface with green accents in OLED mode.
 
@@ -74,9 +74,9 @@ Validation: JBR `./gradlew test :app:assembleDebug` passed (940 tests, 0 failure
 
 Scope: the user selected a new shape for the existing native Android progress control. This pass covers segment and focus-outline shape, spacing, and cursor containment; it retains the existing book-coordinate map, gestures, palette, typography, and compact reader panel. No web prototype or raster assets are needed for this native control.
 
-Source visual truth: `/Users/frog/Downloads/Screenshot_20261005-231044.png` (1080 × 171 px).
-Implementation screenshot: `/Users/frog/AndroidStudioProjects/FrogReader/.artifacts/reader-progress-segments/native/com/example/frogreader/ui/reader/ReaderProgressPreviewsKt/rectangular_reference_0.png` (1032 × 168 px).
-Full-view comparison evidence: `/Users/frog/AndroidStudioProjects/FrogReader/.artifacts/reader-progress-segments/rectangular-shape-comparison.png`.
+Reviewed reference: focused reader progress crop, 1080 × 171 px.
+Native implementation comparison: `ReaderProgressPreviews.kt`, 1032 × 168 px.
+The reference and comparison captures were local review evidence and are not distributed with the source.
 Viewport/state: native Compose, 393 × 64 dp, OLED, page 56/147, four pages remaining, selected chapter, 17 segments. Source density is inferred from 1080 px / 393 dp; renderer density is approximately 2.625. The implementation is scaled uniformly to 1080 × 176 px for comparison. CSS/browser sizing is inapplicable. The supplied source is already a focused component crop; its corners, outline and cursor remain readable at normalized pixel scale, so a second detail crop was unnecessary.
 
 Findings: no actionable P0/P1/P2 shape differences in the requested scope.

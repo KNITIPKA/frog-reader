@@ -1,5 +1,169 @@
 # Changelog
 
+## BETA 1 — 2026-10-11
+
+First public beta, covering the changes since the `alpha-3` tag. The Android
+release label is **BETA 1**, version code **4**, with Android 8.0+ support retained.
+
+### Profile and personal reading records
+
+- Added a profile dashboard with editable name, avatar selection/cropping,
+  last-read time, weekly reading activity, streaks and an adjustable daily goal.
+  Refined its landscape, narrow-screen and large-text layouts and goal controls.
+- Added **Reading Queue**, an independently ordered list with titles, authors,
+  notes, optional private book attachments, drag priority, swipe/menu actions
+  and deletion with Undo. Starting an attached book imports or reuses its
+  library record, transfers its note and opens the reader.
+- Added **Reading Log**, with one record per reading and support for FrogReader,
+  paper and other-app sources. Entries include In progress, Finished or
+  Abandoned status, exact/partial dates, retained covers, half-star ratings,
+  reviews and recorded reading time.
+- Added log filters, start/finish sort choices, compact cards, full-screen
+  add/edit/details views, swipe deletion and Undo. Same-date manual ordering
+  preserves independent start and finish chronology, including filtered lists.
+- Added calendar, month/year and year-only date choices with preserved precision,
+  direct month/year navigation and swipe-month changes. Dates are capped at
+  today; year choices run from the current year to 1900. Choosing a finish date
+  completes an active reading.
+- Added camera and gallery cover selection for manual entries. FrogReader
+  entries retain their linked title, author, cover and actual file format.
+- Added live progress percentages for active FrogReader readings and a frozen
+  stopping percentage for abandoned readings, including after library deletion.
+  Delayed position writes cannot replace abandoned snapshots.
+- Added **Continue reading / Start a new reading** for abandoned books and
+  **Just browse / Start a new reading** for finished books. Rereads preserve
+  previous dates, time, review and rating; browsing does not alter history.
+- Made completion persist on Back, Back to library and Save and exit, even
+  without a rating or review. Time on completion/review screens is excluded.
+- Synchronized active log/library status, dates and reviews without overwriting
+  older readings. Deleting the latest reading resets its associated progress;
+  Undo restores history without replacing a newer reading or annotation edits.
+  Guarded against stale reader writes reviving deleted reading state.
+- Added a centralized **Quotes & Bookmarks** manager with search, quote sorting,
+  note editing, copying/sharing, delete/Undo and navigation to saved passages.
+- Marked profile-wide search and the separate **Statistics** and **Achievements**
+  destinations as disabled **Coming soon** placeholders. The profile's reading
+  activity and daily goal remain available.
+
+### Reader controls, page turns and progress
+
+- Added **Floating** and **Classic** control styles, with responsive settings
+  previews and shared application-level selection.
+- Added distinct **Stack**, **Page curl** and **None** renderers alongside Slide.
+  Stack moves a rounded sheet over adjacent content; None switches pages directly.
+  Updated the animation picker and its narrow/large-text layout.
+- Added a finger-controlled paper curl with two-dimensional grip geometry,
+  perspective, reverse-face shading and shadows, mirrored for RTL books.
+  Cancellation, edge taps, volume keys, accessibility actions and selection
+  auto-advance share page ownership and navigation.
+- Stabilized curl settling, contact-limit geometry, text-height grabs and page
+  footers. New gestures can interrupt settling so rapid consecutive turns do
+  not discard input or let stale animations turn another page.
+- Added segmented whole-book progress with an expanded active chapter, live
+  scrubbing, animated chapter captions and haptic feedback. Dense contents use
+  a readable linear track with sparse chapter markers; seeking geometry and
+  animation work are cached/shared.
+- Improved active chapter labels for multiline/nested titles and index-only
+  subchapter headings. Chapter/book page captions follow the track edges and
+  stay current during seeking.
+- Added **Show page counter** and **Pages left in chapter** controls. Each page's
+  footer moves with that page during animated turns.
+- Fixed typography and layout settings leaking between books. First opening
+  pins reader defaults; saved per-book choices survive delayed bookkeeping,
+  reopening, metadata edits and backups.
+- Bundled IBM Plex Sans regular/italic for the **Sans** choice alongside Literata,
+  keeping existing font identifiers and custom-font support.
+
+### Selection and saved highlights
+
+- Added independently stored quote colors and nested/overlapping highlights.
+  Inner passages retain their color; quote actions use anchored ranges instead
+  of matching identical text elsewhere. Colors survive persistence and backups.
+- Refined highlight paths, the magnifier, hit testing and page-edge auto-advance.
+  Selection geometry is limited to the visible page/owned page pair during
+  turns so adjacent-page text cannot capture the current gesture.
+- Improved contrast of saved highlights and quote controls in Midnight.
+
+### Library, appearance and first launch
+
+- Unified Book Info and Edit into one stable screen with inline metadata,
+  cover actions, half-star rating/review cards and expandable edition details.
+  Preserved drafts, save retries, discard behavior and the distinction between
+  embedded book metadata and personal reviews.
+- Added the continue-reading library hero, reader opening/closing motion and
+  route-aware Back transitions, including predictive Back.
+- Opening a shelf member now promotes both that book and its shelf. Ordinary
+  page turns write progress without repeatedly rewriting library metadata.
+- Unified bottom docks and Add buttons, including reversible dock/FAB motion,
+  immediate reveal during editor dismissal and synchronized shadow/content.
+- Refined Light and Beige palettes across library, menus, profile, reader
+  settings and saved passages, preserving optional Material You colors.
+- Reworked theme settings with native previews and automatic appearance options:
+  choose Light or Beige while following system light mode, plus Midnight in dark mode.
+- Added a first-launch **Welcome** screen for control style, startup destination
+  and appearance. Release builds show it for new installations; existing users
+  retain their choices and do not repeat onboarding on an update.
+- Updated fresh-install defaults to Literata 18 sp, 1.5 line spacing, wide
+  margins, Pages/Stack, publisher formatting and Floating controls. Existing
+  installs receive a migration preserving their previous defaults/settings.
+- Added bounded cover-cache warming and a prepared library handoff after Welcome.
+- Added shared themed in-app notifications with Undo, wrapping text, dismissal,
+  accessible timeouts and narrow/large-text layouts.
+- Fixed profile-name editing completion on keyboard dismissal and added Change
+  name to the profile menu. Refined avatar controls and optional camera hardware.
+- Removed unused launcher artwork and updated adaptive-icon resources.
+
+### Publisher rendering and performance
+
+- Removed the global **Center headings** override. EPUB/MOBI/KF8 keep authored
+  alignment; FB2 titles have semantic centered defaults; TXT remains literal
+  and Markdown uses logical-start defaults. Old settings/backups remain readable.
+- Preserved structural CSS selectors, bounded relative `:has`, reverse selectors,
+  inherited OpenType features, language-aware case transforms and typographic
+  whitespace. Hidden ranges retain their advance without visible paint.
+- Preserved empty authored boxes, border-only generated content, forced breaks,
+  poem indentation, supported horizontal rows and short inline text boxes.
+- Added bounded native two-dimensional MathML fractions, roots and scripts and
+  above-base ruby readings, including Latin word joins around inflection ruby.
+  Unsupported structures retain readable text; selection/search offsets remain
+  source-consistent.
+- Shared native inline geometry across paragraphs, headings, tables, side boxes,
+  pagination and scrolling. Indivisible objects wrap together; oversized formulas
+  scale to the text column with adjacent punctuation preserved.
+- Removed the destructive long-table row fallback, retaining all audited dialogue
+  rows. Added supported narrow responsive table stacking with source coordinates
+  and authored borders/widths intact. Tables with unspecified borders retain the
+  reader's default grid; explicit borderless tables remain borderless.
+- Preserved authored image width/height maxima, viewport-relative bounds and
+  supported dark-mode treatment for diagrams versus realistic illustrations.
+- Resolved embedded inline font ranges before both measurement and drawing.
+  Added supported viewport-relative centering for short text groups.
+- Bounded SVG geometry probing to 16 KiB with a file-aware cache, replaced repeated
+  publisher-box scans with an interval sweep, and shared measured table grids
+  across cached page fragments. Updated disposable layout/cache identities;
+  persistent book data and backup formats are unchanged.
+- Expanded regression coverage with synthetic fixtures and optional original
+  Standard Ebooks corpus tests. Native MathML/ruby, responsive CSS and other
+  publisher features remain bounded subsets, not full browser conformance.
+
+### Data compatibility, release and community
+
+- Extended atomic user-data persistence and backups for the profile, queue,
+  attachment snapshots, separate readings, half-stars and quote colors.
+  Kept defaulted stored fields, legacy serialized identifiers and backup format 2.
+- Updated Kotlin, Compose/Material 3, AndroidX and parser dependencies, Mockito
+  test-agent setup and native-library packaging; retained SDK levels 26/36/37.
+- Added GitHub Actions build/test verification and documented contributor,
+  rendering and theme contracts.
+- Changed FrogReader application code from MIT to **GPL-3.0-only** and added
+  in-app license access and third-party notices. Bundled external material keeps
+  its original licenses; earlier releases retain their historical licensing.
+- Refreshed the README for implemented beta features and removed old repository
+  screenshots pending replacement.
+- Published an optimized release APK with a readable Beta 1 name and SHA-256
+  checksum. Physical-device gesture, TalkBack and rendering checks remain
+  separate from JVM tests, builds and desktop Compose previews.
+
 ## ALPHA 3 — 2026-09-13
 
 ALPHA 3 records the changes delivered after the Alpha 2 baseline.

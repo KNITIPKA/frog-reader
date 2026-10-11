@@ -5,6 +5,8 @@ white content cards, dark ink, and forest green for actions. Reserve fresh mint 
 selection; do not tint every surface green. The implementation is in
 `app/src/main/java/com/example/frogreader/ui/theme/Theme.kt`.
 
+The separate fixed Beige palette follows [beige-theme.md](beige-theme.md).
+
 ## Palette and roles
 
 | Role | Light value | Use |
@@ -59,15 +61,22 @@ selection; do not tint every surface green. The implementation is in
    styling, cover art, and image-export backgrounds are content, not app chrome.
    Stepper buttons use a white `controlButton` face inside the neutral group,
    so active controls do not look disabled or merge into their container.
+   Both reader styles use the same floating `ReaderColors` palette for bars and
+   expanded settings. Opening or closing a drawer must not change that palette.
+   Classic panels have a soft 6 dp shadow falloff toward the page instead of
+   stacking a divider and platform elevation. Tonal elevation remains zero.
 8. Fixed Light neutrals must not drift toward yellow, cream, or olive. Avoid
    mixing warm canvas colors with green-grey controls: next to white cards, the
    combined cast looked dirty in the device screenshots. Neutral surfaces have
    almost equal RGB channels, with blue at least as high as red and green.
    Keep warmth for the separate Beige theme and optional tertiary accents.
+   Completed library books use the dedicated `completionFill` / `completionInk`
+   gold pair: a soft full-row background and readable gold percentages, also
+   on cover badges. This semantic accent remains gold with Material You.
 9. Theme-picker swatches come from `colorSchemeFor(theme)`. Material You remains
    opt-in and owns the complete system scheme. Derive its extra roles from that
-   scheme; never place fixed forest/sage colors in dynamic UI. Beige and Midnight
-   retain their fixed palettes.
+   scheme; never place fixed forest/sage colors in dynamic UI. Beige retains its
+   fixed palette; Light and Midnight can use Material You.
 
 ## Verification for future changes
 

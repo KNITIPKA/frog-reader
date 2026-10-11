@@ -6,11 +6,12 @@ not the WANT_TO_READ status of library books.
 
 ## Interface
 
-- The main-screen FAB stays mounted during navigation and expands into the
-  bottom-right Add a book action. Opening the editor fades/scales it out in
-  120 ms; closing reveals it as the sheet clears its position (180 ms), without
-  waiting for the sheet spring to finish. Card controls restore their normal
-  appearance when closing starts.
+- The shared dock FAB expands into the bottom-right Add a book action. Its
+  opacity animates for 140 ms when appearing and 100 ms when hiding; scale uses
+  180 ms and 120 ms respectively. Closing an editor starts its reveal immediately
+  alongside the panel's exit. Shadow and content share that reveal layer, with
+  no later shadow step. Appearance recovers at dismissal; interaction resumes
+  when the modal leaves. A completely faded-out FAB has no clickable node.
 - The bottom-right Add a book FAB and tapping a card open a compact bottom
   sheet. New entries focus the title as soon as the form enters composition,
   so the keyboard starts opening alongside the sheet. Editing an existing entry
@@ -22,9 +23,10 @@ not the WANT_TO_READ status of library books.
   anchors. There is no fade or extra entrance translation: the expanded anchor
   and live IME padding own vertical placement, including the footer and note.
   The Material sheet starts at its expanded anchor, so a separate show spring does
-  not chase the changing IME height. Existing entries keep Material's normal
-  entrance; an already-open or missing software keyboard reveals a new entry
-  without waiting indefinitely. Subsequent focus changes do not hide it. Fields
+  not chase the changing IME height. Existing entries rise in 240 ms; modal exits
+  take 180 ms, without an invisible spring tail. An already-open or missing
+  software keyboard reveals a new entry without waiting indefinitely.
+  Subsequent focus changes do not hide it. Fields
   scroll within the available height; the header and both action buttons stay
   outside that scroll area, above the actual keyboard insets. Add a file is a
   compact outlined button alongside Save/Add; narrow widths and large text stack

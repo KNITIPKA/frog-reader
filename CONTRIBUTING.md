@@ -6,8 +6,8 @@ Thank you for your interest in contributing to **FrogReader**! We welcome contri
 
 ## 🛠️ Development Setup & Environment
 
-1. **Android Studio**: Android Studio Ladybug (2024.2.1+) or newer.
-2. **JDK**: JDK 11, 17, or 21 (Android Studio bundled JBR recommended).
+1. **Android Studio**: use a version compatible with Android Gradle Plugin 9.4.1. The checked-in Gradle wrapper and version catalog define the build toolchain.
+2. **JDK**: Gradle uses the checked-in JDK 21 daemon criteria. Android Studio's bundled JBR is recommended for CLI commands; Gradle resolves the requested daemon toolchain.
    - On macOS CLI, set `JAVA_HOME` to the Android Studio JBR:
      ```bash
      export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
@@ -16,6 +16,7 @@ Thank you for your interest in contributing to **FrogReader**! We welcome contri
    - `minSdk` = 26 (Android 8.0 Oreo)
    - `targetSdk` = 36
    - `compileSdk` = 37
+   - Install Android SDK Platform 37 and Build Tools 37.0.0.
 
 ---
 
@@ -49,7 +50,7 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 ./gradlew test
 
 # Run a specific unit test class
-./gradlew testDebugUnitTest --tests "com.example.frogreader.parser.EpubParserTest"
+./gradlew :app:testDebugUnitTest --tests "com.example.frogreader.parser.EpubParserTest"
 ```
 
 ---
@@ -69,4 +70,17 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
    - `docs(arch): update persistence documentation`
 5. **Push and open a Pull Request** against the `main` branch.
 
-Thank you for helping make FrogReader better! 💚
+## Release checks and licensing
+
+For BETA 1, also verify `./gradlew :app:assembleRelease :app:lintDebug :app:lintRelease`.
+Release builds run R8 optimization and are unsigned unless signing is explicitly
+configured. See [the release guide](docs/releasing.md).
+
+The project uses [GPL-3.0-only](LICENSE). Contributions must be compatible with
+that license. Preserve the licenses and attribution of third-party assets; see
+[Third-party notices](THIRD_PARTY_NOTICES.md). Do not add private books, keys,
+local settings, generated APKs, build reports, or screenshots of personal data.
+Optional corpus diagnostics must skip gracefully when their local input books
+are absent. Public regression tests should use small, redistributable fixtures.
+To run local corpus checks, set `FROGREADER_TEST_BOOK_DIR` or pass
+`-PtestBookDir=/path/to/books`; these files remain outside Git.

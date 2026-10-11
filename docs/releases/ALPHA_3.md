@@ -1,5 +1,7 @@
 # FrogReader Alpha 3
 
+> Historical ALPHA 3 release notes. For the current milestone, see [BETA 1](BETA_1.md). The global Center headings override described below was removed in BETA 1.
+
 Alpha 3 is a major update expanding FrogReader with native Plain Text and Markdown reading, in-file metadata editing for EPUB, FB2, and MOBI/KF8, publisher layout and heading typography refinements, hierarchical table of contents, and remembered translation flows.
 
 ## Highlights

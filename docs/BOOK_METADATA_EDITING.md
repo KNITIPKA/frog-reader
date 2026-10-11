@@ -1,14 +1,14 @@
 # Book metadata editing
 
-The library’s **Info** action, available on long press in the grid or inside a shelf and in the continue-reading menu, opens a full book information screen. Its header shows the cover beside the complete title and author, followed by publication metadata, the full description, and technical details. The upper-right **Edit** and **Share** actions open the editor and Android’s file sharing chooser. Info observes the repository, so returning from a saved edit shows the current metadata and cover.
+The library’s **Info** action, available on long press in the grid or inside a shelf and in the continue-reading menu, opens one book-details screen with viewing and editing modes. Its identity card shows the cover beside the complete title and author once. Description, personal rating/review and edition details use shared cards; additional edition fields and technical details expand on demand. **Edit** activates the existing text in place. **Share** is in the top-bar menu and opens Android’s file sharing chooser. Info observes the repository, so a saved edit immediately shows the current metadata and cover.
 
-The **Edit** screen uses the same header. Tapping its cover opens change/remove/restore actions; the title and author alongside it follow the draft. Long titles wrap, fields grow with their contents, and contextual entry hints appear on focus. The save area remains accessible while scrolling or using the keyboard. Drafts survive configuration changes, Back confirms discarding unsaved edits, and failed saves retain the draft with a readable error card and separately accessible technical details. Export and an explanation of where edits are saved are available in the top-bar menu.
+Viewing and editing share field order, typography and surfaces; editing adds underlines and a persistent **Save changes** area above the keyboard. Tapping the cover in editing mode opens change/remove/restore actions. Long titles wrap, fields grow with their contents, and contextual hints appear on focus. The same mode edits the personal rating/review, with direct star buttons, repeat-tap half stars, dragging, a clear action and accessibility half-star actions. Drafts survive configuration changes. Back and Cancel return to viewing mode, asking before discarding unsaved edits; a successful save returns to viewing mode. Failed saves retain the draft and readable error details. Export and an explanation of where edits are saved remain in the editing menu. The old metadata destination remains compatible with restored navigation but renders this same screen.
 
 Editable fields: title, multiple authors, description, genres, series and number, publisher, publication year, ISBN, translators, language, and cover (replace/remove/restore). Names and genres use one entry per line, so commas within a name are not treated as separators.
 
 ## Files and search
 
-FrogReader imports private copies. **Save to book** rewrites that copy’s actual file; it does not overwrite the external file originally selected during import. **Export a copy** uses Android’s document picker to write the current book bytes to a chosen destination. AZW3 exports retain the `.azw3` extension; zipped FB2 imports are already normalized to plain `.fb2`.
+FrogReader imports private copies. **Save changes** rewrites that copy’s actual file when metadata or cover changes; it does not overwrite the external file originally selected during import. Personal ratings/reviews remain in the user-data store. Saving only those fields leaves the ebook file unchanged. If metadata saves but the personal review fails, retry keeps the saved metadata generation and writes only the remaining personal changes. **Export a copy** uses Android’s document picker to write the current book bytes to a chosen destination. AZW3 exports retain the `.azw3` extension; zipped FB2 imports are already normalized to plain `.fb2`.
 
 **Share** prepares an independent copy of the saved book in `cache/shared-books/`, with a readable title-based filename and the native extension/MIME type. It sends that file through `ACTION_SEND` with `EXTRA_STREAM`, `ClipData`, and a temporary read-only URI grant, following [Android’s file sharing flow](https://developer.android.com/develop/ui/compose/sharing/send). The non-exported `BookFileProvider` exposes only this cache subdirectory. Quotes, reading history and other application records are not included. A subsequent edit does not change an already prepared attachment. Snapshots older than seven days are reclaimed on the next share; opening the chooser does not claim a completed delivery.
 
@@ -48,6 +48,12 @@ Owner phone check:
 5. Check keyboard, scrolling, Back/discard, and the app’s light/dark themes.
 6. Long-press a book in the grid and inside a shelf, open **Info**, edit it, and return to confirm the refreshed title/description/cover. Check the same Info action in the continue-reading menu.
 7. Tap the cover in Edit to change/remove/restore it. Check long titles/authors and missing covers.
-8. From Info, tap **Share**, choose Telegram or another receiving app, and verify the attachment has the current title, extension and saved contents. Cancelling the chooser must leave the book untouched.
+8. From Info, open the top-bar menu and tap **Share**, choose a receiving app, and verify the attachment has the current title, extension and saved contents. Cancelling the chooser must leave the book untouched.
 
 No phone installation or device-visible validation is implied by JVM tests or an APK build.
+
+The redesign and 2026-10-09 refinements passed `./gradlew test :app:assembleDebug :app:assembleRelease`
+(1,328 tests passed, 5 skipped), including R8 and native preview inspection.
+`BookInfoAndMetadataTest` also covers combined editor restoration/discard,
+review-only writes, refreshed reviews on re-entry and retry after a partial
+metadata/review save. The preview fixtures are in `ui/library/BookDetailsPreviews.kt`.
