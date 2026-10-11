@@ -16,7 +16,7 @@ Thank you for your interest in contributing to **FrogReader**! We welcome contri
    - `minSdk` = 26 (Android 8.0 Oreo)
    - `targetSdk` = 36
    - `compileSdk` = 37
-   - Install Android SDK Platform 37 and Build Tools 37.0.0.
+   - Install Android SDK Platform 37 (`platforms;android-37.0`) and Build Tools 37.0.0.
 
 ---
 
