@@ -11,6 +11,14 @@ Built with **Kotlin, Jetpack Compose and Material 3**, FrogReader combines a car
 [![CI](https://img.shields.io/github/actions/workflow/status/KNITIPKA/frog-reader/ci.yml?branch=main&label=CI&logo=github&style=for-the-badge)](https://github.com/KNITIPKA/frog-reader/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-GPL--3.0--only-blue?style=for-the-badge)](LICENSE)
 
+<p align="center">
+  <img src="assets/banners/frogreader-light.webp" alt="FrogReader — Light & Beige Theme Showcase" width="100%" />
+</p>
+
+<p align="center">
+  <img src="assets/banners/frogreader-dark.webp" alt="FrogReader — Midnight & Dark Theme Showcase" width="100%" />
+</p>
+
 ### [Download FrogReader BETA 1](https://github.com/KNITIPKA/frog-reader/releases/tag/beta-1)
 
 [Release notes](docs/releases/BETA_1.md) · [Changelog](CHANGELOG.md) · [Report a bug](https://github.com/KNITIPKA/frog-reader/issues)
