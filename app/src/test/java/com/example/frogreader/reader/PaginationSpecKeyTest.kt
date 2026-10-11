@@ -2,6 +2,7 @@ package com.example.frogreader.ui.reader
 
 import androidx.compose.ui.unit.Density
 import com.example.frogreader.data.ReaderSettings
+import com.example.frogreader.data.PageTurnAnimation
 import com.example.frogreader.data.model.BookFont
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertEquals
@@ -12,12 +13,31 @@ import org.junit.rules.TemporaryFolder
 class PaginationSpecKeyTest {
 
     @Test
-    fun `app heading preference invalidates cached pagination`() {
-        fun key(centered: Boolean) = PaginationSpec(
-            contentWidthPx = 800, contentHeightPx = 1_200,
-            density = Density(2f), settings = ReaderSettings(centerHeadings = centered), fontSize = 18f,
-        ).key
-        assertNotEquals(key(false), key(true))
+    fun `counter visibility and mode preserve measured pages`() {
+        val keys = listOf(false, true).flatMap { visible ->
+            listOf(false, true).map { chapterCounter ->
+                PaginationSpec(
+                    contentWidthPx = 800, contentHeightPx = 1_200,
+                    density = Density(2f), fontSize = 18f,
+                    settings = ReaderSettings(showPageCounter = visible, showChapterPagesLeft = chapterCounter),
+                ).key
+            }
+        }
+        assertEquals(1, keys.distinct().size)
+    }
+
+    @Test
+    fun `switching page turn animation preserves measured pages`() {
+        val keys = PageTurnAnimation.entries.map { animation ->
+            PaginationSpec(
+                contentWidthPx = 800,
+                contentHeightPx = 1_200,
+                density = Density(2f),
+                settings = ReaderSettings(pageTurnAnimation = animation),
+                fontSize = 18f,
+            ).key
+        }
+        assertEquals(1, keys.distinct().size)
     }
 
     @get:Rule

@@ -21,21 +21,25 @@ import java.util.IdentityHashMap
  *
  * Supported: tag/.class/#id/attribute selectors with descendant, child (`>`)
  * and sibling (`+`, `~`) combinators; the structural pseudo-classes
- * `:first-child`/`:last-child`/`:only-child`/`:first-of-type`; the
+ * forward/reverse `:nth-*`, child/type edges and bounded relative `:has()`; the
  * `::first-letter` pseudo-element (drop caps); standard (a,b,c) specificity
  * with `!important` and source-order cascade; `style=""` attributes;
  * inheritance of font and text properties; and the properties a paginated
  * book reader can honor (font-style/weight/size, text-align, text-indent,
- * margins, display, vertical-align, text-decoration, list-style-type,
- * page-break-before, float/width of images).
+ * font variants, text-transform, visibility, margins, display, vertical-align,
+ * text-decoration, list-style-type, page boundaries and image dimension caps).
  *
  * Author foreground/background colors are retained and later gated by the
- * publisher-formatting switch; positioning remains outside the native model.
+ * publisher-formatting switch; general positioning remains outside the native
+ * model while far-offscreen accessibility copies stay visually hidden.
  * A selector using an
  * unsupported pseudo-class drops only itself, not its comma-group siblings —
  * stricter than the spec, kinder to books.
  */
-class CssResolver(sheets: List<Sheet>) {
+class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
+
+    /** Optional known CSS viewport. No parse-time guess is made for device size. */
+    class Viewport(val widthPx: Float, val heightPx: Float? = null, val dark: Boolean? = null)
 
     /** One stylesheet text plus the directory its relative urls resolve from. */
     class Sheet(val text: String, val baseDir: String = "")
@@ -52,7 +56,7 @@ class CssResolver(sheets: List<Sheet>) {
     // ------------------------------------------------------------- model
 
     private enum class MarginSide { TOP, RIGHT, BOTTOM, LEFT, INLINE_START, INLINE_END }
-    private enum class FontPart { STYLE, WEIGHT, SIZE, LINE_HEIGHT, FAMILY }
+    private enum class FontPart { STYLE, WEIGHT, SIZE, LINE_HEIGHT, FAMILY, VARIANT }
     private enum class BorderPart { WIDTH, STYLE, COLOR }
 
     private class Declaration(
@@ -68,14 +72,15 @@ class CssResolver(sheets: List<Sheet>) {
         val backgroundShorthand: Boolean = false,
     )
 
-    private class MutableBorder(colorArgb: Int) {
+    private class MutableBorder(colorArgb: Int, usesCurrentColor: Boolean = false) {
         var widthEm: Float = MEDIUM_BORDER_EM
         var colorArgb: Int = colorArgb
         var style: PublisherBorderStyle = PublisherBorderStyle.NONE
+        var usesCurrentColor: Boolean = usesCurrentColor
 
         fun toPublisherSide(): PublisherBorderSide? =
             takeIf { widthEm > 0f && style != PublisherBorderStyle.NONE }
-                ?.let { PublisherBorderSide(widthEm, colorArgb, style) }
+                ?.let { PublisherBorderSide(widthEm, colorArgb, style, usesCurrentColor) }
     }
 
     /** One parsed declaration block for one selector. */
@@ -91,10 +96,24 @@ class CssResolver(sheets: List<Sheet>) {
 
     private enum class AttrOp { EXISTS, EQUALS, INCLUDES, DASH, PREFIX, SUFFIX, SUBSTRING }
 
-    private class AttrSelector(val name: String, val op: AttrOp, val value: String?) {
+    private class AttrSelector(
+        val name: String,
+        val op: AttrOp,
+        val value: String?,
+        val namespaceUri: String? = null,
+    ) {
         fun matches(element: Element): Boolean {
-            if (!element.hasAttr(name)) return false
-            val actual = element.attr(name)
+            val actual = if (namespaceUri == null) {
+                if (!element.hasAttr(name)) return false
+                element.attr(name)
+            } else {
+                val localName = name.substringAfter(':')
+                element.attributes().firstOrNull { attribute ->
+                    val key = attribute.key
+                    key.contains(':') && key.substringAfter(':') == localName &&
+                        attributeNamespace(element, key.substringBefore(':')) == namespaceUri
+                }?.value ?: return false
+            }
             val expected = value ?: return true
             return when (op) {
                 AttrOp.EXISTS -> true
@@ -106,6 +125,17 @@ class CssResolver(sheets: List<Sheet>) {
                 AttrOp.SUFFIX -> expected.isNotEmpty() && actual.endsWith(expected)
                 AttrOp.SUBSTRING -> expected.isNotEmpty() && actual.contains(expected)
             }
+        }
+
+        private fun attributeNamespace(element: Element, prefix: String): String? {
+            if (prefix == "xml") return "http://www.w3.org/XML/1998/namespace"
+            var owner: Element? = element
+            while (owner != null) {
+                val declaration = owner.attr("xmlns:$prefix")
+                if (declaration.isNotEmpty()) return declaration
+                owner = owner.parent()
+            }
+            return null
         }
     }
 
@@ -133,12 +163,25 @@ class CssResolver(sheets: List<Sheet>) {
         }
 
         /** `:nth-child(an+b)` / `:nth-of-type(an+b)`, 1-based sibling index. */
-        class Nth(private val a: Int, private val b: Int, private val ofType: Boolean) : PseudoClass {
+        class Nth(
+            private val a: Int,
+            private val b: Int,
+            private val ofType: Boolean,
+            private val fromEnd: Boolean = false,
+        ) : PseudoClass {
             override fun matches(element: Element, context: SelectorMatchContext): Boolean {
-                val index = context.siblingIndex(element, ofType) ?: return false
-                val diff = index - b
-                return if (a == 0) diff == 0 else diff % a == 0 && diff / a >= 0
+                val index = context.siblingIndex(element, ofType, fromEnd) ?: return false
+                // Valid CSS integers can span Int's full range; subtraction
+                // and division must not overflow while testing an+b.
+                val diff = index.toLong() - b
+                return if (a == 0) diff == 0L else diff % a == 0L && diff / a >= 0L
             }
+        }
+
+        /** Relative selector lists, anchored at the element owning `:has()`. */
+        class Has(val relatives: List<List<Compound>>) : PseudoClass {
+            override fun matches(element: Element, context: SelectorMatchContext) =
+                context.has(this, element)
         }
 
         /** `:not(simple-compound)` — no combinators or nested functions. */
@@ -178,11 +221,17 @@ class CssResolver(sheets: List<Sheet>) {
      * member of one large sibling list is quadratic even with a rule cap.
      */
     private class SelectorMatchContext(maxOperations: Int) {
-        private data class SiblingPosition(val child: Int, val ofType: Int)
+        private data class SiblingPosition(
+            val child: Int,
+            val ofType: Int,
+            val total: Int,
+            val totalOfType: Int,
+        )
 
         private var remaining = maxOperations
         private val positionsByParent =
             IdentityHashMap<Element, IdentityHashMap<Element, SiblingPosition>>()
+        private val hasResults = IdentityHashMap<PseudoClass.Has, IdentityHashMap<Element, Boolean>>()
 
         val exhausted: Boolean get() = remaining <= 0
 
@@ -196,7 +245,12 @@ class CssResolver(sheets: List<Sheet>) {
             return true
         }
 
-        fun siblingIndex(element: Element, ofType: Boolean): Int? {
+        fun clearCaches() {
+            positionsByParent.clear()
+            hasResults.clear()
+        }
+
+        fun siblingIndex(element: Element, ofType: Boolean, fromEnd: Boolean = false): Int? {
             val parent = element.parent() ?: return 1
             var positions = positionsByParent[parent]
             if (positions == null) {
@@ -204,16 +258,85 @@ class CssResolver(sheets: List<Sheet>) {
                 if (!consume(children.size)) return null
                 positions = IdentityHashMap(children.size)
                 val typeCounts = HashMap<String, Int>()
+                children.forEach { child ->
+                    val tag = child.normalName()
+                    typeCounts[tag] = (typeCounts[tag] ?: 0) + 1
+                }
+                val typeIndices = HashMap<String, Int>()
                 children.forEachIndexed { index, child ->
                     val tag = child.normalName()
-                    val typeIndex = (typeCounts[tag] ?: 0) + 1
-                    typeCounts[tag] = typeIndex
-                    positions[child] = SiblingPosition(index + 1, typeIndex)
+                    val typeIndex = (typeIndices[tag] ?: 0) + 1
+                    typeIndices[tag] = typeIndex
+                    positions[child] = SiblingPosition(
+                        index + 1, typeIndex, children.size, typeCounts.getValue(tag),
+                    )
                 }
                 positionsByParent[parent] = positions
             }
             val position = positions[element] ?: return null
-            return if (ofType) position.ofType else position.child
+            val index = if (ofType) position.ofType else position.child
+            val total = if (ofType) position.totalOfType else position.total
+            return if (fromEnd) total - index + 1 else index
+        }
+
+        fun has(pseudo: PseudoClass.Has, element: Element): Boolean {
+            val results = hasResults.getOrPut(pseudo) { IdentityHashMap() }
+            results[element]?.let { return it }
+            val result = pseudo.relatives.any { chain ->
+                relativeMatches(chain, 0, element, IdentityHashMap())
+            }
+            results[element] = result
+            return result
+        }
+
+        /** Walk forward from the anchor without materializing its subtree. */
+        private fun relativeMatches(
+            chain: List<Compound>,
+            index: Int,
+            anchor: Element,
+            memo: IdentityHashMap<Element, ByteArray>,
+        ): Boolean {
+            if (!consume()) return false
+            val states = memo.getOrPut(anchor) { ByteArray(chain.size) }
+            when (states[index].toInt()) {
+                1 -> return false
+                2 -> return true
+            }
+            val compound = chain[index]
+            fun candidateMatches(candidate: Element): Boolean =
+                compound.simple.matches(candidate, this) &&
+                    (index == chain.lastIndex || relativeMatches(chain, index + 1, candidate, memo))
+
+            var candidate = when (compound.combinator) {
+                Combinator.CHILD, Combinator.DESCENDANT -> anchor.firstElementChild()
+                Combinator.NEXT_SIBLING, Combinator.SUBSEQUENT_SIBLING ->
+                    anchor.nextElementSibling()
+            }
+            var matched = false
+            while (candidate != null && consume()) {
+                if (candidateMatches(candidate)) {
+                    matched = true
+                    break
+                }
+                candidate = when (compound.combinator) {
+                    Combinator.NEXT_SIBLING -> null
+                    Combinator.CHILD, Combinator.SUBSEQUENT_SIBLING ->
+                        candidate.nextElementSibling()
+                    Combinator.DESCENDANT -> {
+                        val child = candidate.firstElementChild()
+                        if (child != null) child else {
+                            var cursor: Element? = candidate
+                            while (cursor !== anchor && cursor?.nextElementSibling() == null) {
+                                if (!consume()) break
+                                cursor = cursor?.parent()
+                            }
+                            if (cursor === anchor || exhausted) null else cursor?.nextElementSibling()
+                        }
+                    }
+                }
+            }
+            states[index] = if (matched) 2 else 1
+            return matched
         }
     }
 
@@ -363,6 +486,35 @@ class CssResolver(sheets: List<Sheet>) {
         val borderSpecified: Boolean = false,
         /** Custom properties (`--x`) in scope, inherited like text styles. */
         val customProps: Map<String, String> = emptyMap(),
+        /** Inherited OpenType features assembled from CSS font variants. */
+        val fontFeatureSettings: String? = null,
+        internal val fontVariantCaps: String? = null,
+        internal val fontVariantNumeric: String? = null,
+        internal val explicitFontFeatures: String? = null,
+        /** Authored case conversion; source text is retained until mapping. */
+        val textTransform: String? = null,
+        /** Visibility retains layout; unlike display:none it can be overridden. */
+        val visibilityHidden: Boolean = false,
+        val maxWidthFrac: Float? = null,
+        val maxWidthEm: Float? = null,
+        val maxHeightEm: Float? = null,
+        val maxHeightViewportFrac: Float? = null,
+        val minHeightEm: Float? = null,
+        val pageBreakAfter: Boolean = false,
+        /** Own flex layout axes; none of these properties inherit. */
+        val flexDirection: String = "row",
+        val flexWrap: String = "nowrap",
+        val justifyContent: String? = null,
+        val alignItems: String? = null,
+        /** Exact publisher dark-mode image filter supported by the native reader. */
+        val imageInvert: Boolean = false,
+        /** Unresolved currentColor uses the reader foreground at rendering time. */
+        val backgroundUsesCurrentColor: Boolean = false,
+        /** Exact viewport-relative minimum; offset is normalized reader-root em. */
+        val minHeightViewportFrac: Float? = null,
+        val minHeightOffsetEm: Float = 0f,
+        val centerContentVertically: Boolean = false,
+        val borderBox: Boolean = false,
     )
 
     private val mutableFontFaces = mutableListOf<FontFace>()
@@ -376,9 +528,17 @@ class CssResolver(sheets: List<Sheet>) {
     private var stylesheetDeclarationCount = 0
     private val selectorMatchContext = SelectorMatchContext(MAX_SELECTOR_MATCH_OPERATIONS)
     private val cache = HashMap<Element, Computed>()
+    private val parsingNamespaces = mutableMapOf<String, String>()
+    private val sourceSheets = sheets.toList()
+    private var darkImageResolver: CssResolver? = null
+    private val simpleMaxWidthBreakpoints = linkedSetOf<Float>()
+    private val responsiveResolvers = mutableMapOf<Float, CssResolver>()
 
     init {
-        for (sheet in sheets) parseSheetText(sheet.text, sheet.baseDir)
+        for (sheet in sheets) {
+            parsingNamespaces.clear()
+            parseSheetText(sheet.text, sheet.baseDir)
+        }
     }
 
     /** Every `@font-face` declared by the sheets (for embedded fonts). */
@@ -414,7 +574,35 @@ class CssResolver(sheets: List<Sheet>) {
      * another with a shared resolver; clearing between chapters keeps the
      * cache from pinning every DOM node of the whole book in memory.
      */
-    fun clearCache() = cache.clear()
+    fun clearCache() {
+        cache.clear()
+        // Structural selectors retain DOM elements too. Clear all chapter
+        // caches while preserving the resolver's whole-book work ceiling.
+        selectorMatchContext.clearCaches()
+        darkImageResolver?.clearCache()
+        responsiveResolvers.values.forEach(CssResolver::clearCache)
+    }
+
+    /** Bounded simple max-width queries retained for native responsive tables. */
+    val maxWidthBreakpointsCssPx: List<Float> get() = simpleMaxWidthBreakpoints.sortedDescending()
+
+    /** Reuse one lazily parsed variant per authored breakpoint across chapter tables. */
+    fun resolverAtMaxWidth(widthCssPx: Float): CssResolver? {
+        if (widthCssPx !in simpleMaxWidthBreakpoints) return null
+        return responsiveResolvers.getOrPut(widthCssPx) {
+            CssResolver(sourceSheets, Viewport(widthPx = widthCssPx))
+        }
+    }
+
+    /** Dark appearance is resolved lazily; the reading theme can change after parsing. */
+    fun darkImageStyle(element: Element): Computed {
+        if (viewport?.dark == true) return computed(element)
+        val resolver = darkImageResolver ?: CssResolver(
+            sourceSheets,
+            Viewport(widthPx = Float.NaN, dark = true),
+        ).also { darkImageResolver = it }
+        return resolver.computed(element)
+    }
 
     /**
      * Own CSS box decoration of [element] in renderer-ready physical axes.
@@ -426,6 +614,10 @@ class CssResolver(sheets: List<Sheet>) {
      */
     fun publisherBoxStyle(element: Element): PublisherBoxStyle? {
         val value = computed(element)
+        return publisherBoxStyle(element, value)
+    }
+
+    private fun publisherBoxStyle(element: Element, value: Computed): PublisherBoxStyle? {
         val rtl = when (value.direction) {
             "rtl" -> true
             "auto" -> firstStrongRtl(element.text()) ?: false
@@ -484,8 +676,20 @@ class CssResolver(sheets: List<Sheet>) {
             borderLeft = value.borderLeft,
             widthFrac = value.widthFrac,
             widthEm = value.widthEm,
+            shrinkToFit = value.display == "inline-block" &&
+                value.widthEm == null && value.widthFrac == null,
+            hangingIndentEm = value.textIndentEm?.takeIf { it < 0f }?.let { -it } ?: 0f,
             horizontalAlign = publisherHorizontalAlign(element, value),
             breakInsideAvoid = value.breakInsideAvoid,
+            pageBreakBefore = value.pageBreakBefore,
+            pageBreakAfter = value.pageBreakAfter,
+            minHeightEm = value.minHeightEm,
+            maxWidthEm = value.maxWidthEm,
+            maxWidthFrac = value.maxWidthFrac,
+            minHeightViewportFrac = value.minHeightViewportFrac,
+            minHeightOffsetEm = value.minHeightOffsetEm,
+            centerContentVertically = value.centerContentVertically,
+            borderBox = value.borderBox,
         )
         return style.takeUnless(PublisherBoxStyle::isDefault)
     }
@@ -507,16 +711,19 @@ class CssResolver(sheets: List<Sheet>) {
     ): PublisherBoxAlign {
         if (value.floatSide != null) return PublisherBoxAlign.START
         if (value.centeredBox) return PublisherBoxAlign.CENTER
-        if (element.normalName() !in INLINE_REPLACED_TAGS ||
+        val container = element.parent()
+            ?.takeIf { it.normalName() != "#root" }
+            ?.let(::computed)
+            ?: return PublisherBoxAlign.START
+        if (container.centerContentVertically && container.alignItems == "center") {
+            return PublisherBoxAlign.CENTER
+        }
+        if ((element.normalName() !in INLINE_REPLACED_TAGS && value.display != "inline-block") ||
             value.display in BLOCK_LEVEL_DISPLAY_VALUES
         ) {
             return PublisherBoxAlign.START
         }
 
-        val container = element.parent()
-            ?.takeIf { it.normalName() != "#root" }
-            ?.let(::computed)
-            ?: return PublisherBoxAlign.START
         val containerRtl = when (container.direction) {
             "rtl" -> true
             "auto" -> firstStrongRtl(element.parent()?.text().orEmpty()) ?: false
@@ -697,6 +904,12 @@ class CssResolver(sheets: List<Sheet>) {
         val scale: Float = 1f,
         val foregroundColorArgb: Int? = null,
         val backgroundColorArgb: Int? = null,
+        val fontFeatureSettings: String? = null,
+        val textTransform: String? = null,
+        val visibilityHidden: Boolean = false,
+        /** A generated block decoration, including empty border separators. */
+        val publisherBox: PublisherBoxStyle? = null,
+        val fontFamilyName: String? = null,
     )
 
     /**
@@ -709,46 +922,21 @@ class CssResolver(sheets: List<Sheet>) {
         if (pool.size == 0) return null
         val merged = cascade(pool, element, inline = null) ?: return null
         val text = merged["content"]?.value?.let { parseContentValue(it) } ?: return null
-        if (text.isBlank()) return null
-
-        var italic: Boolean? = null
-        var bold: Boolean? = null
-        var scale = 1f
         val inherited = computed(element)
-        var foreground = merged["color"]?.value?.let {
-            resolveForeground(it, inherited.foregroundColorArgb)
-        } ?: inherited.foregroundColorArgb
-        var background = merged["background-color"]?.value?.let {
-            resolveBackground(it, inherited.backgroundColorArgb, foreground)
-        }
-        for ((property, declaration) in merged) {
-            val value = declaration.value.trim().lowercase()
-            when (property) {
-                "font-style" -> when {
-                    value.startsWith("italic") || value.startsWith("oblique") -> italic = true
-                    value == "normal" -> italic = false
-                }
-
-                "font-weight" -> {
-                    val number = value.toIntOrNull()
-                    when {
-                        value == "bold" || value == "bolder" -> bold = true
-                        number != null -> bold = number >= 600
-                        value == "normal" || value == "lighter" -> bold = false
-                    }
-                }
-
-                "font-size" -> fontSizeFactor(value, 1f)?.let { scale = it }
-                "color", "background-color" -> Unit
-            }
-        }
+        val value = resolve(element, inherited, merged, pseudoElement = true)
         return GeneratedRun(
-            text,
-            italic,
-            bold,
-            scale.coerceIn(0.5f, 2.5f),
-            foreground.takeIf { it != inherited.foregroundColorArgb },
-            background,
+            text = text,
+            italic = value.italic.takeIf { it != inherited.italic },
+            bold = value.bold.takeIf { it != inherited.bold },
+            scale = (value.fontSizeEm / inherited.fontSizeEm).coerceIn(0.5f, 2.5f),
+            foregroundColorArgb = value.foregroundColorArgb
+                .takeIf { it != inherited.foregroundColorArgb },
+            backgroundColorArgb = value.backgroundColorArgb,
+            fontFeatureSettings = value.fontFeatureSettings,
+            textTransform = value.textTransform,
+            visibilityHidden = value.visibilityHidden,
+            publisherBox = publisherBoxStyle(element, value),
+            fontFamilyName = value.fontFamilyName,
         )
     }
 
@@ -762,11 +950,6 @@ class CssResolver(sheets: List<Sheet>) {
         if (value.isEmpty()) return null
         val lower = value.lowercase()
         if (lower == "none" || lower == "normal") return null
-        if ("counter(" in lower || "attr(" in lower || "url(" in lower ||
-            "quote" in lower
-        ) {
-            return null
-        }
         val out = StringBuilder()
         var i = 0
         var sawString = false
@@ -794,14 +977,19 @@ class CssResolver(sheets: List<Sheet>) {
                                 // A single whitespace terminates the escape.
                                 if (i < value.length && value[i] == ' ') i++
                             } else {
-                                out.append(value[i])
+                                if (value[i] == '\r' && value.getOrNull(i + 1) == '\n') i++
+                                if (value[i] != '\n' && value[i] != '\r' && value[i] != '\u000c') {
+                                    out.append(value[i])
+                                }
                                 i++
                             }
                         } else {
+                            if (value[i] == '\n' || value[i] == '\r' || value[i] == '\u000c') return null
                             out.append(value[i])
                             i++
                         }
                     }
+                    if (i >= value.length) return null
                     i++ // closing quote
                 }
 
@@ -933,8 +1121,13 @@ class CssResolver(sheets: List<Sheet>) {
 
     // ------------------------------------------------------------- resolve
 
-    private fun resolve(element: Element, parent: Computed?): Computed {
-        val decl = declarationsFor(element)
+    private fun resolve(
+        element: Element,
+        parent: Computed?,
+        declared: Map<String, Declaration>? = null,
+        pseudoElement: Boolean = false,
+    ): Computed {
+        val decl = declared ?: declarationsFor(element)
 
         // Custom properties cascade like inherited values; own declarations
         // shadow the parent's. Their values may reference other vars.
@@ -954,7 +1147,7 @@ class CssResolver(sheets: List<Sheet>) {
         var italic = parent?.italic
         var bold = parent?.bold
         val inheritedFontSize = parent?.fontSizeEm ?: 1f
-        val tagFontScale = when (element.normalName()) {
+        val tagFontScale = when (if (pseudoElement) "" else element.normalName()) {
             "h1" -> HeadingDefaults.scale(1)
             "h2" -> HeadingDefaults.scale(2)
             "h3" -> HeadingDefaults.scale(3)
@@ -963,6 +1156,7 @@ class CssResolver(sheets: List<Sheet>) {
             "h6" -> HeadingDefaults.scale(6)
             "small" -> 0.85f
             "big" -> 1.2f
+            "rt" -> 0.5f
             else -> 1f
         }
         // Author CSS overrides the UA/tag font-size instead of multiplying
@@ -979,7 +1173,22 @@ class CssResolver(sheets: List<Sheet>) {
         }
         val fontSize = (declaredFontSize ?: inheritedFontSize * tagFontScale)
             .coerceIn(0.5f, 3f)
-        var align = parent?.textAlign
+        // Legacy book HTML uses align= and <center>. Resolve these at the
+        // owning element, before its CSS, so inherited body alignment cannot
+        // erase a heading's own presentational hint. Table/image align= has
+        // different box semantics and stays with the corresponding mapper.
+        val alignmentHint = when (if (pseudoElement) "" else element.normalName()) {
+            "div", "p", "h1", "h2", "h3", "h4", "h5", "h6", "center" ->
+                element.attr("align").trim().lowercase().let {
+                    when (it) {
+                        "left", "right", "center", "justify" -> it
+                        else -> null
+                    }
+                }
+            else -> null
+        }
+        var align = alignmentHint
+            ?: if (!pseudoElement && element.normalName() == "center") "center" else parent?.textAlign
         var indent = parent?.textIndentEm
         var hidden = parent?.hidden ?: false
         var display: String? = null
@@ -987,6 +1196,11 @@ class CssResolver(sheets: List<Sheet>) {
         var strike = parent?.strike ?: false
         var monospace = parent?.monospace ?: false
         var fontFamilyName = parent?.fontFamilyName
+        var fontVariantCaps = parent?.fontVariantCaps
+        var fontVariantNumeric = parent?.fontVariantNumeric
+        var explicitFontFeatures = parent?.explicitFontFeatures
+        var textTransform = parent?.textTransform
+        var visibilityHidden = parent?.visibilityHidden ?: false
         var lineHeightNumber = parent?.lineHeightNumber
         var lineHeightAbsoluteEm = parent?.lineHeightAbsoluteEm
         var lineHeightMult = safeLineHeightMultiplier(
@@ -1021,9 +1235,9 @@ class CssResolver(sheets: List<Sheet>) {
         var unicodeBidi: String? = null
         var listStyleType = parent?.listStyleType
         val declaredForeground = declarationValue(decl["color"], customProps)
-            ?: element.attr("color").takeIf { it.isNotBlank() }
+            ?: element.attr("color").takeIf { !pseudoElement && it.isNotBlank() }
             ?: element.attr("text").takeIf {
-                element.normalName() == "body" && it.isNotBlank()
+                !pseudoElement && element.normalName() == "body" && it.isNotBlank()
             }
         val foregroundColorArgb = declaredForeground?.let {
             resolveForeground(it, parent?.foregroundColorArgb)
@@ -1031,9 +1245,14 @@ class CssResolver(sheets: List<Sheet>) {
         val declaredBackground = decl["background-color"]?.let {
             resolvedDeclarationValue(it, customProps)
         }
-            ?: element.attr("bgcolor").takeIf { it.isNotBlank() }
+            ?: element.attr("bgcolor").takeIf { !pseudoElement && it.isNotBlank() }
         val backgroundColorArgb = declaredBackground?.let {
             resolveBackground(it, parent?.backgroundColorArgb, foregroundColorArgb)
+        }
+        val backgroundUsesCurrentColor = when (declaredBackground) {
+            "currentcolor" -> foregroundColorArgb == null
+            "inherit" -> parent?.backgroundUsesCurrentColor ?: false
+            else -> false
         }
         var superScript = false
         var subScript = false
@@ -1060,17 +1279,31 @@ class CssResolver(sheets: List<Sheet>) {
         var autoLeft = false
         var autoRight = false
         var pageBreakBefore = false
+        var pageBreakAfter = false
         var breakInsideAvoid = false
         var floatSide: String? = null
         var clear: String? = null
         var widthFrac: Float? = null
         var widthEm: Float? = null
         var heightEm: Float? = null
+        var minHeightEm: Float? = null
+        var minHeightViewportFrac: Float? = null
+        var minHeightOffsetEm = 0f
+        var borderBox = false
+        var maxWidthFrac: Float? = null
+        var maxWidthEm: Float? = null
+        var maxHeightEm: Float? = null
+        var maxHeightViewportFrac: Float? = null
+        var flexDirection = "row"
+        var flexWrap = "nowrap"
+        var justifyContent: String? = null
+        var alignItems: String? = null
+        var imageInvert = false
         val currentColor = foregroundColorArgb ?: BLACK_ARGB
-        val borderTop = MutableBorder(currentColor)
-        val borderRight = MutableBorder(currentColor)
-        val borderBottom = MutableBorder(currentColor)
-        val borderLeft = MutableBorder(currentColor)
+        val borderTop = MutableBorder(currentColor, foregroundColorArgb == null)
+        val borderRight = MutableBorder(currentColor, foregroundColorArgb == null)
+        val borderBottom = MutableBorder(currentColor, foregroundColorArgb == null)
+        val borderLeft = MutableBorder(currentColor, foregroundColorArgb == null)
         val paddingSpecified = decl.keys.any { it.startsWith("padding-") }
         val borderSpecified = decl.keys.any { property ->
             property.startsWith("border-top-") || property.startsWith("border-right-") ||
@@ -1099,12 +1332,20 @@ class CssResolver(sheets: List<Sheet>) {
                     value,
                     inherited?.colorArgb ?: currentColor,
                     currentColor,
-                )?.let { border.colorArgb = it }
+                )?.let {
+                    border.colorArgb = it
+                    border.usesCurrentColor = when (value) {
+                        "inherit" -> inherited?.usesCurrentColor ?: (foregroundColorArgb == null)
+                        "currentcolor", "initial", "unset", "revert", "revert-layer" ->
+                            foregroundColorArgb == null
+                        else -> false
+                    }
+                }
             }
         }
 
         // Tag defaults, so CSS-less inline tags keep working through here.
-        when (element.normalName()) {
+        when (if (pseudoElement) "" else element.normalName()) {
             "i", "em", "dfn", "var", "cite" -> italic = true
             "b", "strong" -> bold = true
             "u", "ins" -> underline = true
@@ -1135,6 +1376,51 @@ class CssResolver(sheets: List<Sheet>) {
 
                 // Resolved above so declaration order cannot affect it.
                 "font-size" -> Unit
+
+                "font-variant", "font-variant-caps" -> when (value) {
+                    "inherit", "unset" -> Unit
+                    "normal", "initial", "revert", "revert-layer" -> {
+                        fontVariantCaps = null
+                        if (property == "font-variant") fontVariantNumeric = null
+                    }
+                    "small-caps", "all-small-caps", "petite-caps", "all-petite-caps", "unicase", "titling-caps" ->
+                        {
+                            fontVariantCaps = value
+                            if (property == "font-variant") fontVariantNumeric = null
+                        }
+                    else -> if (property == "font-variant") {
+                        val tokens = value.split(whitespaceRegex)
+                        fontVariantCaps = tokens.firstOrNull { it in FONT_VARIANT_CAPS_FEATURES }
+                        fontVariantNumeric = tokens.filter { it in FONT_VARIANT_NUMERIC_FEATURES }
+                            .joinToString(" ").takeIf { it.isNotEmpty() }
+                    }
+                }
+
+                "font-variant-numeric" -> when (value) {
+                    "inherit", "unset" -> Unit
+                    "normal", "initial", "revert", "revert-layer" -> fontVariantNumeric = null
+                    else -> if (value.split(whitespaceRegex).all { it in FONT_VARIANT_NUMERIC_FEATURES }) {
+                        fontVariantNumeric = value
+                    }
+                }
+
+                "font-feature-settings" -> when (value) {
+                    "inherit", "unset" -> Unit
+                    "normal", "initial", "revert", "revert-layer" -> explicitFontFeatures = null
+                    else -> parseFontFeatureSettings(value)?.let { explicitFontFeatures = it }
+                }
+
+                "text-transform" -> when (value) {
+                    "inherit", "unset" -> Unit
+                    "none", "initial", "revert", "revert-layer" -> textTransform = null
+                    "uppercase", "lowercase", "capitalize" -> textTransform = value
+                }
+
+                "visibility" -> when (value) {
+                    "inherit", "unset" -> Unit
+                    "visible", "initial", "revert", "revert-layer" -> visibilityHidden = false
+                    "hidden", "collapse" -> visibilityHidden = true
+                }
 
                 // Resolved above: currentColor/background-color must see the
                 // final foreground regardless of declaration source order.
@@ -1196,15 +1482,26 @@ class CssResolver(sheets: List<Sheet>) {
                     "end" -> align = "end"
                     "start" -> align = "start"
                     "justify" -> align = "justify"
-                    // "inherit": keep the parent's value already in `align`.
+                    "initial", "revert", "revert-layer" -> align = "start"
+                    "inherit", "unset" -> align = parent?.textAlign ?: "start"
+                    "match-parent" -> align = if (parent == null) "start" else {
+                        when (parent.textAlign ?: "start") {
+                            "start" -> if (parent.direction == "rtl") "right" else "left"
+                            "end" -> if (parent.direction == "rtl") "left" else "right"
+                            else -> parent.textAlign
+                        }
+                    }
                 }
 
-                "text-indent" -> lengthEm(
+                "text-indent" -> if (value in setOf("initial", "revert", "revert-layer")) {
+                    indent = 0f
+                } else lengthEm(
                     value,
                     percentBase = 0.30f,
                     emScale = fontSize,
+                    allowNegative = true,
                 )?.let {
-                    indent = it.coerceIn(0f, 4f)
+                    indent = it.coerceIn(-MAX_BOX_INLINE_EM, MAX_BOX_INLINE_EM)
                 }
 
                 "display" -> when (value) {
@@ -1214,6 +1511,37 @@ class CssResolver(sheets: List<Sheet>) {
                         display = value
                         hidden = hidden || value == "none"
                     }
+                }
+
+                "flex-direction" -> when (value) {
+                    "row", "row-reverse", "column", "column-reverse" -> flexDirection = value
+                    "inherit" -> flexDirection = parent?.flexDirection ?: "row"
+                    "initial", "unset", "revert", "revert-layer" -> flexDirection = "row"
+                }
+
+                "flex-wrap" -> when (value) {
+                    "nowrap", "wrap", "wrap-reverse" -> flexWrap = value
+                    "inherit" -> flexWrap = parent?.flexWrap ?: "nowrap"
+                    "initial", "unset", "revert", "revert-layer" -> flexWrap = "nowrap"
+                }
+
+                "justify-content" -> when (value) {
+                    "normal", "start", "end", "center", "flex-start", "flex-end", "left", "right",
+                    "space-between", "space-around", "space-evenly", "stretch" -> justifyContent = value
+                    "inherit" -> justifyContent = parent?.justifyContent
+                    "initial", "unset", "revert", "revert-layer" -> justifyContent = null
+                }
+
+                "align-items" -> when (value) {
+                    "normal", "start", "end", "center", "flex-start", "flex-end", "baseline", "stretch" ->
+                        alignItems = value
+                    "inherit" -> alignItems = parent?.alignItems
+                    "initial", "unset", "revert", "revert-layer" -> alignItems = null
+                }
+
+                "filter" -> when (value.replace(whitespaceRegex, "")) {
+                    "invert(100%)", "invert(1)" -> imageInvert = true
+                    "none", "initial", "unset", "revert", "revert-layer" -> imageInvert = false
                 }
 
                 "text-decoration", "text-decoration-line" -> {
@@ -1236,6 +1564,11 @@ class CssResolver(sheets: List<Sheet>) {
                 "page-break-before", "break-before" -> when (value) {
                     "always", "left", "right", "page" -> pageBreakBefore = true
                     "auto", "avoid" -> pageBreakBefore = false
+                }
+
+                "page-break-after", "break-after" -> when (value) {
+                    "always", "left", "right", "page" -> pageBreakAfter = true
+                    "auto", "avoid", "initial", "unset", "revert", "revert-layer" -> pageBreakAfter = false
                 }
 
                 "page-break-inside", "break-inside" -> when (value) {
@@ -1270,6 +1603,46 @@ class CssResolver(sheets: List<Sheet>) {
                     lengthEm(value, emScale = fontSize)
                         ?.takeIf { it > 0f }
                         ?.let { heightEm = it }
+                }
+
+                "min-height" -> when (value) {
+                    "inherit" -> {
+                        minHeightEm = parent?.minHeightEm
+                        minHeightViewportFrac = parent?.minHeightViewportFrac
+                        minHeightOffsetEm = parent?.minHeightOffsetEm ?: 0f
+                    }
+                    "initial", "unset", "revert", "revert-layer", "auto" -> Unit
+                    else -> {
+                        val affine = viewportHeightLength(value, fontSize)
+                        if (affine != null) {
+                            minHeightViewportFrac = affine.first
+                            minHeightOffsetEm = affine.second
+                        } else if (!viewportUnitRegex.containsMatchIn(value)) {
+                            lengthEm(value, emScale = fontSize)?.takeIf { it >= 0f }
+                                ?.let { minHeightEm = it.coerceAtMost(30f) }
+                        }
+                    }
+                }
+
+                "box-sizing" -> when (value) {
+                    "border-box" -> borderBox = true
+                    "content-box", "initial", "unset", "revert", "revert-layer" -> borderBox = false
+                    "inherit" -> borderBox = parent?.borderBox ?: false
+                }
+
+                "max-width" -> if (value.endsWith("%")) {
+                    value.removeSuffix("%").trim().toFloatOrNull()
+                        ?.takeIf { it.isFinite() && it > 0f }
+                        ?.let { maxWidthFrac = (it / 100f).coerceIn(0.01f, 1f) }
+                } else {
+                    lengthEm(value, emScale = fontSize)?.takeIf { it > 0f }?.let { maxWidthEm = it }
+                }
+
+                "max-height" -> if (value.endsWith("vh")) {
+                    value.removeSuffix("vh").trim().toFloatOrNull()?.takeIf { it.isFinite() && it > 0f }
+                        ?.let { maxHeightViewportFrac = (it / 100f).coerceIn(0.01f, 1f) }
+                } else if (!value.endsWith("%")) {
+                    lengthEm(value, emScale = fontSize)?.takeIf { it > 0f }?.let { maxHeightEm = it }
                 }
 
                 "border-top-width" -> applyBorder(
@@ -1438,6 +1811,19 @@ class CssResolver(sheets: List<Sheet>) {
             }
         }
 
+        val position = declarationValue(decl["position"], customProps)
+        if (position == "absolute" || position == "fixed") {
+            // Accessibility copies far outside the viewport accompany SVG
+            // title pages. Preserve ordinary positioned content in flow,
+            // but do not duplicate these intentionally invisible labels.
+            val farOutside = listOf("left", "top").any { property ->
+                declarationValue(decl[property], customProps)?.let {
+                    lengthEm(it, emScale = fontSize, allowNegative = true)?.let { offset -> offset < -100f }
+                } == true
+            }
+            hidden = hidden || farOutside
+        }
+
         return Computed(
             customProps = customProps,
             italic = italic,
@@ -1447,6 +1833,29 @@ class CssResolver(sheets: List<Sheet>) {
             textIndentEm = indent,
             hidden = hidden,
             display = display,
+            fontFeatureSettings = assembleFontFeatures(fontVariantCaps, fontVariantNumeric, explicitFontFeatures),
+            fontVariantCaps = fontVariantCaps,
+            fontVariantNumeric = fontVariantNumeric,
+            explicitFontFeatures = explicitFontFeatures,
+            textTransform = textTransform,
+            visibilityHidden = visibilityHidden,
+            maxWidthFrac = maxWidthFrac,
+            maxWidthEm = maxWidthEm,
+            maxHeightEm = maxHeightEm,
+            maxHeightViewportFrac = maxHeightViewportFrac,
+            minHeightEm = minHeightEm,
+            minHeightViewportFrac = minHeightViewportFrac,
+            minHeightOffsetEm = minHeightOffsetEm,
+            centerContentVertically = display == "flex" && flexDirection == "column" &&
+                justifyContent == "center" && minHeightViewportFrac != null,
+            borderBox = borderBox,
+            pageBreakAfter = pageBreakAfter,
+            flexDirection = flexDirection,
+            flexWrap = flexWrap,
+            justifyContent = justifyContent,
+            alignItems = alignItems,
+            imageInvert = imageInvert,
+            backgroundUsesCurrentColor = backgroundUsesCurrentColor,
             marginStartEm = marginStartEm.coerceIn(0f, MAX_BOX_INLINE_EM),
             marginStartFrac = marginStartFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
             marginEndEm = marginEndEm.coerceIn(0f, MAX_BOX_INLINE_EM),
@@ -1509,6 +1918,38 @@ class CssResolver(sheets: List<Sheet>) {
         return (if ("var(" in value) substituteVars(value, customProps) else value)
             ?.trim()
             ?.lowercase()
+    }
+
+    private fun parseFontFeatureSettings(value: String): String? {
+        val features = LinkedHashMap<String, Int>()
+        for (item in selectorSlices(value)) {
+            val match = fontFeatureRegex.matchEntire(item.trim()) ?: return null
+            val amount = when (val argument = match.groupValues[2]) {
+                "", "on" -> 1
+                "off" -> 0
+                else -> argument.toIntOrNull()?.takeIf { it in 0..65_535 } ?: return null
+            }
+            features[match.groupValues[1]] = amount
+        }
+        return features.takeIf { it.isNotEmpty() }?.entries
+            ?.joinToString(", ") { "'${it.key}' ${it.value}" }
+    }
+
+    /** Explicit feature settings override the same OpenType variant tag. */
+    private fun assembleFontFeatures(caps: String?, numeric: String?, explicit: String?): String? {
+        val features = LinkedHashMap<String, Int>()
+        FONT_VARIANT_CAPS_FEATURES[caps]?.forEach { features[it] = 1 }
+        numeric?.split(whitespaceRegex)?.forEach { keyword ->
+            FONT_VARIANT_NUMERIC_FEATURES[keyword]?.forEach { features[it] = 1 }
+        }
+        explicit?.let {
+            for (item in selectorSlices(it)) {
+                val match = fontFeatureRegex.matchEntire(item.trim()) ?: continue
+                features[match.groupValues[1]] = match.groupValues[2].toIntOrNull() ?: 1
+            }
+        }
+        return features.takeIf { it.isNotEmpty() }?.entries
+            ?.joinToString(", ") { "'${it.key}' ${it.value}" }
     }
 
     /** Resolve var() and delayed shorthand expansion for one cascaded longhand. */
@@ -1651,6 +2092,31 @@ class CssResolver(sheets: List<Sheet>) {
         }
     }
 
+    /** Exact affine viewport minimum; unsupported nonlinear forms keep normal flow. */
+    private fun viewportHeightLength(value: String, emScale: Float): Pair<Float, Float>? {
+        fun term(raw: String): Pair<Float, Float>? {
+            if (unitOf(raw) == "vh") {
+                return leadingNumber(raw)?.let { it / 100f to 0f }
+            }
+            if (raw != "0" && unitOf(raw) !in setOf("em", "rem", "px", "pt", "pc", "in", "cm", "mm", "q", "ch", "ex")) {
+                return null
+            }
+            return lengthEm(raw, emScale = emScale, allowNegative = true)?.let { 0f to it }
+        }
+        val result = if (plainViewportHeightRegex.matches(value)) {
+            term(value)
+        } else {
+            val match = affineViewportHeightRegex.matchEntire(value) ?: return null
+            val a = term(match.groupValues[1]) ?: return null
+            val b = term(match.groupValues[3]) ?: return null
+            val sign = if (match.groupValues[2] == "-") -1f else 1f
+            a.first + sign * b.first to a.second + sign * b.second
+        } ?: return null
+        return result.takeIf { (fraction, offset) ->
+            fraction.isFinite() && fraction in 0.01f..4f && offset.isFinite() && offset in -100f..100f
+        }
+    }
+
     /**
      * Length normalized into reader-root em, or null.
      *
@@ -1664,6 +2130,7 @@ class CssResolver(sheets: List<Sheet>) {
         value: String,
         percentBase: Float = 0f,
         emScale: Float = 1f,
+        allowNegative: Boolean = false,
     ): Float? {
         if (value == "0") return 0f
         if (CssCalc.isMath(value)) {
@@ -1672,10 +2139,11 @@ class CssResolver(sheets: List<Sheet>) {
                 value,
                 CssCalc.Ctx(emScale, 1f, 1f / 16f, percentUnit),
             )
-                ?.coerceAtLeast(0f)
+                ?.takeIf { it.isFinite() }
+                ?.let { if (allowNegative) it else it.coerceAtLeast(0f) }
         }
         val number = leadingNumber(value) ?: return null
-        if (number < 0) return 0f
+        if (number < 0 && !allowNegative) return 0f
         return when (unitOf(value)) {
             "em" -> number * emScale
             "rem" -> number
@@ -1710,7 +2178,7 @@ class CssResolver(sheets: List<Sheet>) {
     }
 
     private fun leadingNumber(value: String): Float? =
-        numberRegex.find(value)?.value?.toFloatOrNull()
+        numberRegex.find(value)?.value?.toFloatOrNull()?.takeIf { it.isFinite() }
 
     /** First family of a font-family list, unquoted and lowercased. */
     private fun firstFamilyName(value: String): String? =
@@ -1827,6 +2295,10 @@ class CssResolver(sheets: List<Sheet>) {
                 val semi = css.indexOf(';', index)
                 val brace = css.indexOf('{', index)
                 if (semi >= 0 && (brace < 0 || semi < brace)) {
+                    namespaceRuleRegex.matchEntire(css.substring(index, semi).trim())?.let {
+                        parsingNamespaces[it.groupValues[1]] =
+                            it.groupValues[2].ifEmpty { it.groupValues[3] }
+                    }
                     index = semi + 1
                     continue
                 }
@@ -1836,18 +2308,33 @@ class CssResolver(sheets: List<Sheet>) {
             if (braceOpen < 0) break
             val selectorText = css.substring(index, braceOpen).trim()
 
-            // @-rules: unwrap screen/all @media, collect @font-face,
-            // skip the rest wholesale.
+            // @-rules: evaluate media/capability conditions, collect fonts,
+            // and skip unsupported groups as a whole.
             if (selectorText.startsWith("@")) {
                 if (selectorText.startsWith("@media", ignoreCase = true)) {
                     val bodyEnd = matchingBrace(css, braceOpen)
                     if (bodyEnd < 0) break
+                    simpleMaxWidthBreakpoint(selectorText.substring(6))?.let { threshold ->
+                        if (simpleMaxWidthBreakpoints.size < MAX_RESPONSIVE_BREAKPOINTS) {
+                            simpleMaxWidthBreakpoints += threshold
+                        }
+                    }
                     if (screenMediaApplies(selectorText.substring(6))) {
                         parseSheetText(
                             css.substring(braceOpen + 1, bodyEnd),
                             baseDir,
                             groupDepth + 1,
                         )
+                    }
+                    index = bodyEnd + 1
+                } else if (selectorText.startsWith("@supports", ignoreCase = true)) {
+                    val bodyEnd = matchingBrace(css, braceOpen)
+                    if (bodyEnd < 0) break
+                    // The mapper retains native table cells and bounded flex
+                    // rows; unsupported feature tests preserve base fallback.
+                    val condition = selectorText.substring(9).trim().lowercase()
+                    if (supportsConditionApplies(condition)) {
+                        parseSheetText(css.substring(braceOpen + 1, bodyEnd), baseDir, groupDepth + 1)
                     }
                     index = bodyEnd + 1
                 } else if (selectorText.startsWith("@font-face", ignoreCase = true)) {
@@ -1928,13 +2415,12 @@ class CssResolver(sheets: List<Sheet>) {
     }
 
     /**
-     * Evaluates the media *type* against the reader's screen environment.
-     * Feature expressions are deliberately left responsive: the custom
-     * renderer has no fixed CSS viewport at parse time, so `(min-width: …)`
-     * is treated as potentially applicable. Explicit print/speech rules and
-     * negated screen rules, however, must never leak into normal reading.
+     * Evaluate screen media against actual supplied values. Parsing normally
+     * precedes layout, so constrained branches without a viewport are skipped
+     * and keep the publisher's unconstrained fallback. Applying every width
+     * branch at once destroys drama tables and can hide wide-screen content.
      */
-    private fun screenMediaApplies(raw: String): Boolean = raw.split(',').any { branch ->
+    private fun screenMediaApplies(raw: String): Boolean = selectorSlices(raw).any { branch ->
         var query = branch.trim().lowercase()
         if (query.isEmpty()) return@any true
         var negated = false
@@ -1947,13 +2433,73 @@ class CssResolver(sheets: List<Sheet>) {
             .takeUnless { it.startsWith("(") }
             ?.substringBefore(' ')
             .orEmpty()
-        val baseApplies = when (type) {
+        var baseApplies = when (type) {
             "", "all", "screen" -> true
             "print", "speech", "aural", "braille", "embossed", "handheld",
             "projection", "tty", "tv", "amzn-mobi", "amzn-kf8" -> false
             else -> false
         }
+        val features = mediaFeatureRegex.findAll(query).toList()
+        // Unknown expressions are not evidence that a query is applicable,
+        // even when negated. Preserve the stable base stylesheet instead.
+        val remainder = mediaFeatureRegex.replace(query, "").replace(Regex("""\band\b"""), "")
+            .trim().removePrefix(type).trim()
+        if (remainder.isNotEmpty()) return@any false
+        for (feature in features) {
+            val applies = mediaFeatureApplies(feature.groupValues[1]) ?: return@any false
+            baseApplies = baseApplies && applies
+        }
         if (negated) !baseApplies else baseApplies
+    }
+
+    private fun mediaFeatureApplies(raw: String): Boolean? {
+        val property = raw.substringBefore(':').trim()
+        val value = raw.substringAfter(':', "").trim()
+        if (property == "prefers-color-scheme") {
+            val dark = viewport?.dark ?: return null
+            return when (value) { "dark" -> dark; "light" -> !dark; else -> null }
+        }
+        if (property == "orientation") {
+            val width = viewport?.widthPx?.takeIf { it.isFinite() && it > 0f } ?: return null
+            val height = viewport.heightPx?.takeIf { it.isFinite() && it > 0f } ?: return null
+            return when (value) { "portrait" -> height >= width; "landscape" -> width > height; else -> null }
+        }
+        val dimension = when (property.removePrefix("min-").removePrefix("max-")) {
+            "width" -> viewport?.widthPx
+            "height" -> viewport?.heightPx
+            else -> return null
+        }?.takeIf { it.isFinite() && it > 0f } ?: return null
+        if (value.endsWith("%") || value.endsWith("vh") || value.endsWith("vw")) return null
+        val threshold = lengthEm(value)?.times(16f) ?: return null
+        return when {
+            property.startsWith("min-") -> dimension >= threshold
+            property.startsWith("max-") -> dimension <= threshold
+            else -> dimension == threshold
+        }
+    }
+
+    private fun simpleMaxWidthBreakpoint(raw: String): Float? {
+        val match = simpleMaxWidthMediaRegex.matchEntire(raw.trim()) ?: return null
+        val value = match.groupValues[1].trim().lowercase()
+        // CSS media em/rem use the initial 16px size, independently of the
+        // user's reading font or scale. Complex/negated queries keep fallback.
+        if (unitOf(value) !in setOf("px", "em", "rem")) return null
+        return lengthEm(value)?.times(16f)?.takeIf { it.isFinite() && it in 1f..10_000f }
+    }
+
+    /** Single-declaration capability queries, optionally negated; unknown syntax skips. */
+    private fun supportsConditionApplies(raw: String): Boolean {
+        val negated = raw.startsWith("not ")
+        val query = if (negated) raw.removePrefix("not ").trimStart() else raw
+        val match = supportsFeatureRegex.matchEntire(query) ?: return false
+        val property = match.groupValues[1]
+        val value = match.groupValues[2].trim()
+        val supported = when (property) {
+            "display" -> value in setOf("none", "block", "inline", "inline-block", "table", "table-row", "table-cell", "flex")
+            "color", "background-color" -> value == "currentcolor" || CssColor.parse(value) != null
+            else -> false
+        }
+        return if (negated) !supported else supported
     }
 
     private fun parseFontFace(declarations: Map<String, Declaration>, baseDir: String) {
@@ -1990,7 +2536,7 @@ class CssResolver(sheets: List<Sheet>) {
      * honored (unknown pseudo-classes, functional selectors, syntax errors) —
      * only that comma-group member is dropped.
      */
-    private fun parseSelector(selector: String): ParsedSelector? {
+    private fun parseSelector(selector: String, inHas: Boolean = false): ParsedSelector? {
         val text = selector.trim()
         if (text.isEmpty() || text.length > MAX_SELECTOR_CHARS) return null
         val chain = mutableListOf<Compound>()
@@ -2067,9 +2613,9 @@ class CssResolver(sheets: List<Sheet>) {
                                 if (end == start) return null
                                 val name = text.substring(start, end).lowercase()
                                 if (end < text.length && text[end] == '(') {
-                                    // Functional pseudo-classes. Unsupported
-                                    // ones (:has, :is, :nth-last-*) still drop
-                                    // only this comma-group member.
+                                    // Unsupported functions drop only this
+                                    // comma-group member. Nested :has() and
+                                    // pseudo-elements inside it are invalid.
                                     if (isElement) return null
                                     val close = matchingParen(text, end)
                                     if (close < 0) return null
@@ -2083,14 +2629,44 @@ class CssResolver(sheets: List<Sheet>) {
                                             tags += inner.tags
                                         }
 
-                                        "nth-child", "nth-of-type" -> {
+                                        "nth-child", "nth-of-type", "nth-last-child", "nth-last-of-type" -> {
                                             val nth = parseNth(arg) ?: return null
                                             pseudos += PseudoClass.Nth(
                                                 nth.first,
                                                 nth.second,
-                                                ofType = name == "nth-of-type",
+                                                ofType = name.endsWith("of-type"),
+                                                fromEnd = name.startsWith("nth-last-"),
                                             )
                                             classLike++
+                                        }
+
+                                        "has" -> {
+                                            if (inHas) return null
+                                            val relatives = selectorSlices(arg).map { relative ->
+                                                val trimmed = relative.trim()
+                                                val relation = when (trimmed.firstOrNull()) {
+                                                    '>' -> Combinator.CHILD
+                                                    '+' -> Combinator.NEXT_SIBLING
+                                                    '~' -> Combinator.SUBSEQUENT_SIBLING
+                                                    else -> Combinator.DESCENDANT
+                                                }
+                                                val subject = if (trimmed.firstOrNull() in listOf('>', '+', '~')) {
+                                                    trimmed.substring(1).trimStart()
+                                                } else trimmed
+                                                val parsed = parseSelector(subject, inHas = true)
+                                                    ?.takeIf { it.pseudoElement == null } ?: return null
+                                                parsed to listOf(Compound(relation, parsed.chain.first().simple)) +
+                                                    parsed.chain.drop(1)
+                                            }
+                                            if (relatives.isEmpty()) return null
+                                            pseudos += PseudoClass.Has(relatives.map { it.second })
+                                            // :has(), like :not(), takes the
+                                            // most specific argument, rather
+                                            // than adding a pseudo-class.
+                                            val specificity = relatives.maxOf { it.first.specificity }
+                                            ids += specificity / 1_000_000
+                                            classLike += specificity / 1_000 % 1_000
+                                            tags += specificity % 1_000
                                         }
 
                                         else -> return null
@@ -2134,6 +2710,13 @@ class CssResolver(sheets: List<Sheet>) {
                                         "first-of-type" -> {
                                             if (isElement) return null
                                             pseudos += PseudoClass.FirstOfType
+                                            classLike++
+                                        }
+
+                                        "last-of-type", "only-of-type" -> {
+                                            if (isElement) return null
+                                            pseudos += PseudoClass.Nth(0, 1, ofType = true, fromEnd = true)
+                                            if (name == "only-of-type") pseudos += PseudoClass.FirstOfType
                                             classLike++
                                         }
 
@@ -2312,14 +2895,21 @@ class CssResolver(sheets: List<Sheet>) {
     private fun parseAttrSelector(inner: String): AttrSelector? {
         val text = inner.trim()
         if (text.isEmpty()) return null
-        val opIndex = text.indexOfFirst { it in "=~|^$*" }
-        if (opIndex < 0) {
-            val name = text.lowercase()
-            return if (name.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == ':' }) {
-                AttrSelector(name, AttrOp.EXISTS, null)
-            } else {
-                null
+        // A namespace separator is part of the name, whereas |= is the dash
+        // match operator: [epub|type~="z3998:poem"] must keep both intact.
+        val operator = attrOperatorRegex.find(text)
+        val opIndex = operator?.range?.first ?: -1
+        val rawName = if (opIndex < 0) text else text.substring(0, opIndex).trim()
+        val name = rawName.lowercase().replace('|', ':')
+        if (name.isEmpty() || !name.all {
+                it.isLetterOrDigit() || it == '-' || it == '_' || it == ':'
             }
+        ) return null
+        val namespaceUri = if ('|' in rawName) {
+            parsingNamespaces[rawName.substringBefore('|')] ?: return null
+        } else null
+        if (opIndex < 0) {
+            return AttrSelector(name, AttrOp.EXISTS, null, namespaceUri)
         }
         val opChar = text[opIndex]
         val op: AttrOp
@@ -2338,13 +2928,11 @@ class CssResolver(sheets: List<Sheet>) {
             }
             valueStart = opIndex + 2
         }
-        val name = text.substring(0, opIndex).trim().lowercase()
-        if (name.isEmpty()) return null
         var value = text.substring(valueStart).trim()
         // Drop a trailing case-sensitivity flag: [attr="v" i].
         caseFlagRegex.find(value)?.let { value = it.groupValues[1].trim() }
         value = value.trim('"', '\'')
-        return AttrSelector(name, op, value)
+        return AttrSelector(name, op, value, namespaceUri)
     }
 
     private fun parseDeclarations(
@@ -2674,6 +3262,7 @@ class CssResolver(sheets: List<Sheet>) {
         val size: String,
         val lineHeight: String,
         val family: String,
+        val variant: String = "normal",
     ) {
         fun value(part: FontPart): String = when (part) {
             FontPart.STYLE -> style
@@ -2681,6 +3270,7 @@ class CssResolver(sheets: List<Sheet>) {
             FontPart.SIZE -> size
             FontPart.LINE_HEIGHT -> lineHeight
             FontPart.FAMILY -> family
+            FontPart.VARIANT -> variant
         }
     }
 
@@ -2696,6 +3286,7 @@ class CssResolver(sheets: List<Sheet>) {
                 "font-size" to Declaration(parsed.size, important),
                 "line-height" to Declaration(parsed.lineHeight, important),
                 "font-family" to Declaration(parsed.family, important),
+                "font-variant" to Declaration(parsed.variant, important),
             )
         }
         if (!value.contains("var(", ignoreCase = true)) return null
@@ -2709,6 +3300,7 @@ class CssResolver(sheets: List<Sheet>) {
             "font-size" to FontPart.SIZE,
             "line-height" to FontPart.LINE_HEIGHT,
             "font-family" to FontPart.FAMILY,
+            "font-variant" to FontPart.VARIANT,
         ).map { (property, part) ->
             property to Declaration(value, important, fontPart = part)
         }
@@ -2718,7 +3310,7 @@ class CssResolver(sheets: List<Sheet>) {
         val value = raw.trim()
         when (value.lowercase()) {
             "inherit", "unset" -> return FontShorthandValues(
-                "inherit", "inherit", "inherit", "inherit", "inherit",
+                "inherit", "inherit", "inherit", "inherit", "inherit", "inherit",
             )
             "initial", "revert", "revert-layer" -> return FontShorthandValues(
                 "normal", "normal", "medium", "normal", "initial",
@@ -2731,6 +3323,7 @@ class CssResolver(sheets: List<Sheet>) {
         if (tokens.isEmpty()) return null
         var style = "normal"
         var weight = "normal"
+        var variant = "normal"
         var size: String? = null
         var index = 0
         while (index < tokens.size) {
@@ -2746,7 +3339,8 @@ class CssResolver(sheets: List<Sheet>) {
                     style = lower
                     if (lower == "oblique" && tokens.getOrNull(index + 1).isFontAngle()) index++
                 }
-                lower == "normal" || lower == "small-caps" -> Unit
+                lower == "normal" -> Unit
+                lower == "small-caps" -> variant = "small-caps"
                 lower == "bold" || lower == "bolder" || lower == "lighter" ||
                     lower.toIntOrNull()?.let { it in 1..1_000 } == true -> weight = lower
                 lower in FONT_STRETCH_KEYWORDS -> Unit
@@ -2762,7 +3356,7 @@ class CssResolver(sheets: List<Sheet>) {
         }
         val family = tokens.drop(index).joinToString(" ").trim()
         if (family.isEmpty() || family == "/") return null
-        return FontShorthandValues(style, weight, resolvedSize, lineHeight, family)
+        return FontShorthandValues(style, weight, resolvedSize, lineHeight, family, variant)
     }
 
     private fun String?.isFontAngle(): Boolean {
@@ -2902,12 +3496,13 @@ class CssResolver(sheets: List<Sheet>) {
         const val BLACK_ARGB: Int = -0x1000000
         const val MAX_BOX_INLINE_EM = 8f
         const val MAX_BOX_INLINE_FRAC = 0.45f
-        const val MAX_BOX_BLOCK_EM = 4f
+        const val MAX_BOX_BLOCK_EM = 12f
         const val THIN_BORDER_EM = 1f / 16f
         const val MEDIUM_BORDER_EM = 2f / 16f
         const val THICK_BORDER_EM = 3f / 16f
         const val MAX_BORDER_EM = 2f
         const val MAX_GROUP_RULE_DEPTH = 64
+        const val MAX_RESPONSIVE_BREAKPOINTS = 8
         const val MAX_RULES = 16_384
         const val MAX_FONT_FACES = 512
         const val MAX_STYLESHEET_DECLARATIONS = 131_072
@@ -2921,10 +3516,39 @@ class CssResolver(sheets: List<Sheet>) {
         const val MAX_SELECTOR_MATCH_OPERATIONS = 5_000_000
         val commentRegex = Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL)
         val whitespaceRegex = Regex("""\s+""")
+        val mediaFeatureRegex = Regex("""\(([^()]*)\)""")
+        val supportsFeatureRegex = Regex("""\(\s*([\w-]+)\s*:\s*([^()]+)\)""")
+        val simpleMaxWidthMediaRegex = Regex(
+            """(?i)(?:(?:only\s+)?(?:screen|all)\s+and\s+)?\(\s*max-width\s*:\s*([^()]+)\s*\)""",
+        )
+        val fontFeatureRegex = Regex("""["']([ -~]{4})["'](?:\s+(on|off|\d+))?""")
+        val FONT_VARIANT_CAPS_FEATURES = mapOf(
+            "small-caps" to listOf("smcp"),
+            "all-small-caps" to listOf("smcp", "c2sc"),
+            "petite-caps" to listOf("pcap"),
+            "all-petite-caps" to listOf("pcap", "c2pc"),
+            "unicase" to listOf("unic"),
+            "titling-caps" to listOf("titl"),
+        )
+        val FONT_VARIANT_NUMERIC_FEATURES = mapOf(
+            "lining-nums" to listOf("lnum"),
+            "oldstyle-nums" to listOf("onum"),
+            "proportional-nums" to listOf("pnum"),
+            "tabular-nums" to listOf("tnum"),
+            "diagonal-fractions" to listOf("frac"),
+            "stacked-fractions" to listOf("afrc"),
+            "ordinal" to listOf("ordn"),
+            "slashed-zero" to listOf("zero"),
+        )
         // ".5em" is as common as "0.5em" in publisher CSS — without the
         // leading-dot branch the match starts at "5" and the value comes
         // out ten times too large.
         val numberRegex = Regex("""-?(?:\d+(?:\.\d+)?|\.\d+)""")
+        val plainViewportHeightRegex = Regex("""[+-]?(?:\d+(?:\.\d+)?|\.\d+)vh""")
+        val affineViewportHeightRegex = Regex(
+            """calc\(\s*([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:vh|rem|em|px|pt|pc|in|cm|mm|q|ch|ex)?)\s+([+-])\s+([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:vh|rem|em|px|pt|pc|in|cm|mm|q|ch|ex)?)\s*\)""",
+        )
+        val viewportUnitRegex = Regex("""(?i)\d(?:vw|vh|vmin|vmax)\b""")
         val lineHeightLengthUnitRegex = Regex(
             """(?i)(?:%|(?<=[0-9.])(?:rem|em|px|pt|pc|in|cm|mm|q|ch|ex|vw|vh|vmin|vmax)(?=[\s),*/+\-]|$))""",
         )
@@ -2944,6 +3568,10 @@ class CssResolver(sheets: List<Sheet>) {
         )
         val fontUrlRegex = Regex("""url\(\s*['"]?([^'")]+)['"]?\s*\)""")
         val caseFlagRegex = Regex("""^(['"].*['"])\s+[iIsS]$""")
+        val attrOperatorRegex = Regex("""[~|^$*]?=""")
+        val namespaceRuleRegex = Regex(
+            """(?i)^@namespace\s+([\w-]+)\s+(?:url\(\s*["']?([^\s"')]+)["']?\s*\)|["']([^"']+)["'])$""",
+        )
         val nthRegex = Regex("""^([+-]?\d*)n([+-]\d+)?$""")
     }
 }

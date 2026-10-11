@@ -14,6 +14,8 @@ data class PublisherBorderSide(
     val widthEm: Float,
     val colorArgb: Int,
     val style: PublisherBorderStyle,
+    /** Unspecified/currentColor border follows the effective reader ink. */
+    val usesCurrentColor: Boolean = false,
 )
 
 /**
@@ -46,9 +48,28 @@ data class PublisherBoxStyle(
     val borderLeft: PublisherBorderSide? = null,
     val widthFrac: Float? = null,
     val widthEm: Float? = null,
+    /** An auto-width inline-block uses its content width within the column. */
+    val shrinkToFit: Boolean = false,
+    /** First-line overhang lets verse padding use the full available width. */
+    val hangingIndentEm: Float = 0f,
+    /** A group of authored verse lines fits as a unit on a narrow column. */
+    val fitTextFlow: Boolean = false,
     /** Alignment of this box itself, independent from its text alignment. */
     val horizontalAlign: PublisherBoxAlign = PublisherBoxAlign.START,
     val breakInsideAvoid: Boolean = false,
+    /** Forced page boundaries apply to images and empty boxes as well as text. */
+    val pageBreakBefore: Boolean = false,
+    val pageBreakAfter: Boolean = false,
+    /** Retained for intentionally empty spacing blocks. */
+    val minHeightEm: Float? = null,
+    /** Affine viewport height; kept separate from the reader's em scale. */
+    val minHeightViewportFrac: Float? = null,
+    val minHeightOffsetEm: Float = 0f,
+    val centerContentVertically: Boolean = false,
+    val borderBox: Boolean = false,
+    /** Maximum inline size is a cap, independent of width and shrink-to-fit. */
+    val maxWidthEm: Float? = null,
+    val maxWidthFrac: Float? = null,
 ) {
     val isDefault: Boolean
         get() = this == DEFAULT

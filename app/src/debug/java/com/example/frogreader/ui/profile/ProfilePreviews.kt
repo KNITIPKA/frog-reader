@@ -30,6 +30,10 @@ private fun DarkProfilePreview() = ProfilePreview("Alexandria Catherine Montgome
 @Composable
 private fun BeigeProfilePreview() = ProfilePreview("John Smits", AppTheme.SEPIA)
 
+@Preview(name = "Beige · profile · large text", widthDp = 360, heightDp = 800, showSystemUi = true, fontScale = 1.5f)
+@Composable
+private fun BeigeLargeTextProfilePreview() = ProfilePreview("John Smith", AppTheme.SEPIA)
+
 @Preview(name = "Landscape · light", widthDp = 852, heightDp = 393, showSystemUi = true)
 @Composable
 private fun LandscapeLightProfilePreview() = ProfilePreview("John Smits", AppTheme.WHITE)

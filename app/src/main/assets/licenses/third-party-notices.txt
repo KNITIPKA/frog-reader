@@ -1,0 +1,258 @@
+FrogReader — third-party notices
+
+FrogReader's own code is GPL-3.0-only, Copyright (c) 2026 KNITIPKA. The
+following components retain their upstream licences and copyrights.
+
+Bundled resources
+
+Literata — Copyright 2017 The Literata Project Authors; designed by
+TypeTogether. SIL Open Font License 1.1.
+https://github.com/googlefonts/literata
+
+IBM Plex Sans — Copyright © 2017 IBM Corp., Reserved Font Name "Plex".
+SIL Open Font License 1.1.
+https://github.com/IBM/plex
+
+Tabler Icons — Copyright (c) 2020-2026 Paweł Kuna. MIT licence.
+The GitHub, Telegram and Signal icons are derived from Tabler Icons.
+https://github.com/tabler/tabler-icons
+
+Runtime libraries
+
+AndroidX / Jetpack, Jetpack Compose and Material icons — Apache License 2.0.
+Copyright The Android Open Source Project.
+https://android.googlesource.com/platform/frameworks/support/
+
+Kotlin standard library and kotlinx serialization/coroutines — Apache
+License 2.0. Copyright JetBrains s.r.o. and Kotlin Programming Language
+contributors.
+https://github.com/JetBrains/kotlin
+https://github.com/Kotlin/kotlinx.serialization
+https://github.com/Kotlin/kotlinx.coroutines
+
+Coil — Apache License 2.0. Copyright Coil Contributors.
+https://github.com/coil-kt/coil
+
+AndroidSVG — Apache License 2.0. Copyright 2013 Paul LeBeau.
+https://github.com/BigBadaboom/androidsvg
+
+Okio — Apache License 2.0. Copyright Square, Inc.
+https://github.com/square/okio
+
+JetBrains annotations — Apache License 2.0. Copyright JetBrains s.r.o.
+https://github.com/JetBrains/java-annotations
+
+Guava and failureaccess — Apache License 2.0. Copyright The Guava Authors.
+https://github.com/google/guava
+
+jsoup — MIT. Copyright (c) 2009-2026 Jonathan Hedley.
+https://jsoup.org/
+
+Brotli Java decoder — MIT. Copyright (c) 2009, 2010, 2013-2016 by the Brotli
+Authors.
+https://github.com/google/brotli
+
+commonmark-java and its GFM table/strikethrough extensions — BSD-2-Clause.
+Copyright (c) 2015, Atlassian Pty Ltd. All rights reserved.
+https://github.com/commonmark/commonmark-java
+
+Additional transitive components: Dagger, AutoValue annotations, Error Prone
+annotations and J2ObjC annotations (Copyright Google), AtomicFU (Copyright
+JetBrains and contributors), JSpecify (Copyright The JSpecify Authors),
+javax.inject (Copyright The JSR-330 Expert Group), and Jakarta Dependency
+Injection (Copyright Eclipse Foundation and contributors) use Apache License
+2.0. Their upstream projects are:
+https://github.com/google/dagger
+https://github.com/google/auto
+https://github.com/google/error-prone
+https://github.com/google/j2objc
+https://github.com/Kotlin/kotlinx-atomicfu
+https://github.com/jspecify/jspecify
+https://github.com/javax-inject/javax-inject
+https://github.com/eclipse-ee4j/injection-api
+
+AndroidX DataStore and Glance embed Protocol Buffers under BSD-3-Clause.
+CameraX image processing embeds libyuv under BSD-3-Clause.
+Checker Framework qualifiers use MIT.
+JSR305 annotations use New BSD as identified by the upstream FindBugs
+notice; their Maven POM declares Apache-2.0. Both upstream references and
+applicable licence texts are retained here.
+
+Full licence texts follow. The repository's THIRD_PARTY_NOTICES.md also
+documents build/test components and debug-only Standard Ebooks fixtures.
+
+
+Checker Framework qualifiers — original MIT notice
+
+Checker Framework qualifiers
+Copyright 2004-present by the Checker Framework developers
+
+MIT License:
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+Jakarta Dependency Injection — original NOTICE
+
+# Notices for Eclipse Jakarta Dependency Injection
+
+This content is produced and maintained by the Eclipse Jakarta Dependency Injection project.
+
+* Project home: https://projects.eclipse.org/projects/cdi.batch
+
+## Trademarks
+
+Jakarta Dependency Injection is a trademark of the Eclipse Foundation.
+
+## Copyright
+
+All content is the property of the respective authors or their employers. For
+more information regarding authorship of content, please consult the listed
+source code repository logs.
+
+## Declared Project Licenses
+
+This program and the accompanying materials are made available under the terms
+of the Apache License, Version 2.0 which is available at
+https://www.apache.org/licenses/LICENSE-2.0.
+
+SPDX-License-Identifier: Apache-2.0
+
+## Source Code
+
+The project maintains the following source code repositories:
+
+https://github.com/eclipse-ee4j/injection-api
+https://github.com/eclipse-ee4j/injection-spec
+https://github.com/eclipse-ee4j/injection-tck
+
+## Third-party Content
+
+This project leverages the following third party content.
+
+None
+
+## Cryptography
+
+None
+
+AndroidX embedded protobuf — original BSD terms
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+    * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+    * Neither the name of the copyright holder nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Protocol Buffers — upstream copyright and licence
+
+Copyright 2008 Google Inc.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+    * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+    * Neither the name of Google Inc. nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Code generated by the Protocol Buffer compiler is owned by the owner
+of the input file used when generating it.  This code is not
+standalone and requires a support library to be linked with it.  This
+support library is itself covered by the above license.
+
+libyuv — upstream copyright and licence
+
+Copyright 2011 The LibYuv Project Authors. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+  * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+
+  * Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in
+    the documentation and/or other materials provided with the
+    distribution.
+
+  * Neither the name of Google nor the names of its contributors may
+    be used to endorse or promote products derived from this software
+    without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+JSR305 — original upstream notice
+
+The JSR-305 reference implementation (lib/jsr305.jar) is
+distributed under the terms of the New BSD license:
+
+  https://opensource.org/license/bsd-3-clause
+
+See the JSR-305 home page for more information:
+
+  http://code.google.com/p/jsr-305/

@@ -3,8 +3,10 @@ package com.example.frogreader.reader
 import androidx.compose.ui.text.AnnotatedString
 import com.example.frogreader.data.model.TableCell
 import com.example.frogreader.data.model.TableRow
+import com.example.frogreader.data.model.PublisherRowLayout
 import com.example.frogreader.data.parser.InlineTextBuilder
 import com.example.frogreader.ui.reader.TableGrid
+import com.example.frogreader.ui.reader.tableColumnGeometry
 import com.example.frogreader.ui.reader.tableCellInlineContent
 import com.example.frogreader.ui.reader.tableCellMinIntrinsicWidthPx
 import com.example.frogreader.ui.reader.tableCellPlaceholders
@@ -15,6 +17,29 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TableGridTest {
+
+    @Test
+    fun `space between places star clusters at opposite edges without inflating text cells`() {
+        val geometry = tableColumnGeometry(intArrayOf(30, 40, 30), 300, PublisherRowLayout.SPACE_BETWEEN)
+        assertArrayEquals(intArrayOf(0, 130, 270, 300), geometry.offsetsPx)
+        assertEquals(300, geometry.widthPx)
+    }
+
+    @Test
+    fun `space around keeps symmetric outer gutters and deterministic integer gaps`() {
+        val geometry = tableColumnGeometry(intArrayOf(50, 50), 200, PublisherRowLayout.SPACE_AROUND)
+        assertArrayEquals(intArrayOf(25, 125, 200), geometry.offsetsPx)
+        assertEquals(200, geometry.widthPx)
+        val uneven = tableColumnGeometry(intArrayOf(20, 30, 40), 200, PublisherRowLayout.SPACE_AROUND)
+        assertArrayEquals(intArrayOf(18, 75, 141, 200), uneven.offsetsPx)
+    }
+
+    @Test
+    fun `natural publisher row retains its content width without gaps`() {
+        val geometry = tableColumnGeometry(intArrayOf(50, 30), 200, PublisherRowLayout.NATURAL)
+        assertArrayEquals(intArrayOf(0, 50, 80), geometry.offsetsPx)
+        assertEquals(80, geometry.widthPx)
+    }
 
     private fun cell(colSpan: Int = 1, rowSpan: Int = 1) =
         TableCell(AnnotatedString("x"), colSpan = colSpan, rowSpan = rowSpan)

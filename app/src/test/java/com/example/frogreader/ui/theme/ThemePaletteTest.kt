@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.lerp
 import com.example.frogreader.data.AppTheme
+import com.example.frogreader.data.model.QuoteColor
 import com.example.frogreader.ui.reader.readerColors
 import com.example.frogreader.ui.reader.contentsRowBackground
 import org.junit.Assert.assertEquals
@@ -15,6 +16,83 @@ import androidx.compose.ui.graphics.luminance
 import org.junit.Test
 
 class ThemePaletteTest {
+
+    @Test
+    fun `Midnight quote fills remain visible against the black reading page`() {
+        listOf(readerColors(AppTheme.OLED), readerColors(AppTheme.OLED, systemDarkBlueScheme)).forEach { colors ->
+            QuoteColor.entries.forEach { color ->
+                val fill = colors.quoteHighlight(color).compositeOver(colors.background)
+                assertContrast("Midnight highlight $color against page", fill, colors.background, minimum = 3f)
+                assertContrast("Midnight highlighted text $color", colors.text, fill)
+            }
+        }
+    }
+
+    @Test
+    fun `active selection has a stable readable fill across saved quote colors`() {
+        AppTheme.entries.forEach { theme ->
+            val colors = readerColors(theme)
+            assertEquals(1f, colors.selection.alpha)
+            QuoteColor.entries.forEach { color ->
+                val quote = colors.quoteHighlight(color).compositeOver(colors.background)
+                assertEquals(colors.selection, colors.selection.compositeOver(quote))
+                assertContrast("$theme active selection $color", colors.text, colors.selection)
+            }
+        }
+    }
+
+    @Test
+    fun `bright dynamic quote accents retain reading text contrast`() {
+        val colors = readerColors(AppTheme.OLED, systemDarkBlueScheme.copy(primary = Color.White))
+        assertContrast("bright dynamic quote", colors.text, colors.quoteHighlight.compositeOver(colors.background))
+        assertContrast("bright dynamic selection", colors.text, colors.selection)
+    }
+
+    @Test
+    fun `colored quotes keep text and active selections readable in every reading theme`() {
+        val palettes = AppTheme.entries.map { readerColors(it) } + listOf(
+            readerColors(AppTheme.WHITE, systemBlueScheme),
+            readerColors(AppTheme.OLED, systemDarkBlueScheme),
+        )
+        palettes.forEachIndexed { index, colors ->
+            QuoteColor.entries.forEach { color ->
+                val highlight = colors.quoteHighlight(color).compositeOver(colors.background)
+                assertContrast("quote $index $color", colors.text, highlight)
+                assertContrast("selection over quote $index $color", colors.text, colors.selection.compositeOver(highlight))
+                assertContrast("color swatch $index $color", colors.quoteInk(color), colors.chrome, minimum = 3f)
+            }
+        }
+    }
+
+    @Test
+    fun `completed book gold keeps list metadata and cover percentages readable`() {
+        val palettes = AppTheme.entries.map { theme ->
+            val scheme = colorSchemeFor(theme)
+            scheme to frogColorsFor(theme, scheme, dynamicColor = false)
+        } + listOf(
+            systemBlueScheme to dynamicFrogColors(systemBlueScheme, dark = false),
+            systemDarkBlueScheme to dynamicFrogColors(systemDarkBlueScheme, dark = true),
+        )
+        palettes.forEachIndexed { index, (scheme, frog) ->
+            assertEquals(1f, frog.completionFill.alpha)
+            assertEquals(1f, frog.completionInk.alpha)
+            assertContrast("completed title $index", scheme.onSurface, frog.completionFill)
+            assertContrast("completed author and format $index", scheme.onSurfaceVariant, frog.completionFill)
+            assertContrast("completed list percentage $index", frog.completionInk, frog.completionFill)
+            listOf(Color.Black, Color.White).forEach { cover ->
+                assertContrast("completed cover percentage $index", frog.completionInk, frog.pill.compositeOver(cover))
+            }
+        }
+    }
+
+    @Test
+    fun `muted page counters remain readable in every theme`() {
+        AppTheme.entries.forEach { theme ->
+            val colors = readerColors(theme)
+            assertEquals(1f, colors.pageCounterText.alpha)
+            assertContrast("$theme page counter", colors.pageCounterText, colors.background)
+        }
+    }
 
     private fun assertContrast(label: String, foreground: Color, background: Color, minimum: Float = 4.5f) {
         val painted = foreground.compositeOver(background)
@@ -26,7 +104,16 @@ class ThemePaletteTest {
 
     @Test
     fun `light foreground roles stay readable on every supporting surface`() {
-        val s = colorSchemeFor(AppTheme.WHITE)
+        assertForegroundRoles(AppTheme.WHITE)
+    }
+
+    @Test
+    fun `Beige foreground roles stay readable on every supporting surface`() {
+        assertForegroundRoles(AppTheme.SEPIA)
+    }
+
+    private fun assertForegroundRoles(theme: AppTheme) {
+        val s = colorSchemeFor(theme)
         val surfaces = listOf(s.surface, s.surfaceContainerLowest, s.surfaceContainerLow,
             s.surfaceContainer, s.surfaceContainerHigh, s.surfaceContainerHighest)
         surfaces.forEachIndexed { i, surface ->
@@ -111,13 +198,46 @@ class ThemePaletteTest {
         }
         val reader = readerColors(AppTheme.WHITE)
         assertTrue(reader.controlButton.luminance() - reader.control.luminance() >= 0.08f)
-        assertContrast("selected backup caption", s.onSurfaceVariant, s.primaryContainer)
+        assertContrast("selected backup caption", s.onPrimaryContainer, s.primaryContainer)
+    }
+
+    @Test
+    fun `backup selection text and checkmark stay readable in fixed and dynamic themes`() {
+        val schemes = AppTheme.entries.map(::colorSchemeFor) + listOf(systemBlueScheme, systemDarkBlueScheme)
+        schemes.forEachIndexed { index, scheme ->
+            assertContrast("backup selection title and captions $index", scheme.onPrimaryContainer, scheme.primaryContainer)
+            assertContrast("backup selection checkmark $index", scheme.onPrimaryContainer, scheme.primaryContainer, minimum = 3f)
+            assertContrast("backup unselected title $index", scheme.onSurface, scheme.surfaceContainerLowest)
+            assertContrast("backup unselected captions $index", scheme.onSurfaceVariant, scheme.surfaceContainerLowest)
+        }
     }
 
     @Test
     fun `reader colors compare by value to preserve decorated text caches`() {
         AppTheme.entries.forEach { theme ->
             assertEquals(readerColors(theme), readerColors(theme))
+        }
+    }
+
+    @Test
+    fun `reader bars preserve their theme surfaces and keep captions and actions readable`() {
+        AppTheme.entries.forEach { theme ->
+            val c = readerColors(theme)
+            val expected = if (theme == AppTheme.SEPIA) c.background else colorSchemeFor(theme).floatingSurface
+            assertEquals(expected, c.chrome)
+            assertContrast("$theme Classic title", c.onChrome, c.chrome)
+            assertContrast("$theme Classic caption", c.onChromeVariant, c.chrome)
+            assertContrast("$theme Classic action", c.accent, c.chrome)
+            assertContrast("$theme Classic progress", c.progress, c.track.compositeOver(c.chrome), minimum = 3f)
+        }
+        for ((theme, scheme) in listOf(
+            AppTheme.WHITE to systemBlueScheme,
+            AppTheme.OLED to systemDarkBlueScheme,
+        )) {
+            val c = readerColors(theme, scheme)
+            assertEquals(scheme.floatingSurface, c.chrome)
+            assertEquals(scheme.primary, c.accent)
+            assertContrast("$theme dynamic Classic action", c.accent, c.chrome)
         }
     }
 
@@ -254,8 +374,86 @@ class ThemePaletteTest {
         val beige = resolveAppColorScheme(AppTheme.SEPIA, systemBlueScheme)
         val colors = readerColors(AppTheme.SEPIA, chromeScheme = beige)
 
-        assertEquals(beige.surface, colors.background)
-        assertEquals(beige.surfaceContainerHigh, colors.chrome)
+        assertEquals(AppTheme.SEPIA.readingPageBackground, colors.background)
+        assertEquals(colors.background, colors.chrome)
         assertEquals(beige.primary, colors.accent)
+    }
+
+    @Test
+    fun `Beige surfaces keep a restrained warm cast and ordered levels`() {
+        val s = colorSchemeFor(AppTheme.SEPIA)
+        val surfaces = listOf(s.surfaceContainerLowest, s.surfaceContainerLow,
+            s.surfaceContainer, s.surfaceContainerHigh, s.surfaceContainerHighest)
+        assertTrue(surfaces.map { it.luminance() }.zipWithNext().all { (a, b) -> a > b })
+        assertTrue(s.surfaceContainerLowest.luminance() - s.surface.luminance() >= 0.08f)
+        (surfaces + s.surface).forEach { color ->
+            assertTrue("Beige must be warm: $color", color.red > color.green && color.green > color.blue)
+            assertTrue("Beige must not become ochre: $color", color.red - color.blue < 0.15f)
+        }
+        assertEquals(s.surfaceContainerLowest, s.floatingSurface)
+    }
+
+    @Test
+    fun `Beige chrome and list metadata contrast across layered backgrounds`() {
+        val s = colorSchemeFor(AppTheme.SEPIA)
+        val frog = frogColorsFor(AppTheme.SEPIA, s, dynamicColor = false)
+        listOf(frog.headerTop, frog.headerBottom).forEach { header ->
+            assertContrast("Beige header title", frog.ink, header)
+            assertContrast("Beige search hint", frog.ink2, frog.glass.compositeOver(header))
+        }
+        assertContrast("Beige inactive navigation", s.onSurfaceVariant, frog.nav)
+        assertContrast("Beige selected navigation", s.onPrimaryContainer, s.primaryContainer)
+        assertContrast("Beige cover badge", s.onSurface, frog.pill.compositeOver(Color.Black))
+        assertContrast("Beige shelf metadata", s.onSurfaceVariant, frog.folder.compositeOver(s.surface))
+        val progressRow = frog.folder.compositeOver(s.surfaceContainer)
+        assertContrast("Beige list title", s.onSurface, progressRow)
+        assertContrast("Beige list author and format", s.onSurfaceVariant, progressRow)
+        assertContrast("Beige list progress", s.primary, progressRow)
+        assertTrue("Progress wash must not dominate the text", frog.folder.alpha <= 0.10f)
+        assertEquals(s.surfaceContainerLowest, frog.nav)
+    }
+
+    @Test
+    fun `Beige reader preserves paper and separates enabled controls`() {
+        val c = readerColors(AppTheme.SEPIA)
+        assertEquals(Color(0xFFF3E7D2), c.background)
+        assertEquals("Beige panels must blend into the reading paper", c.background, c.chrome)
+        assertEquals("Beige button faces must match the paper", c.background, c.controlButton)
+        assertTrue("Insets must remain darker than the paper", c.control.luminance() < c.chrome.luminance())
+        assertTrue("Nested insets must remain darker than their group", c.controlStrong.luminance() < c.control.luminance())
+        assertContrast("Beige page", c.text, c.background)
+        assertContrast("Beige page caption", c.secondaryText, c.background)
+        val quote = c.quoteHighlight.compositeOver(c.background)
+        assertContrast("Beige saved quote", c.text, quote)
+        assertContrast("Beige selection", c.text, c.selection.compositeOver(c.background))
+        assertContrast("Beige selection over quote", c.text, c.selection.compositeOver(quote))
+        listOf(c.chrome, c.control, c.controlStrong, c.controlButton).forEach { surface ->
+            assertEquals(1f, surface.alpha)
+            assertContrast("Beige control value", c.onChrome, surface)
+            assertContrast("Beige control caption", c.onChromeVariant, surface)
+            assertContrast("Beige control action", c.accent, surface)
+        }
+        assertTrue(c.controlButton.luminance() - c.control.luminance() >= 0.08f)
+        assertContrast("Beige selected option", c.onAccent, c.accent)
+        assertContrast("Beige progress track", c.progress, c.track, minimum = 3f)
+    }
+
+    @Test
+    fun `selected reader settings use filled actions with readable labels in every theme`() {
+        val palettes = AppTheme.entries.map(::readerColors) + listOf(
+            readerColors(AppTheme.WHITE, systemBlueScheme),
+            readerColors(AppTheme.OLED, systemDarkBlueScheme),
+        )
+        palettes.forEach { c ->
+            assertContrast("selected setting label", c.onSelectedControl, c.selectedControl)
+            assertContrast("selected setting against group", c.selectedControl, c.control.compositeOver(c.chrome), minimum = 3f)
+            assertEquals("Selected settings share the action fill", c.accent, c.selectedControl)
+            assertEquals("Selected settings share the action foreground", c.onAccent, c.onSelectedControl)
+            assertEquals("Filled selections need no extra outline", Color.Transparent, c.selectedControlBorder)
+            assertContrast("progress fill", c.progress, c.track.compositeOver(c.chrome), minimum = 3f)
+            assertContrast("progress ticks", c.onProgress, c.progress)
+        }
+        val beige = readerColors(AppTheme.SEPIA)
+        assertEquals(1f, beige.selectedControl.alpha)
     }
 }

@@ -1,6 +1,5 @@
 package com.example.frogreader.ui.reader
 
-import android.graphics.BitmapFactory
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.unit.Constraints
@@ -63,7 +62,7 @@ class BookPage(
  * Bumped whenever pagination decisions or parser output that affects layout
  * change — stale disk caches then miss on the key and are recomputed.
  */
-const val LAYOUT_ENGINE_VERSION = 13
+const val LAYOUT_ENGINE_VERSION = 17
 
 class PaginationSpec(
     val contentWidthPx: Int,
@@ -84,7 +83,7 @@ class PaginationSpec(
             "$fontSize | ${settings.lineHeight} | " +
             "density=${density.density.toBits()}/${density.fontScale.toBits()} | " +
             "${settings.font} | ${settings.customFontPath} | " +
-            "${settings.justify} | ${settings.hyphenation} | centerHeadings=${settings.centerHeadings} | " +
+            "${settings.justify} | ${settings.hyphenation} | " +
             "${settings.startChaptersOnNewPage} | ${settings.hideFootnotes} | " +
             "${settings.bookStyles} | ${settings.dropCaps} | lang=$language | " +
             "embeddedFonts=$embeddedFontSignature"
@@ -135,6 +134,9 @@ suspend fun paginateBook(
     with(spec.density) {
         val maxImageHeightPx = ReaderMetrics.maxImageHeight.roundToPx()
         val fontSizePx = spec.fontSize.sp.toPx()
+        val inlineWidths = PublisherInlineWidthResolver(
+            measurer, spec.density, spec.settings, spec.fontSize, spec.bookFonts, spec.language,
+        )
         val publisherSideBoxPlans = HashMap<Int, SideBoxSpec?>()
 
         fun publisherSideBoxPlan(targetIndex: Int): SideBoxSpec? {
@@ -156,6 +158,8 @@ suspend fun paginateBook(
                     partStartsElement = true,
                     partEndsElement = true,
                     enabled = true,
+                    inlineWidths = inlineWidths,
+                    viewportHeightPx = spec.contentHeightPx,
                 )
                 val contentWidthDp = geometry.contentWidthPx.toDp()
                 val (startInset, endInset) = ReaderMetrics.horizontalInsets(
@@ -175,6 +179,7 @@ suspend fun paginateBook(
                     language = spec.language,
                     widthPx = widthPx,
                     publisherFloat = publisherFloat,
+                    viewportHeightPx = spec.contentHeightPx,
                 )
             }
             publisherSideBoxPlans[targetIndex] = plan
@@ -197,6 +202,8 @@ suspend fun paginateBook(
                     partStartsElement = true,
                     partEndsElement = true,
                     enabled = true,
+                    inlineWidths = inlineWidths,
+                    viewportHeightPx = spec.contentHeightPx,
                 )
                 val (top, bottom) = ReaderMetrics.verticalPaddings(
                     target.element,
@@ -253,6 +260,8 @@ suspend fun paginateBook(
                     partStartsElement = true,
                     partEndsElement = true,
                     enabled = spec.settings.bookStyles,
+                    inlineWidths = inlineWidths,
+                    viewportHeightPx = spec.contentHeightPx,
                 )
                 when (val el = next.element) {
                     is ContentElement.Table -> {
@@ -274,6 +283,7 @@ suspend fun paginateBook(
                             contentWidthPx = nextBoxes.contentWidthPx,
                             fontSizePx = fontSizePx,
                             maxHeightPx = maxImageHeightPx,
+                            viewportHeightPx = spec.contentHeightPx.takeIf { spec.settings.bookStyles },
                             publisherOwnsWidth = publisherBoxesOwnImageWidth(
                                 next.publisherBoxes,
                                 spec.settings.bookStyles,
@@ -290,7 +300,6 @@ suspend fun paginateBook(
                         val text = when (el) {
                             is ContentElement.Paragraph -> el.text
                             is ContentElement.Heading -> el.styledText
-                            else -> return 0
                         }
                         if (text.text.isBlank()) {
                             j++
@@ -303,7 +312,7 @@ suspend fun paginateBook(
                             sInset.roundToPx() - eInset.roundToPx())
                             .coerceAtLeast(1)
                         val bidiText = BidiLayoutText.of(text)
-                        val nextLayout = measurer.measure(
+                        val nextLayout = measurer.measureReader(
                             text = bidiText.display,
                             style = ReaderMetrics.textStyle(
                                 el, spec.settings, spec.fontSize,
@@ -311,7 +320,9 @@ suspend fun paginateBook(
                                 language = spec.language,
                             ),
                             constraints = Constraints(maxWidth = w),
-                            placeholders = inlineImagePlaceholders(bidiText.display),
+                            density = spec.density,
+                            bookFonts = spec.bookFonts,
+                            publisherStyles = spec.settings.bookStyles,
                         )
                         // A following heading moves whole; a paragraph must
                         // contribute at least its first two lines.
@@ -331,6 +342,9 @@ suspend fun paginateBook(
 
         for (index in fromIndex.coerceAtLeast(0) until toIndex.coerceAtMost(items.size)) {
             val item = items[index]
+            val itemFontSize = inlineWidths.fittedFontSize(item.publisherBoxes, spec.contentWidthPx)
+            val itemFontSizePx = itemFontSize.sp.toPx()
+            val itemInlineWidths = inlineWidths.atFontSize(itemFontSize)
             if (index % 32 == 0) yield()
 
             // Optionally start every chapter on a fresh page.
@@ -362,6 +376,16 @@ suspend fun paginateBook(
             }
 
             val element = item.element
+            val forcedBoxBreakBefore = item.publisherBoxes.any { box ->
+                box.startsAtElement && box.style.pageBreakBefore
+            }
+            val forcedBoxBreakAfterPrevious = items.getOrNull(index - 1)
+                ?.publisherBoxes?.any { box ->
+                    box.endsAtElement && box.style.pageBreakAfter
+                } == true
+            if (parts.isNotEmpty() && (forcedBoxBreakBefore || forcedBoxBreakAfterPrevious)) {
+                closePage()
+            }
             // The book's own forced break (CSS page-break-before: always).
             val elementBlock = when (element) {
                 is ContentElement.Paragraph -> element.block
@@ -373,15 +397,24 @@ suspend fun paginateBook(
             val boxGeometry = publisherBoxGeometry(
                 boxes = item.publisherBoxes,
                 columnWidthPx = spec.contentWidthPx,
-                fontSizePx = fontSizePx,
+                fontSizePx = itemFontSizePx,
                 partStartsElement = true,
                 partEndsElement = true,
                 enabled = spec.settings.bookStyles,
+                inlineWidths = itemInlineWidths,
+                viewportHeightPx = spec.contentHeightPx,
             )
+            // Short authored full-viewport flex pages begin as one group.
+            // Oversized contents receive no centering spare and retain flow.
+            if (parts.isNotEmpty() && spec.settings.bookStyles &&
+                item.publisherBoxes.any { it.startsAtElement &&
+                    it.style.centerContentVertically && it.inlineContent != null } &&
+                boxGeometry.topInsetPx > 0
+            ) closePage()
             val boxContentWidthDp = boxGeometry.contentWidthPx.toDp()
             val (vTop, vBottom) = ReaderMetrics.verticalPaddings(
                 element,
-                spec.fontSize,
+                itemFontSize,
                 spec.settings.bookStyles,
             )
             val baseVPaddingPx = vTop.roundToPx() + vBottom.roundToPx()
@@ -395,20 +428,22 @@ suspend fun paginateBook(
                     if (fullText.text.isBlank()) continue
 
                     val (startInset, endInset) =
-                        ReaderMetrics.horizontalInsets(element, boxContentWidthDp, spec.fontSize)
+                        ReaderMetrics.horizontalInsets(element, boxContentWidthDp, itemFontSize)
                     val widthPx =
                         boxGeometry.contentWidthPx -
                             startInset.roundToPx() - endInset.roundToPx()
                     val fullBidi = BidiLayoutText.of(fullText)
-                    val layout = measurer.measure(
+                    val layout = measurer.measureReader(
                         text = fullBidi.display,
                         style = ReaderMetrics.textStyle(
-                            element, spec.settings, spec.fontSize,
+                            element, spec.settings, itemFontSize,
                             bookFonts = spec.bookFonts,
                             language = spec.language,
-                        ),
+                        ).withPublisherHangingIndent(boxGeometry, spec.density, true),
                         constraints = Constraints(maxWidth = widthPx.coerceAtLeast(1)),
-                        placeholders = inlineImagePlaceholders(fullBidi.display),
+                        density = spec.density,
+                        bookFonts = spec.bookFonts,
+                        publisherStyles = spec.settings.bookStyles,
                     )
 
                     // Headings: never split across pages, and never strand at
@@ -506,7 +541,7 @@ suspend fun paginateBook(
                         var sideBox = when {
                             item.publisherFloat == null -> planSideBox(
                                 element, measurer, spec.density, spec.settings,
-                                spec.fontSize, spec.bookFonts, spec.language, widthPx,
+                                itemFontSize, spec.bookFonts, spec.language, widthPx,
                             )
 
                             index in normalFlowFloatTargets -> null
@@ -571,16 +606,18 @@ suspend fun paginateBook(
                             firstPart = false
                             packedText = fullText.subSequence(packBase, fullText.length)
                             packedBidi = BidiLayoutText.of(packedText)
-                            packLayout = measurer.measure(
+                            packLayout = measurer.measureReader(
                                 text = packedBidi.display,
                                 style = ReaderMetrics.textStyle(
-                                    element, spec.settings, spec.fontSize,
+                                    element, spec.settings, itemFontSize,
                                     isParagraphStart = false,
                                     bookFonts = spec.bookFonts,
                                     language = spec.language,
-                                ),
+                                ).withPublisherHangingIndent(boxGeometry, spec.density, false),
                                 constraints = Constraints(maxWidth = widthPx.coerceAtLeast(1)),
-                                placeholders = inlineImagePlaceholders(packedBidi.display),
+                                density = spec.density,
+                                bookFonts = spec.bookFonts,
+                                publisherStyles = spec.settings.bookStyles,
                             )
                         }
                     }
@@ -617,11 +654,11 @@ suspend fun paginateBook(
                         // the height on screen — and drop trailing lines until
                         // it truly fits, or the last line gets clipped.
                         val fragmentStyle = ReaderMetrics.textStyle(
-                            element, spec.settings, spec.fontSize,
+                            element, spec.settings, itemFontSize,
                             isParagraphStart = firstPart,
                             bookFonts = spec.bookFonts,
                             language = spec.language,
-                        )
+                        ).withPublisherHangingIndent(boxGeometry, spec.density, firstPart)
                         var endChar: Int
                         var fragmentHeight: Int
                         while (true) {
@@ -640,17 +677,20 @@ suspend fun paginateBook(
                                     )
                                 }
                             }
+                            endChar = readerAtomicBreakOffset(packedText, endChar, cursor)
                             fragmentHeight = if (cursor == 0 && lastLine) {
                                 // Whole paragraph: the big layout IS standalone.
                                 ceil(packLayout.getLineBottom(endLine)).toInt()
                             } else {
                                 val fragment = packedText.subSequence(cursor, endChar)
                                 val bidiFragment = BidiLayoutText.of(fragment)
-                                measurer.measure(
+                                measurer.measureReader(
                                     text = bidiFragment.display,
                                     style = fragmentStyle,
                                     constraints = Constraints(maxWidth = widthPx.coerceAtLeast(1)),
-                                    placeholders = inlineImagePlaceholders(bidiFragment.display),
+                                    density = spec.density,
+                                    bookFonts = spec.bookFonts,
+                                    publisherStyles = spec.settings.bookStyles,
                                 ).size.height
                             }
                             if (fragmentHeight <= remaining || endLine <= startLine) break
@@ -690,19 +730,20 @@ suspend fun paginateBook(
                                     retreatToWordBoundary(raw, cursor, endChar)
                                         .takeIf { it > cursor }
                                         ?.let { endChar = it }
+                                    endChar = readerAtomicBreakOffset(packedText, endChar, cursor)
                                     // Fewer trailing lines only shrink the
                                     // fragment — it still fits the page.
                                     val fragment = packedText.subSequence(cursor, endChar)
                                     val bidiFragment = BidiLayoutText.of(fragment)
-                                    fragmentHeight = measurer.measure(
+                                    fragmentHeight = measurer.measureReader(
                                         text = bidiFragment.display,
                                         style = fragmentStyle,
                                         constraints = Constraints(
                                             maxWidth = widthPx.coerceAtLeast(1),
                                         ),
-                                        placeholders = inlineImagePlaceholders(
-                                            bidiFragment.display,
-                                        ),
+                                        density = spec.density,
+                                        bookFonts = spec.bookFonts,
+                                        publisherStyles = spec.settings.bookStyles,
                                     ).size.height
                                 }
 
@@ -733,6 +774,7 @@ suspend fun paginateBook(
                                 publisherBoxes = item.publisherBoxes,
                                 publisherStartsElement = publisherStartsElement,
                                 publisherEndsElement = publisherEndsElement,
+                                allowsVerticalScroll = fragmentHeight + fragmentPadding > spec.contentHeightPx,
                             ),
                             heightPx = fragmentHeight + fragmentPadding,
                             index = index,
@@ -749,8 +791,9 @@ suspend fun paginateBook(
                     val heightPx = imageHeightPx(
                         element = element,
                         contentWidthPx = boxGeometry.contentWidthPx,
-                        fontSizePx = fontSizePx,
+                        fontSizePx = itemFontSizePx,
                         maxHeightPx = maxImageHeightPx,
+                        viewportHeightPx = spec.contentHeightPx.takeIf { spec.settings.bookStyles },
                         publisherOwnsWidth = publisherBoxesOwnImageWidth(
                             item.publisherBoxes,
                             spec.settings.bookStyles,
@@ -800,8 +843,12 @@ suspend fun paginateBook(
                                 box.style.borderTop != null || box.style.borderRight != null ||
                                 box.style.borderBottom != null || box.style.borderLeft != null
                         }
-                    if (parts.isNotEmpty() || hasPublisherSurface) {
-                        val total = ReaderMetrics.spacerHeight(element, spec.fontSize).roundToPx() +
+                    val hasIntentionalPublisherGap = item.publisherBoxes.any { box ->
+                        (spec.settings.bookStyles && (box.style.minHeightEm ?: 0f) > 0f) ||
+                            box.style.pageBreakBefore || box.style.pageBreakAfter
+                    }
+                    if (parts.isNotEmpty() || hasPublisherSurface || hasIntentionalPublisherGap) {
+                        val total = ReaderMetrics.spacerHeight(element, itemFontSize).roundToPx() +
                             boxGeometry.topInsetPx + boxGeometry.bottomInsetPx
                         if (total > spec.contentHeightPx - usedPx && parts.isNotEmpty()) {
                             closePage()
@@ -809,7 +856,7 @@ suspend fun paginateBook(
                         // An ordinary blank line disappears after moving to a
                         // page boundary. A decorated spacer is real publisher
                         // content and must be retried on that fresh page.
-                        if (parts.isNotEmpty() || hasPublisherSurface) {
+                        if (parts.isNotEmpty() || hasPublisherSurface || hasIntentionalPublisherGap) {
                             addPart(
                                 PagePart(
                                     itemIndex = index,
@@ -827,7 +874,7 @@ suspend fun paginateBook(
                     if (element.rows.isEmpty()) continue
                     val layout = measureTableLayout(
                         element, measurer, spec.density, spec.settings,
-                        spec.fontSize, boxGeometry.contentWidthPx,
+                        itemFontSize, boxGeometry.contentWidthPx,
                         spec.language, spec.bookFonts,
                     )
                     val avoidsBreak = spec.settings.bookStyles &&
@@ -1016,21 +1063,38 @@ internal fun imageHeightPx(
     fontSizePx: Float,
     maxHeightPx: Int,
     publisherOwnsWidth: Boolean = false,
+    viewportHeightPx: Int? = null,
 ): Int {
     val aspect = imageAspectRatio(element.path) ?: 1.4f
+    val authoredViewportLimit = element.maxHeightViewportFrac
+        ?.takeIf { it.isFinite() && it > 0f }
+        ?.let { fraction -> viewportHeightPx?.let { (it * fraction).roundToInt() } }
+    val authoredEmLimit = element.maxHeightEm
+        ?.takeIf { it.isFinite() && it > 0f }
+        ?.let { (it * fontSizePx).roundToInt() }
+    val authoredLimit = authoredViewportLimit != null || authoredEmLimit != null
+    val readerLimit = if (authoredLimit && viewportHeightPx != null) {
+        viewportHeightPx
+    } else maxHeightPx
+    val heightLimit = minOf(
+        readerLimit,
+        authoredViewportLimit ?: Int.MAX_VALUE,
+        authoredEmLimit ?: Int.MAX_VALUE,
+    ).coerceAtLeast(1)
     element.heightEm?.let { heightEm ->
         val wanted = (heightEm * fontSizePx).roundToInt()
-        // Still never wider than the column.
+        // An explicit height must also respect authored width caps.
+        val availableWidth = imageWidthPx(element, contentWidthPx, fontSizePx, publisherOwnsWidth)
         val widthAtWanted = wanted / aspect
-        val fitted = if (widthAtWanted > contentWidthPx) {
-            (contentWidthPx * aspect).roundToInt()
+        val fitted = if (widthAtWanted > availableWidth) {
+            (availableWidth * aspect).roundToInt()
         } else {
             wanted
         }
-        return fitted.coerceIn(1, maxHeightPx)
+        return fitted.coerceIn(1, heightLimit)
     }
     val width = imageWidthPx(element, contentWidthPx, fontSizePx, publisherOwnsWidth)
-    return min((width * aspect).roundToInt(), maxHeightPx).coerceAtLeast(1)
+    return min((width * aspect).roundToInt(), heightLimit).coerceAtLeast(1)
 }
 
 /**
@@ -1052,56 +1116,20 @@ internal fun imageWidthPx(
         element.widthEm != null -> element.widthEm.coerceAtLeast(0.05f) * fontSizePx
         else -> available.toFloat()
     }
-    return requested.roundToInt().coerceIn(1, available)
+    val maximumWidth = listOfNotNull(
+        element.maxWidthFrac?.takeIf { it.isFinite() && it > 0f }?.let { available * it },
+        element.maxWidthEm?.takeIf { it.isFinite() && it > 0f }?.let { fontSizePx * it },
+    ).minOrNull()
+    return minOf(requested, maximumWidth ?: available.toFloat())
+        .roundToInt().coerceIn(1, available)
 }
 
 internal fun publisherBoxesOwnImageWidth(
     boxes: List<ReaderPublisherBox>,
     enabled: Boolean,
 ): Boolean = enabled && boxes.any { box ->
-    box.style.widthFrac != null || box.style.widthEm != null
-}
-
-internal fun imageAspectRatio(path: String): Float? = runCatching {
-    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(path, options)
-    if (options.outWidth > 0 && options.outHeight > 0) {
-        options.outHeight.toFloat() / options.outWidth
-    } else {
-        // BitmapFactory cannot read SVG — parse its declared geometry.
-        svgFileAspectRatio(path)
-    }
-}.getOrNull()
-
-private fun svgFileAspectRatio(path: String): Float? {
-    if (!path.endsWith(".svg", ignoreCase = true)) return null
-    val head = runCatching { java.io.File(path).readText().take(4096) }.getOrNull()
-        ?: return null
-    return svgAspectRatio(head)
-}
-
-/** height/width from SVG width/height attributes or the viewBox (pure). */
-internal fun svgAspectRatio(markup: String): Float? {
-    fun length(name: String): Float? {
-        val raw = Regex("""(?i)\b$name\s*=\s*["']([^"']+)["']""")
-            .find(markup)?.groupValues?.get(1)?.trim() ?: return null
-        if ('%' in raw) return null
-        return Regex("""\d+(\.\d+)?""").find(raw)?.value?.toFloatOrNull()
-            ?.takeIf { it > 0f }
-    }
-
-    val width = length("width")
-    val height = length("height")
-    if (width != null && height != null) return height / width
-
-    val viewBox = Regex("""(?i)viewBox\s*=\s*["']([^"']+)["']""")
-        .find(markup)?.groupValues?.get(1)
-        ?.trim()?.split(Regex("""[\s,]+"""))
-        ?.mapNotNull { it.toFloatOrNull() }
-    if (viewBox != null && viewBox.size == 4 && viewBox[2] > 0f && viewBox[3] > 0f) {
-        return viewBox[3] / viewBox[2]
-    }
-    return null
+    box.style.widthFrac != null || box.style.widthEm != null ||
+        box.style.maxWidthFrac != null || box.style.maxWidthEm != null
 }
 
 /** Moves [end] back to the last whitespace so continuations start at a word. */

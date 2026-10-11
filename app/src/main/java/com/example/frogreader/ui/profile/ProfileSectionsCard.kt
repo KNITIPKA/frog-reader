@@ -1,6 +1,5 @@
 package com.example.frogreader.ui.profile
 
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.clickable
@@ -26,7 +25,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -45,6 +43,14 @@ private val CardVerticalPadding = 2.dp
 private val DividerThickness = 1.dp
 private val RowHorizontalPadding = 14.dp
 private val RowGap = 10.dp
+
+/** Follow the space released by the ruler on every frame, without a second animation. */
+internal fun profileSectionTileSize(rowHeight: Dp, compact: Boolean): Dp {
+    val baseHeight = if (compact) 60.dp else 68.dp
+    val baseSize = if (compact) 34.dp else 38.dp
+    val fraction = ((rowHeight - baseHeight) / (84.dp - baseHeight)).coerceIn(0f, 1f)
+    return baseSize + (44.dp - baseSize) * fraction
+}
 
 @Composable
 internal fun ProfileSectionsCard(
@@ -69,16 +75,9 @@ internal fun ProfileSectionsCard(
             val baseRowHeight = if (compact) 60.dp else 68.dp
             val sharedHeight = (minHeight - CardVerticalPadding * 2 - DividerThickness * 2) / 3
             val rowHeight = maxOf(baseRowHeight, sharedHeight)
-            // Animated, so opening the goal ruler (which takes height from these
-            // rows) resizes the icons smoothly instead of snapping between sizes.
-            val tileSize by animateDpAsState(
-                targetValue = when {
-                    rowHeight >= 84.dp -> 44.dp
-                    compact -> 34.dp
-                    else -> 38.dp
-                },
-                label = "sectionTileSize",
-            )
+            // The ruler already animates this measured height. Derive every icon
+            // dimension and divider inset from it so they move with the rows.
+            val tileSize = profileSectionTileSize(rowHeight, compact)
             Column(Modifier.padding(vertical = CardVerticalPadding)) {
                 ProfileSectionRow(
                     icon = Icons.Rounded.FormatQuote,

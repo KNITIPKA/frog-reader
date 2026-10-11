@@ -87,7 +87,7 @@ data class UserBookData(
     val readingQueueNote: String? = null,
     /**
      * This book's own reading settings (font, size, margins, mode…).
-     * Null = the book still follows the app-wide "last used" settings.
+     * Null = use the application's code defaults until the first open pins them.
      */
     val readerSettings: com.example.frogreader.data.ReaderSettings? = null,
     override val updatedAtMillis: Long = 0L,

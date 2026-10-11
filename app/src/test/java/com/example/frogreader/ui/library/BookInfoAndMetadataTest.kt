@@ -363,4 +363,92 @@ class BookInfoAndMetadataTest {
         assertEquals("application/x-mobipocket-ebook", shared.mimeType)
         assertEquals("Corrupt Mobi.mobi", shared.file.name)
     }
+
+    @Test
+    fun `inline review save updates the current reading without rewriting the ebook`() = kotlinx.coroutines.runBlocking {
+        val repository = repository()
+        val book = addBook(repository)
+        repository.markStarted(book.id)
+        val originalBytes = repository.bookFileFor(book)!!.readBytes()
+        val model = BookMetadataViewModel(mockApp(repository), book.id, SavedStateHandle())
+        withTimeout(5000) { model.state.first { !it.loading } }
+        model.changeReview(9, " A thoughtful review ")
+        assertFalse(model.state.value.metadataDirty)
+        assertTrue(model.state.value.canSave)
+        model.save()
+        val saved = withTimeout(5000) { model.state.first { it.savedGeneration == 1 || it.error != null } }
+        assertNull(saved.error)
+        assertFalse(saved.dirty)
+        assertEquals(book.fileName, repository.bookById(book.id)!!.fileName)
+        assertArrayEquals(originalBytes, repository.bookFileFor(book)!!.readBytes())
+        assertEquals(9, repository.bookById(book.id)!!.ratingHalfStars)
+        assertEquals("A thoughtful review", repository.readingLogEntryFor(book.id)!!.review)
+        assertEquals(9, repository.readingLogEntryFor(book.id)!!.ratingHalfStars)
+    }
+
+    @Test
+    fun `cleared rating and unfinished metadata survive recreation and discard restores both`() = kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+        val repository = repository()
+        val book = addBook(repository)
+        repository.saveBookReview(book.id, 8, "Original review")
+        val handle = SavedStateHandle()
+        val model = BookMetadataViewModel(mockApp(repository), book.id, handle)
+        withTimeout(5000) { model.state.first { !it.loading } }
+        model.change(model.state.value.draft!!.copy(title = "Unfinished title"))
+        model.changeReview(null, "Unfinished review")
+        val restored = BookMetadataViewModel(mockApp(repository), book.id,
+            SavedStateHandle(handle.keys().associateWith { handle.get<Any?>(it) }))
+        val state = withTimeout(5000) { restored.state.first { !it.loading } }
+        assertEquals("Unfinished title", state.draft!!.title)
+        assertNull(state.ratingHalfStars)
+        assertEquals(8, state.originalRatingHalfStars)
+        assertEquals("Unfinished review", state.review)
+        restored.discardChanges()
+        assertEquals(book.title, restored.state.value.draft!!.title)
+        assertEquals(8, restored.state.value.ratingHalfStars)
+        assertEquals("Original review", restored.state.value.review)
+        assertFalse(restored.state.value.dirty)
+        assertEquals("Original review", repository.bookById(book.id)!!.review)
+    }
+
+    @Test
+    fun `review failure after a metadata save retains only the remaining changes for retry`() = kotlinx.coroutines.runBlocking {
+        val repository = spy(repository())
+        val book = addBook(repository)
+        val model = BookMetadataViewModel(mockApp(repository), book.id, SavedStateHandle())
+        withTimeout(5000) { model.state.first { !it.loading } }
+        model.change(model.state.value.draft!!.copy(title = "Saved new title"))
+        model.changeReview(7, "New review")
+        doThrow(IllegalStateException("Disk unavailable")).`when`(repository).saveBookReview(book.id, 7, "New review")
+        model.save()
+        val failed = withTimeout(5000) { model.state.first { it.error != null } }
+        assertFalse(failed.metadataDirty)
+        assertTrue(failed.reviewDirty)
+        assertEquals("Saved new title", failed.original!!.title)
+        assertTrue(failed.canSave)
+        val savedFile = repository.bookById(book.id)!!.fileName
+        assertNotEquals(book.fileName, savedFile)
+        doCallRealMethod().`when`(repository).saveBookReview(book.id, 7, "New review")
+        model.save()
+        val saved = withTimeout(5000) { model.state.first { it.savedGeneration == 1 || it.error != null } }
+        assertNull(saved.error)
+        assertFalse(saved.dirty)
+        assertEquals(savedFile, repository.bookById(book.id)!!.fileName)
+        assertEquals("New review", repository.bookById(book.id)!!.review)
+        assertEquals(7, repository.bookById(book.id)!!.ratingHalfStars)
+    }
+
+    @Test
+    fun `reentering a clean editor reads the latest personal review`() = kotlinx.coroutines.runBlocking {
+        val repository = repository()
+        val book = addBook(repository)
+        val model = BookMetadataViewModel(mockApp(repository), book.id, SavedStateHandle())
+        withTimeout(5000) { model.state.first { !it.loading } }
+        repository.saveBookReview(book.id, 6, "Changed elsewhere")
+        model.startEditing()
+        val refreshed = withTimeout(5000) { model.state.first { !it.loading } }
+        assertEquals(6, refreshed.ratingHalfStars)
+        assertEquals("Changed elsewhere", refreshed.review)
+        assertFalse(refreshed.dirty)
+    }
 }

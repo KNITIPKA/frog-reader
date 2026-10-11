@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import com.example.frogreader.data.AppTheme
+import com.example.frogreader.data.model.QuoteColor
 
 /**
  * App-wide theme: Material 3 Expressive with the springy motion scheme.
@@ -27,7 +28,8 @@ import com.example.frogreader.data.AppTheme
  * The fixed Light palette uses clean neutral surfaces and a forest accent; see
  * docs/light-theme.md for role assignments. On Android 12+, Material You can own the full
  * Material palette, including neutral surfaces and backgrounds, for Light and
- * Midnight. Beige is deliberately excluded and always keeps its warm palette.
+ * Midnight. Beige is deliberately excluded and always keeps its warm palette;
+ * see docs/beige-theme.md for its component and contrast contract.
  *
  * Hex literals live ONLY in this file — composables read
  * `MaterialTheme.colorScheme.*` or [LocalFrogColors].
@@ -126,6 +128,26 @@ val AppTheme.swatch: Pair<Color, Color>
 val ColorScheme.floatingSurface: Color
     get() = if (surface.luminance() > 0.5f) surfaceContainerLowest else surfaceContainerHigh
 
+/** Saved highlight colors share named inks across the page, picker and quote cards. */
+fun ColorScheme.quoteInk(color: QuoteColor): Color {
+    val dark = surface.luminance() < 0.5f
+    return when (color) {
+        QuoteColor.DEFAULT -> primary
+        QuoteColor.BLUE -> if (dark) Color(0xFF8EBBE8) else Color(0xFF28689D)
+        QuoteColor.ROSE -> if (dark) Color(0xFFEAA0B6) else Color(0xFFA34564)
+        QuoteColor.AMBER -> if (dark) Color(0xFFE6BD72) else Color(0xFF976B13)
+        QuoteColor.VIOLET -> if (dark) Color(0xFFC3ADE8) else Color(0xFF7754A2)
+    }
+}
+
+/** Reading paper is stable even when app surfaces are redesigned. */
+val AppTheme.readingPageBackground: Color
+    get() = when (this) {
+        AppTheme.WHITE -> Color.White
+        AppTheme.SEPIA -> Color(0xFFF3E7D2)
+        AppTheme.OLED -> Color.Black
+    }
+
 /**
  * Text laid over cover artwork, and the veil under it. The same in every
  * palette: what they sit on is the picture, not the theme, so a light theme's
@@ -156,10 +178,9 @@ data class ProfileLandscapeColors(
 )
 
 /**
- * Colors the mock uses that have no role in [ColorScheme]. Kept in a
- * CompositionLocal instead of being derived from `colorScheme` because several
- * of them are not derivable: Beige's `folder` is an umber wash, not the primary
- * at low alpha, and its `chip` sits a shade off `surfaceContainerHigh`.
+ * App-specific surfaces and decoration. Controls derive from the Material
+ * roles; only scoped artwork and the header gradient need separate colors.
+ * Read through [LocalFrogColors] so new components inherit the active theme.
  */
 @Immutable
 data class FrogExtraColors(
@@ -180,6 +201,10 @@ data class FrogExtraColors(
     val nav: Color,
     /** Shelf background, and the progress fill of a list row. */
     val folder: Color,
+    /** Soft gold background reserved for completed books in the library list. */
+    val completionFill: Color,
+    /** Gold percentage text, readable on [completionFill] and cover [pill] badges. */
+    val completionInk: Color,
     /** Text on the colored header. */
     val ink: Color,
     /** Secondary text and icons on the colored header. */
@@ -190,6 +215,12 @@ data class FrogExtraColors(
     val onProfile: Color,
     val profileLandscape: ProfileLandscapeColors,
 )
+
+// Completion is a semantic gold accent, including with Material You enabled.
+private val LightCompletionFill = Color(0xFFF3E5BE)
+private val LightCompletionInk = Color(0xFF805B10)
+private val DarkCompletionFill = Color(0xFF342B16)
+private val DarkCompletionInk = Color(0xFFE8C568)
 
 // Lazy because the shared Material palette is declared below these extra roles.
 private val LightExtraColors by lazy {
@@ -204,6 +235,8 @@ private val LightExtraColors by lazy {
         lift = scheme.surface.copy(alpha = 0.82f),
         nav = scheme.surfaceContainerLowest,
         folder = scheme.primary.copy(alpha = 0.08f),
+        completionFill = LightCompletionFill,
+        completionInk = LightCompletionInk,
         ink = scheme.onSurface,
         ink2 = scheme.onSurfaceVariant,
         profileTop = Color(0xFFE5EBEA),
@@ -226,33 +259,41 @@ private val LightExtraColors by lazy {
     )
 }
 
-private val BeigeExtraColors = FrogExtraColors(
-    headerTop = Color(0xFFE7D3AC),
-    headerBottom = Color(0xFFF1E4CC),
-    glass = Color.White.copy(alpha = 0.50f),
-    chip = Color(0xFFEBDFC4),
-    pill = Color(0xFFFBF4E6).copy(alpha = 0.94f),
-    pill60 = Color(0xFFFBF4E6).copy(alpha = 0.60f),
-    lift = Color(0xFFFBF4E6).copy(alpha = 0.82f),
-    nav = Color(0xFFE9DBC0),
-    folder = Color(0xFFBEA06E).copy(alpha = 0.40f),
-    ink = Color(0xFF2E2416),
-    ink2 = Color(0xFF4C3E29),
-    profileTop = Color(0xFFEEDCC6),
-    profileBottom = Color(0xFFFAF0E0),
-    onProfile = Color(0xFF352719),
-    profileLandscape = ProfileLandscapeColors(
-        style = ProfileLandscapeStyle.DUNES,
-        distant = Color(0xFFE0C7A7),
-        middle = Color(0xFFCDAF8B),
-        foreground = Color(0xFFB6926D),
-        detail = Color(0xFF886540),
-        celestial = Color(0xFFFFE6BC),
-        action = Color(0xFFF8EAD7).copy(alpha = 0.90f),
-        onAction = Color(0xFF49321D),
-        actionBorder = Color(0xFFFFF8EA).copy(alpha = 0.84f),
-    ),
-)
+private val BeigeExtraColors by lazy {
+    val scheme = BeigeColorScheme
+    FrogExtraColors(
+        headerTop = Color(0xFFF0E3D0),
+        headerBottom = scheme.surface,
+        glass = scheme.surfaceContainerLowest.copy(alpha = 0.90f),
+        chip = scheme.surfaceContainerHigh,
+        pill = scheme.surfaceContainerLowest.copy(alpha = 0.96f),
+        pill60 = scheme.surfaceContainerLowest.copy(alpha = 0.78f),
+        lift = scheme.surface.copy(alpha = 0.82f),
+        nav = scheme.surfaceContainerLowest,
+        folder = scheme.primary.copy(alpha = 0.09f),
+        completionFill = LightCompletionFill,
+        completionInk = LightCompletionInk,
+        ink = scheme.onSurface,
+        ink2 = scheme.onSurfaceVariant,
+        profileTop = Color(0xFFF0E5D8),
+        profileBottom = scheme.surfaceContainerLowest,
+        onProfile = scheme.onSurface,
+        profileLandscape = ProfileLandscapeColors(
+            style = ProfileLandscapeStyle.DUNES,
+            distant = Color(0xFFE4D2BC),
+            middle = Color(0xFFCEB597),
+            foreground = Color(0xFFB4997B),
+            detail = Color(0xFF85684D),
+            celestial = Color(0xFFFFEED2),
+            action = scheme.surfaceContainerLowest.copy(alpha = 0.96f),
+            onAction = scheme.onSurface,
+            actionBorder = scheme.outlineVariant,
+            actionIcon = scheme.primary,
+            actionIconBackground = scheme.surfaceContainer,
+            actionSecondary = scheme.onSurfaceVariant,
+        ),
+    )
+}
 
 private val MidnightExtraColors = FrogExtraColors(
     headerTop = Color(0xFF131A14),
@@ -264,6 +305,8 @@ private val MidnightExtraColors = FrogExtraColors(
     lift = Color(0xFF1E241E).copy(alpha = 0.84f),
     nav = Color(0xFF101410),
     folder = Color(0xFF7BD69B).copy(alpha = 0.14f),
+    completionFill = DarkCompletionFill,
+    completionInk = DarkCompletionInk,
     ink = Color(0xFFE8EDE7),
     ink2 = Color(0xFFB9C2B8),
     profileTop = Color(0xFF10171D),
@@ -326,6 +369,8 @@ internal fun dynamicFrogColors(scheme: ColorScheme, dark: Boolean): FrogExtraCol
         lift = scheme.surfaceContainerHigh.copy(alpha = 0.84f),
         nav = if (dark) scheme.surfaceContainerHigh else scheme.surfaceContainerLowest,
         folder = scheme.primary.copy(alpha = if (dark) 0.20f else 0.08f),
+        completionFill = if (dark) DarkCompletionFill else LightCompletionFill,
+        completionInk = if (dark) DarkCompletionInk else LightCompletionInk,
         ink = if (dark) scheme.onPrimaryContainer else scheme.onSurface,
         ink2 = if (dark) scheme.onPrimaryContainer.copy(alpha = 0.76f) else scheme.onSurfaceVariant,
         profileTop = lerp(scheme.surface, scheme.primaryContainer, if (dark) 0.18f else 0.30f),
@@ -346,6 +391,44 @@ internal fun dynamicFrogColors(scheme: ColorScheme, dark: Boolean): FrogExtraCol
             actionSecondary = if (dark) scheme.onSurface else scheme.onSurfaceVariant,
         ),
     )
+}
+
+/** Decorative cover swatches belong only to the abstract theme-picker specimen. */
+@Immutable
+internal data class ThemePreviewCoverColors(
+    val featured: Color,
+    val first: Color,
+    val second: Color,
+    val third: Color,
+)
+
+internal fun themePreviewCoverColorsFor(
+    theme: AppTheme,
+    scheme: ColorScheme,
+    dynamicColor: Boolean,
+): ThemePreviewCoverColors {
+    if (dynamicColor && theme != AppTheme.SEPIA && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        return ThemePreviewCoverColors(
+            featured = scheme.primaryContainer,
+            first = scheme.primaryContainer,
+            second = scheme.secondaryContainer,
+            third = scheme.tertiaryContainer,
+        )
+    }
+    return when (theme) {
+        AppTheme.WHITE -> ThemePreviewCoverColors(
+            featured = Color(0xFFD1DDD5), first = Color(0xFFD1DDD5),
+            second = Color(0xFFE9E6DF), third = Color(0xFFD3DCE6),
+        )
+        AppTheme.SEPIA -> ThemePreviewCoverColors(
+            featured = Color(0xFFDDCFC0), first = Color(0xFFDDCDB7),
+            second = Color(0xFFDDBFB6), third = Color(0xFFC8CCBC),
+        )
+        AppTheme.OLED -> ThemePreviewCoverColors(
+            featured = Color(0xFF32594B), first = Color(0xFF304F43),
+            second = Color(0xFF3E4F62), third = Color(0xFF5B435A),
+        )
+    }
 }
 
 // --------------------------------------------------------------- palettes
@@ -402,44 +485,59 @@ private val LightColorScheme: ColorScheme = lightColorScheme(
     onTertiaryFixedVariant = Color(0xFF624D29),
 )
 
-/** Beige — warm paper, umber accents. Stored as [AppTheme.SEPIA]. */
+/** Beige — linen canvas, ivory cards, walnut actions. See docs/beige-theme.md.
+ * Stored as [AppTheme.SEPIA]; never rename that persistence key.
+ */
 private val BeigeColorScheme: ColorScheme = lightColorScheme(
-    primary = Color(0xFF7E5326),
+    primary = Color(0xFF745031),
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFE9D6B2),
-    onPrimaryContainer = Color(0xFF3E2E1A),
-    inversePrimary = Color(0xFFE0BC8C),
-    secondary = Color(0xFF6E5C42),
+    primaryContainer = Color(0xFFEDDDC9),
+    onPrimaryContainer = Color(0xFF49321F),
+    inversePrimary = Color(0xFFDFBC98),
+    secondary = Color(0xFF665746),
     onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFEFE0C4),
-    onSecondaryContainer = Color(0xFF2A2013),
-    tertiary = Color(0xFF5A5A33),
+    secondaryContainer = Color(0xFFEBE0D1),
+    onSecondaryContainer = Color(0xFF574736),
+    tertiary = Color(0xFF805854),
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFE2E2B6),
-    onTertiaryContainer = Color(0xFF1B1B00),
-    background = Color(0xFFF3E7D2),
-    onBackground = Color(0xFF3B2F1E),
-    surface = Color(0xFFF3E7D2),
-    onSurface = Color(0xFF3B2F1E),
-    surfaceVariant = Color(0xFFE5D6B8),
-    onSurfaceVariant = Color(0xFF7C6B51),
-    surfaceTint = Color(0xFF7E5326),
-    inverseSurface = Color(0xFF38301F),
-    inverseOnSurface = Color(0xFFF7EEDC),
-    error = Color(0xFF9A3B2C),
+    tertiaryContainer = Color(0xFFF3DED8),
+    onTertiaryContainer = Color(0xFF563530),
+    background = Color(0xFFF2EBE0),
+    onBackground = Color(0xFF30291F),
+    surface = Color(0xFFF2EBE0),
+    onSurface = Color(0xFF30291F),
+    surfaceVariant = Color(0xFFE6DACA),
+    onSurfaceVariant = Color(0xFF645443),
+    surfaceTint = Color(0xFF745031),
+    inverseSurface = Color(0xFF382D23),
+    inverseOnSurface = Color(0xFFFAF4EB),
+    error = Color(0xFF98392F),
     onError = Color(0xFFFFFFFF),
-    errorContainer = Color(0xFFFFDAD3),
-    onErrorContainer = Color(0xFF3A0A02),
-    outline = Color(0xFF8E7A5C),
-    outlineVariant = Color(0xFFCDB894),
-    scrim = Color(0xFF000000),
-    surfaceBright = Color(0xFFFBF4E6),
-    surfaceDim = Color(0xFFDCCFB5),
-    surfaceContainerLowest = Color(0xFFFBF4E6),
-    surfaceContainerLow = Color(0xFFF5EBD7),
-    surfaceContainer = Color(0xFFF7EEDC),
-    surfaceContainerHigh = Color(0xFFE9DBC0),
-    surfaceContainerHighest = Color(0xFFE3D3B6),
+    errorContainer = Color(0xFFFBE2DC),
+    onErrorContainer = Color(0xFF742B24),
+    outline = Color(0xFF887661),
+    outlineVariant = Color(0xFFD3C3AF),
+    scrim = Color(0xFF241C14),
+    surfaceBright = Color(0xFFFFFAF2),
+    surfaceDim = Color(0xFFDCCDB9),
+    surfaceContainerLowest = Color(0xFFFFFAF2),
+    surfaceContainerLow = Color(0xFFFAF4EB),
+    surfaceContainer = Color(0xFFEEE5D8),
+    surfaceContainerHigh = Color(0xFFE6DACA),
+    surfaceContainerHighest = Color(0xFFDCCDB9),
+    // Explicit fixed roles prevent new Material components inheriting purple defaults.
+    primaryFixed = Color(0xFFEDDDC9),
+    primaryFixedDim = Color(0xFFDEC3A5),
+    onPrimaryFixed = Color(0xFF302114),
+    onPrimaryFixedVariant = Color(0xFF49321F),
+    secondaryFixed = Color(0xFFEBE0D1),
+    secondaryFixedDim = Color(0xFFD6C7B3),
+    onSecondaryFixed = Color(0xFF30291F),
+    onSecondaryFixedVariant = Color(0xFF574736),
+    tertiaryFixed = Color(0xFFF3DED8),
+    tertiaryFixedDim = Color(0xFFE0BDB4),
+    onTertiaryFixed = Color(0xFF39201C),
+    onTertiaryFixedVariant = Color(0xFF563530),
 )
 
 /** Midnight — true black, mint green accents. Stored as [AppTheme.OLED]. */

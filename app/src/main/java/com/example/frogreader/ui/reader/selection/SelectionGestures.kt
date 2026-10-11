@@ -35,6 +35,7 @@ suspend fun PointerInputScope.bookSelectionGestures(
     controller: SelectionController,
     haptics: HapticFeedback,
 ) {
+    val handleRadius = SelectionHitRules.HANDLE_RADIUS.toPx()
     val grabRadius = SelectionHitRules.HANDLE_GRAB_RADIUS.toPx()
     val startGap = SelectionHitRules.START_MAX_GAP.toPx()
 
@@ -45,8 +46,8 @@ suspend fun PointerInputScope.bookSelectionGestures(
         // ── Grabbing a handle: no long press needed, it is already ours ──
         val grabbed = if (hadSelection) {
             SelectionHitRules.grabbedHandle(
-                start = controller.handleCenter(SelectionEdge.START, grabRadius),
-                end = controller.handleCenter(SelectionEdge.END, grabRadius),
+                start = controller.handleCenter(SelectionEdge.START, handleRadius),
+                end = controller.handleCenter(SelectionEdge.END, handleRadius),
                 point = down.position,
                 radiusPx = grabRadius,
             )
@@ -201,6 +202,7 @@ private suspend fun AwaitPointerEventScope.consumeDrag(
     onMove: (Offset) -> Unit,
 ) {
     controller.lastPoint = down.position
+    controller.dragStartPoint = down.position
     // Published so the auto-advance loop can re-extend the selection after a
     // page turn, with the same granularity this drag uses.
     controller.extend = onMove
@@ -213,12 +215,12 @@ private suspend fun AwaitPointerEventScope.consumeDrag(
             event.changes.forEach { it.consume() }
             if (!change.pressed) break
             if (change.position != controller.lastPoint) {
-                controller.lastPoint = change.position
-                onMove(change.position)
+                controller.updateDragPoint(change.position)
             }
         }
     } finally {
         controller.dragging = false
         controller.extend = null
+        controller.dragStartPoint = null
     }
 }

@@ -234,21 +234,26 @@ internal fun <T> SettingsControlRow(
             .alpha(if (enabled) 1f else 0.55f),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            SettingsIconCircle(
-                icon = icon,
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-            )
-            Spacer(Modifier.width(16.dp))
-            SettingsRowText(title, subtitle, Modifier.weight(1f))
-        }
+        SettingsControlHeader(icon, title, subtitle)
         SettingsSegmentedControl(
             selected = selected,
             options = options,
             onSelected = onSelected,
             enabled = enabled,
         )
+    }
+}
+
+@Composable
+internal fun SettingsControlHeader(icon: ImageVector, title: String, subtitle: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        SettingsIconCircle(
+            icon = icon,
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            tint = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+        Spacer(Modifier.width(16.dp))
+        SettingsRowText(title, subtitle, Modifier.weight(1f))
     }
 }
 

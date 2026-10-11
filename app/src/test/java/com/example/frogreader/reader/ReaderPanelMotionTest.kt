@@ -58,6 +58,39 @@ class ReaderPanelMotionTest {
     }
 
     @Test
+    fun `predictive back follows the finger and cancellation restores the open drawer`() = runTest {
+        val panel = panel()
+        panel.snapTo(400f)
+        advanceUntilIdle()
+        panel.beginBack()
+        panel.seekBack(0.25f)
+        assertEquals(300f, panel.height.value, 0f)
+        assertTrue(panel.isOpen)
+        panel.updatePeek(previous = 400f, next = 460f)
+        panel.seekBack(0.75f)
+        assertEquals(100f, panel.height.value, 0f)
+        panel.finishBack(committed = false)
+        advanceUntilIdle()
+        assertTrue(panel.isOpen)
+        assertEquals(400f, panel.height.value, 0.5f)
+    }
+
+    @Test
+    fun `committed predictive back releases the handler before the closing motion finishes`() = runTest {
+        val panel = panel()
+        panel.snapTo(400f)
+        advanceUntilIdle()
+        panel.beginBack()
+        panel.seekBack(0.5f)
+        panel.finishBack(committed = true)
+        assertFalse(panel.isOpen)
+        assertEquals(200f, panel.height.value, 0f)
+        panel.updatePeek(previous = 400f, next = 460f)
+        advanceUntilIdle()
+        assertEquals(0f, panel.height.value, 0.5f)
+    }
+
+    @Test
     fun `late settings measurement cannot reopen a panel after a chapter was selected`() = runTest {
         val panel = panel()
         panel.snapTo(400f)

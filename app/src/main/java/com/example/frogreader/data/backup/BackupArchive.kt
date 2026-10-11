@@ -1,5 +1,6 @@
 package com.example.frogreader.data.backup
 
+import com.example.frogreader.data.LegacySettingsDefaults
 import com.example.frogreader.data.ReadingStats
 import com.example.frogreader.data.model.BackupDocument
 import com.example.frogreader.data.model.BackupManifest
@@ -8,6 +9,8 @@ import com.example.frogreader.data.model.BackupSettings
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.ReadingLogEntry
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -191,7 +194,7 @@ object BackupArchive {
                     name == SETTINGS -> {
                         val text = zip.readBytes().decodeToString()
                         settings = runCatching {
-                            json.decodeFromString(BackupSettings.serializer(), text)
+                            decodeSettings(text)
                         }.getOrNull()
                     }
 
@@ -221,6 +224,25 @@ object BackupArchive {
         val readDocument = document
             ?: throw BackupFormatException("This backup has no library in it.")
         return Contents(readManifest, readDocument, stats, settings, bookFiles, covers)
+    }
+
+    /** Older archives may omit default fields; restoring them must retain the old defaults. */
+    private fun decodeSettings(text: String): BackupSettings {
+        val saved = json.parseToJsonElement(text).jsonObject
+        val legacy = json.encodeToJsonElement(
+            BackupSettings.serializer(),
+            BackupSettings(reader = LegacySettingsDefaults.reader, app = LegacySettingsDefaults.app),
+        ).jsonObject
+        fun withMissingDefaults(key: String): JsonObject {
+            val defaults = legacy.getValue(key).jsonObject
+            val stored = saved[key] ?: return defaults
+            return JsonObject(defaults + stored.jsonObject)
+        }
+        val restored = JsonObject(saved + mapOf(
+            "reader" to withMissingDefaults("reader"),
+            "app" to withMissingDefaults("app"),
+        ))
+        return json.decodeFromJsonElement(BackupSettings.serializer(), restored)
     }
 
     private fun decodeManifest(text: String): BackupManifest {

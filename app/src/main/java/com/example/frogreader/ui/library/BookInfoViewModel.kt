@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.frogreader.FrogReaderApp
 import com.example.frogreader.data.BookSharing
+import com.example.frogreader.data.ReadingLogDeletion
 import com.example.frogreader.data.SharedBookFile
 import com.example.frogreader.data.metadata.MetadataFileInfo
 import com.example.frogreader.data.model.Book
@@ -42,6 +43,10 @@ internal data class BookInfoState(
     val reviewSaving: Boolean = false,
     val reviewError: Boolean = false,
     val reviewSavedGeneration: Int = 0,
+    val removingReading: Boolean = false,
+    val readingRemovalError: Boolean = false,
+    val readingRemoved: Boolean = false,
+    val removedReading: ReadingLogDeletion? = null,
 )
 
 internal class BookInfoViewModel(private val app: FrogReaderApp, private val bookId: String, private val readingLogId: String? = null) : ViewModel() {
@@ -158,6 +163,26 @@ internal class BookInfoViewModel(private val app: FrogReaderApp, private val boo
     }
 
     fun dismissError() { _state.update { it.copy(shareError = null) } }
+
+    /** Return to the Log only after its record and the current-reading reset are durable. */
+    fun removeReading() {
+        val id = readingLogId ?: return
+        val current = _state.value
+        if (current.removingReading || current.readingRemoved || current.readingLogEntry?.id != id) return
+        _state.update { it.copy(removingReading = true, readingRemovalError = false) }
+        viewModelScope.launch {
+            try {
+                val deletion = repository.deleteReadingLogEntry(id)
+                _state.update { it.copy(readingRemoved = true, removedReading = deletion) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { _state.update { it.copy(readingRemovalError = true) } }
+            finally { _state.update { it.copy(removingReading = false) } }
+        }
+    }
+
+    fun readingRemovalHandled() {
+        _state.update { it.copy(readingRemoved = false, removedReading = null) }
+    }
 
     fun saveReview(ratingHalfStars: Int?, review: String) {
         if (_state.value.reviewSaving || bookId.isBlank()) return

@@ -18,6 +18,14 @@ import com.example.frogreader.data.model.BIDI_TAG
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.EXTERNAL_LINK_TAG
 import com.example.frogreader.data.model.FOOTNOTE_TAG
+import com.example.frogreader.data.model.HIDDEN_TEXT_TAG
+import com.example.frogreader.data.model.INLINE_FONT_FAMILY_TAG
+import com.example.frogreader.data.model.INLINE_IMAGE_TAG
+import com.example.frogreader.data.model.INLINE_TEXT_BOX_TAG
+import com.example.frogreader.data.model.InlineTextBoxSpec
+import com.example.frogreader.data.model.encode
+import com.example.frogreader.data.model.INLINE_RUBY_TAG
+import com.example.frogreader.data.model.InlineRuby
 import com.example.frogreader.data.model.FirstLetterStyle
 import com.example.frogreader.data.model.FloatImage
 import com.example.frogreader.data.model.LINK_TAG
@@ -28,7 +36,9 @@ import com.example.frogreader.data.model.PublisherBoxSpan
 import com.example.frogreader.data.model.PublisherBoxStyle
 import com.example.frogreader.data.model.PublisherClear
 import com.example.frogreader.data.model.PublisherFloatSide
+import com.example.frogreader.data.model.PublisherRowLayout
 import com.example.frogreader.data.model.TableCell
+import com.example.frogreader.data.model.TableCellStyle
 import com.example.frogreader.data.model.TableRow
 import com.example.frogreader.data.model.slicePublisherBoxSpans
 import org.jsoup.nodes.Element
@@ -36,6 +46,9 @@ import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
 import java.io.File
 import java.util.Base64
+import java.util.Collections
+import java.util.IdentityHashMap
+import java.util.Locale
 
 /**
  * Turns a parsed XHTML body (EPUB chapter) into reader content elements.
@@ -82,6 +95,10 @@ class HtmlMapper(
     private val out = mutableListOf<ContentElement>()
     private var pendingInline: MutableList<Node> = mutableListOf()
     private var pendingInlineOwner: Element? = null
+
+    /** Containers whose inline descendants actually create CSS block flow. */
+    private val cssBlockContainers = Collections.newSetFromMap(IdentityHashMap<Element, Boolean>())
+    private val cssLineGroups = Collections.newSetFromMap(IdentityHashMap<Element, Boolean>())
 
     /** Publisher box ranges use the same flat leaf coordinates as [out]. */
     val publisherBoxes = mutableListOf<PublisherBoxSpan>()
@@ -140,6 +157,7 @@ class HtmlMapper(
         if (css == null && (body.hasAttr("style") || body.selectFirst("[style]") != null)) {
             css = CssResolver(emptyList())
         }
+        indexCssBlockContainers(body)
         val bodyBox = beginPublisherBox(body, allowRoot = true)
         try {
             walk(body, quote = false)
@@ -148,6 +166,39 @@ class HtmlMapper(
             endPublisherBox(bodyBox)
         }
         return out.toList()
+    }
+
+    private fun isCssFlowBlock(element: Element): Boolean =
+        element.normalName() !in PUBLISHER_BOX_TAGS &&
+            element.normalName() !in NON_CONTENT_TAGS &&
+            css?.computed(element)?.display in CSS_BLOCK_DISPLAYS
+
+    /** One bounded traversal avoids rescanning each enclosing inline wrapper. */
+    private fun indexCssBlockContainers(body: Element) {
+        if (css == null) return
+        val visited = mutableListOf<Element>()
+        val pending = ArrayDeque<Pair<Element, Int>>()
+        pending.addLast(body to 0)
+        while (pending.isNotEmpty()) {
+            val (element, depth) = pending.removeLast()
+            visited.add(element)
+            if (depth >= maxStructureDepth || css?.computed(element)?.hidden == true) continue
+            element.children().forEach { pending.addLast(it to depth + 1) }
+        }
+        for (element in visited.asReversed()) {
+            if (isCssFlowBlock(element) || element in cssBlockContainers) {
+                element.parent()?.let(cssBlockContainers::add)
+            }
+            if (element in cssBlockContainers && element.childNodes().all { child ->
+                    when (child) {
+                        is TextNode -> child.isBlank
+                        is Element -> css?.computed(child)?.hidden == true ||
+                            isCssFlowBlock(child) || child in cssLineGroups || child.normalName() == "br"
+                        else -> true
+                    }
+                }
+            ) cssLineGroups.add(element)
+        }
     }
 
     private fun registerAnchor(id: String) {
@@ -166,7 +217,12 @@ class HtmlMapper(
         }
         for (node in container.childNodes()) {
             when (node) {
-                is TextNode -> if (!node.isBlank) queuePending(node, container)
+                is TextNode -> if (!node.isBlank || pendingInline.isNotEmpty()) {
+                    // Mixed block/inline paragraphs still collapse a source
+                    // space between adjacent ruby, links, or abbreviations.
+                    // Ignore formatting whitespace only outside an inline run.
+                    queuePending(node, container)
+                }
 
                 is Element -> {
                     // EPUB 3/Daisy and many Kindle books wrap a complete note
@@ -174,7 +230,9 @@ class HtmlMapper(
                     // that DOM boundary while it still exists; the flattened
                     // chapter stream cannot reconstruct it later.
                     val richNoteContainer = isSemanticNoteContainer(node)
-                    if (richNoteContainer) flushPending(quote)
+                    if (richNoteContainer || isCssFlowBlock(node) || node in cssBlockContainers) {
+                        flushPending(quote)
+                    }
                     registerAnchor(node.attr("id"))
                     val noteStart = out.size
                     walkElement(node, quote, depth + 1)
@@ -274,6 +332,21 @@ class HtmlMapper(
             return
         }
 
+        if (emitCssHorizontalRow(node, quote)) return
+
+        // CSS can turn <span>, <em> or <a> into real blocks. Keeping them in
+        // AnnotatedString inline runs loses both their line breaks and boxes.
+        if (isCssFlowBlock(node)) {
+            flushPending(quote)
+            if (node in cssBlockContainers) {
+                walk(node, quote = false, depth = depth)
+                flushPending(quote = false)
+            } else {
+                emitParagraph(node, quote = false, depth = depth, anonymous = true)
+            }
+            return
+        }
+
         when (node.normalName()) {
             "p", "li", "dt", "dd", "pre" -> {
                 flushPending(quote)
@@ -299,8 +372,10 @@ class HtmlMapper(
 
             "blockquote", "cite", "poem", "epigraph" -> {
                 flushPending(quote)
+                emitGeneratedParagraph(node, after = false, quote = true)
                 walk(node, quote = true, depth = depth)
                 flushPending(quote = true)
+                emitGeneratedParagraph(node, after = true, quote = true)
             }
 
             "ul", "ol" -> {
@@ -337,7 +412,7 @@ class HtmlMapper(
 
             "figcaption", "caption" -> {
                 flushPending(quote)
-                if (node.selectFirst(BLOCK_PROBE) != null) {
+                if (node in cssBlockContainers || node.selectFirst(BLOCK_PROBE) != null) {
                     walk(node, quote, depth)
                     flushPending(quote)
                 } else {
@@ -375,6 +450,7 @@ class HtmlMapper(
                     return
                 }
                 // CSS-generated decorations (div.separator::before "***").
+                val emptyBoxStart = out.size
                 emitGeneratedParagraph(node, after = false, quote)
                 val titleLevel = titleClassLevel(node)
                 if (titleLevel != null && headingLevel == null) {
@@ -387,6 +463,13 @@ class HtmlMapper(
                     flushPending(quote)
                 }
                 emitGeneratedParagraph(node, after = true, quote)
+                // An intentionally blank publisher page (for example the
+                // reader's drawing page in Tristram Shandy) still owns a
+                // dimensioned box and its forced page boundaries.
+                val minimumHeight = css?.publisherBoxStyle(node)?.minHeightEm ?: 0f
+                if (out.size == emptyBoxStart && minimumHeight > 0f) {
+                    out += ContentElement.Spacer(minimumHeight)
+                }
             }
 
             "img" -> {
@@ -407,7 +490,15 @@ class HtmlMapper(
 
             "hr" -> {
                 flushPending(quote)
-                out += ContentElement.Divider
+                val computed = css?.computed(node)
+                if (computed?.borderSpecified == true) {
+                    // Authored rules use the retained box border, width and
+                    // margins. A native fixed-width divider would draw a
+                    // second rule with unrelated geometry over that box.
+                    out += ContentElement.Spacer(computed.heightEm ?: 0f)
+                } else {
+                    out += ContentElement.Divider
+                }
             }
 
             "table" -> {
@@ -429,7 +520,7 @@ class HtmlMapper(
             else -> {
                 // Unknown element: recurse if it holds block content,
                 // otherwise treat it as inline (span, a, em, …).
-                if (node.selectFirst(BLOCK_PROBE) != null) {
+                if (node in cssBlockContainers || node.selectFirst(BLOCK_PROBE) != null) {
                     flushPending(quote)
                     walk(node, quote, depth)
                     flushPending(quote)
@@ -441,6 +532,101 @@ class HtmlMapper(
     }
 
     // -------------------------------------------------------------- blocks
+
+    /**
+     * A small authored horizontal text layout can use the native table
+     * measurement path without losing the relationship between its columns.
+     * This covers paired alternatives with a brace, distributed ornaments,
+     * and CSS table-cell rows. General flex wrapping/nesting keeps its
+     * readable block fallback rather than pretending to be a full flexbox.
+     */
+    private fun emitCssHorizontalRow(element: Element, quote: Boolean): Boolean {
+        if (element.normalName() in CSS_ROW_EXCLUDED_TAGS) return false
+        val resolver = css ?: return false
+        val computed = resolver.computed(element)
+        val display = computed.display
+        if (display !in CSS_HORIZONTAL_DISPLAYS) return false
+        val flex = display == "flex" || display == "inline-flex"
+        if (flex && (computed.flexDirection != "row" || computed.flexWrap != "nowrap")
+        ) return false
+
+        val sourceCells = mutableListOf<List<Node>>()
+        val anonymous = mutableListOf<Node>()
+        fun finishAnonymous() {
+            if (anonymous.any { it is TextNode && !it.isBlank }) {
+                sourceCells += anonymous.toList()
+            }
+            anonymous.clear()
+        }
+        for (child in element.childNodes()) {
+            when (child) {
+                is TextNode -> anonymous += child
+                is Element -> {
+                    if (resolver.computed(child).hidden || child.normalName() in NON_TEXT_CONTENT_TAGS) continue
+                    finishAnonymous()
+                    // A nested table/list/media box needs its own block
+                    // renderer, so leave complex flex containers in flow.
+                    if (child.normalName() in COMPLEX_HORIZONTAL_CELL_TAGS ||
+                        child.selectFirst("table, ul, ol, audio, video, img, svg") != null
+                    ) return false
+                    if (!flex && resolver.computed(child).display != "table-cell") return false
+                    sourceCells += listOf(child)
+                }
+            }
+        }
+        finishAnonymous()
+        val rawBefore = resolver.generated(element, after = false)
+        val rawAfter = resolver.generated(element, after = true)
+        fun hasCell(run: CssResolver.GeneratedRun?) = run != null &&
+            (run.text.isNotBlank() || run.publisherBox != null)
+        val count = sourceCells.size + (if (hasCell(rawBefore)) 1 else 0) +
+            (if (hasCell(rawAfter)) 1 else 0)
+        if (count !in 2..MAX_CSS_ROW_CELLS) return false
+
+        flushPending(quote)
+        element.select("[id]").forEach { registerAnchor(it.attr("id")) }
+        val cells = mutableListOf<TableCell>()
+        fun addGenerated(raw: CssResolver.GeneratedRun?) {
+            if (!hasCell(raw)) return
+            val run = raw?.takeIf { it.text.isEmpty() || expansionBudget.acceptGenerated(it.text.length) } ?: return
+            val builder = InlineTextBuilder()
+            appendGeneratedRun(builder, run)
+            cells += TableCell(
+                text = builder.build(),
+                publisherBox = run.publisherBox,
+                publisherPaddingSpecified = true,
+                publisherBorderSpecified = true,
+            )
+        }
+        addGenerated(rawBefore)
+        for (nodes in sourceCells) {
+            val cellElement = nodes.singleOrNull() as? Element
+            val builder = InlineTextBuilder()
+            if (cellElement != null) appendCellContent(cellElement, builder)
+            else nodes.forEach { appendInline(it, builder) }
+            cells += TableCell(
+                text = flowAnnotations(builder.build().trimmed(), cellElement ?: element),
+                align = cellElement?.let { cellAlign(it, header = false) },
+                block = cellElement?.let { tableCellBlockStyle(it, element) },
+                publisherBox = cellElement?.let(resolver::publisherBoxStyle),
+                publisherPaddingSpecified = true,
+                publisherBorderSpecified = true,
+            )
+        }
+        addGenerated(rawAfter)
+        if (cells.size < 2) return false
+        out += ContentElement.Table(
+            rows = listOf(TableRow(cells, isHeader = false)),
+            block = blockStyleFor(element)?.copy(firstLineIndent = false),
+            publisherRowLayout = when (computed.justifyContent) {
+                "space-between" -> PublisherRowLayout.SPACE_BETWEEN
+                "space-around", "space-evenly" -> PublisherRowLayout.SPACE_AROUND
+                else -> PublisherRowLayout.NATURAL
+            },
+            centerCellsVertically = computed.alignItems == "center",
+        )
+        return true
+    }
 
     private fun queuePending(node: Node, owner: Element?) {
         if (pendingInline.isEmpty()) pendingInlineOwner = owner
@@ -460,7 +646,10 @@ class HtmlMapper(
         val resolver = css ?: return null
         val computed = resolver.computed(element)
         if (computed.hidden) return null
-        val style = resolver.publisherBoxStyle(element) ?: PublisherBoxStyle.DEFAULT
+        var style = resolver.publisherBoxStyle(element) ?: PublisherBoxStyle.DEFAULT
+        if (element in cssLineGroups && element.normalName() !in ROOT_TAGS) {
+            style = style.copy(fitTextFlow = true)
+        }
         val floatSide = when (computed.floatSide) {
             "left" -> PublisherFloatSide.LEFT
             "right" -> PublisherFloatSide.RIGHT
@@ -531,6 +720,7 @@ class HtmlMapper(
 
     private fun isPublisherBoxElement(element: Element, allowRoot: Boolean): Boolean {
         val tag = element.normalName()
+        if (isCssFlowBlock(element)) return true
         if ((!allowRoot && tag in ROOT_TAGS) ||
             (tag in NON_BLOCK_TAGS && tag !in IMAGE_TAGS)
         ) {
@@ -556,13 +746,13 @@ class HtmlMapper(
             val level = headingLevel ?: owner?.let(::titleClassLevel)
             if (level != null) {
                 out += ContentElement.Heading(
-                    styledText = builder.build().trimmed(),
+                    styledText = flowAnnotations(builder.build().trimmed(), owner),
                     level = level.coerceIn(1, 6),
                     block = looseBlockTextStyle(owner),
                 )
             } else {
                 out += ContentElement.Paragraph(
-                    builder.build(),
+                    flowAnnotations(builder.build(), owner),
                     if (quote) ParagraphStyle.QUOTE else ParagraphStyle.NORMAL,
                     looseBlockTextStyle(owner, withFirstLetter = true),
                 )
@@ -590,7 +780,51 @@ class HtmlMapper(
         )
     }
 
-    private fun emitParagraph(element: Element, quote: Boolean, depth: Int) {
+    /** Inline scopes still apply when their child blocks become separate leaves. */
+    private fun flowAnnotations(text: AnnotatedString, owner: Element?): AnnotatedString {
+        if (text.isEmpty()) return text
+        val builder = AnnotatedString.Builder(text)
+        var scope = owner
+        var depth = 0
+        while (scope != null && scope.normalName() !in ROOT_TAGS && depth++ < maxStructureDepth) {
+            if (scope.normalName() !in PUBLISHER_BOX_TAGS) {
+                inlineBidiMode(scope)?.let { mode ->
+                    builder.addStringAnnotation(BIDI_TAG, mode.name, 0, text.length)
+                }
+            }
+            if (scope.normalName() == "a") {
+                val href = scope.attr("href").trim()
+                val key = href.takeIf(String::isNotEmpty)?.let(resolveLink)
+                if (key != null) {
+                    linkTargets += key
+                    val note = isNoteReference(scope, key)
+                    if (note) noteTargets += key
+                    builder.addStringAnnotation(if (note) FOOTNOTE_TAG else LINK_TAG, key, 0, text.length)
+                } else if (safeExternalHref(href)) {
+                    builder.addStringAnnotation(EXTERNAL_LINK_TAG, href, 0, text.length)
+                }
+            }
+            scope = scope.parent()
+        }
+        return builder.toAnnotatedString()
+    }
+
+    private fun emitParagraph(
+        element: Element,
+        quote: Boolean,
+        depth: Int,
+        anonymous: Boolean = false,
+    ) {
+        // A stanza <p> can itself contain CSS block lines. It remains a box
+        // around the lines, while their own typography and geometry become
+        // independent leaves. Hidden fallback <br>s contribute no extra gaps.
+        if (element in cssBlockContainers && element.normalName() !in setOf("li", "pre")) {
+            emitGeneratedParagraph(element, after = false, quote)
+            walk(element, quote = false, depth = depth)
+            flushPending(quote = false)
+            emitGeneratedParagraph(element, after = true, quote)
+            return
+        }
         // Anchors inside the paragraph (e.g. <a id="n53"/>) resolve to it.
         element.select("[id]").forEach { registerAnchor(it.attr("id")) }
 
@@ -650,6 +884,7 @@ class HtmlMapper(
         if (resolver != null) {
             for (img in element.select("img")) {
                 val computed = resolver.computed(img)
+                if (computed.hidden) continue
                 val side = computed.floatSide ?: continue
                 val frac = computed.widthFrac
                     ?: computed.widthEm?.let { it / 30f }
@@ -668,7 +903,11 @@ class HtmlMapper(
         }
         val hasText = !builder.isBlank
         if (hasText) {
-            var block = blockStyleFor(element, withFirstLetter = true)
+            var block = if (anonymous) {
+                looseBlockTextStyle(element, withFirstLetter = true).copy(isCssTextLine = true)
+            } else {
+                blockStyleFor(element, withFirstLetter = true)
+            }
             if (isListItem) {
                 // Nested lists indent one step per level; markers hang at
                 // the item's own edge (no first-line indent).
@@ -691,7 +930,7 @@ class HtmlMapper(
                 )
             }
             out += ContentElement.Paragraph(
-                builder.build(),
+                flowAnnotations(builder.build(), element),
                 if (quote) ParagraphStyle.QUOTE else ParagraphStyle.NORMAL,
                 block,
             )
@@ -849,20 +1088,19 @@ class HtmlMapper(
      * Tables become real grids ([ContentElement.Table]) with colspan/rowspan
      * intact. Degenerate cases keep the old flattened behavior: no rows →
      * one paragraph, a single column (layout tables) → plain paragraphs,
-     * absurd sizes → per-row text.
+     * excessively wide grids → rich per-cell paragraphs. A long table is
+     * still a table: plays routinely contain hundreds of two-column rows,
+     * and the reader already paginates those rows without flattening them.
      */
     private fun emitTable(table: Element) {
-        // Cell/row anchors cannot be discovered by the normal DOM walk
-        // because the table is converted as one model element. Point every
-        // nested anchor at that grid so cross-references remain navigable.
-        table.select("[id]").forEach { registerAnchor(it.attr("id")) }
         val tableBlock = blockStyleFor(table)
         // The caption reads like a small centered title above the grid.
         table.selectFirst("caption")?.let(::emitTableCaption)
 
         // Only this table's own rows; a nested table flattens into its cell.
         val ownRows = table.select("tr").filter { row ->
-            row.parents().firstOrNull { it.normalName() == "table" } === table
+            row.parents().firstOrNull { it.normalName() == "table" } === table &&
+                css?.computed(row)?.hidden != true
         }
         if (ownRows.isEmpty()) {
             val text = table.text().trim()
@@ -870,11 +1108,16 @@ class HtmlMapper(
             return
         }
 
+        val sourceRows = ownRows.mapNotNull { rowElement ->
+            val cells = rowElement.children().filter {
+                (it.normalName() == "td" || it.normalName() == "th") &&
+                    css?.computed(it)?.hidden != true
+            }
+            cells.takeIf { it.isNotEmpty() }?.let { rowElement to it }
+        }
+        val responsive = responsiveTableStyle(table, sourceRows.map { it.second })
         val rows = mutableListOf<TableRow>()
-        for (rowElement in ownRows) {
-            val cellElements = rowElement.children()
-                .filter { it.normalName() == "td" || it.normalName() == "th" }
-            if (cellElements.isEmpty()) continue
+        for ((rowElement, cellElements) in sourceRows) {
             val inHead = rowElement.parents().any { it.normalName() == "thead" }
             val cells = cellElements.map { cellElement ->
                 val builder = InlineTextBuilder()
@@ -895,18 +1138,26 @@ class HtmlMapper(
                     block = tableCellBlockStyle(cellElement, table),
                     publisherBox = cellPublisherBox,
                     publisherPaddingSpecified = cellComputed?.paddingSpecified == true,
-                    publisherBorderSpecified = cellComputed?.borderSpecified == true,
+                    publisherBorderSpecified = tableBorderSpecified(cellElement, table, css),
+                    narrowStyle = responsive?.cells?.get(cellElement),
                 )
             }
             rows += TableRow(cells, isHeader = inHead || cells.all { it.header })
         }
 
         val columnCount = rows.maxOfOrNull { row -> row.cells.sumOf { it.colSpan } } ?: 0
+        val authoredGeometry = css?.publisherBoxStyle(table) != null || rows.any { row ->
+            row.cells.any { cell ->
+                cell.publisherBorderSpecified || cell.publisherPaddingSpecified ||
+                    cell.publisherBox?.isDefault == false
+            }
+        }
         when {
             rows.isEmpty() || columnCount == 0 -> Unit
 
-            columnCount == 1 -> {
+            columnCount == 1 && !authoredGeometry -> {
                 // A layout "table": plain paragraphs read better than a grid.
+                table.select("[id]").forEach { registerAnchor(it.attr("id")) }
                 for (row in rows) {
                     for (cell in row.cells) {
                         if (cell.text.text.isBlank()) continue
@@ -919,21 +1170,190 @@ class HtmlMapper(
                 }
             }
 
-            columnCount > 12 || rows.size > 400 -> {
+            columnCount > 12 -> {
+                table.select("[id]").forEach { registerAnchor(it.attr("id")) }
                 for (row in rows) {
-                    val text = row.cells.joinToString("    ") { it.text.text.trim() }
-                        .trim()
-                    if (text.isEmpty()) continue
-                    out += ContentElement.Paragraph(
-                        AnnotatedString(text),
-                        ParagraphStyle.NORMAL,
-                        BlockStyle(firstLineIndent = false),
-                    )
+                    for (cell in row.cells) {
+                        if (cell.text.text.isBlank()) continue
+                        out += ContentElement.Paragraph(
+                            cell.text,
+                            ParagraphStyle.NORMAL,
+                            mergedTableCellBlock(tableBlock, cell),
+                        )
+                    }
                 }
             }
 
-            else -> out += ContentElement.Table(rows, tableBlock)
+            else -> {
+                // Row/cell anchors resolve to the retained grid, after its
+                // caption rather than to that unrelated caption paragraph.
+                table.select("[id]").forEach { registerAnchor(it.attr("id")) }
+                out += ContentElement.Table(
+                    rows, tableBlock,
+                    stackCellsBelowCssPx = responsive?.widthCssPx,
+                )
+            }
         }
+    }
+
+    private class ResponsiveTableStyle(
+        val widthCssPx: Float,
+        val cells: IdentityHashMap<Element, TableCellStyle>,
+    )
+
+    /** Preserve the authored narrow geometry without changing source row/cell indices. */
+    private fun responsiveTableStyle(table: Element, sourceRows: List<List<Element>>): ResponsiveTableStyle? {
+        val base = css ?: return null
+        val thresholds = base.maxWidthBreakpointsCssPx
+        if (thresholds.isEmpty()) return null
+        if (sourceRows.isEmpty() || sourceRows.any { it.size !in 2..4 } ||
+            sourceRows.sumOf { it.size } > MAX_RESPONSIVE_TABLE_CELLS
+        ) return null
+        val cells = sourceRows.flatten()
+        if (cells.any { cell ->
+                (cell.attr("colspan").toIntOrNull()?.coerceIn(1, 10) ?: 1) != 1 ||
+                    (cell.attr("rowspan").toIntOrNull()?.coerceIn(1, 20) ?: 1) != 1 ||
+                    base.computed(cell).display !in setOf(null, "table-cell")
+            }
+        ) return null
+        val descendants = ArrayList<Element>()
+        fun collectChildren(element: Element): Boolean {
+            for (child in element.childNodes()) {
+                if (child !is Element) continue
+                if (descendants.size >= MAX_RESPONSIVE_TABLE_DESCENDANTS) return false
+                descendants.add(child)
+            }
+            return true
+        }
+        for (cell in cells) if (!collectChildren(cell)) return null
+        var descendantIndex = 0
+        while (descendantIndex < descendants.size) {
+            if (!collectChildren(descendants[descendantIndex++])) return null
+        }
+        var admitted: ResponsiveTableStyle? = null
+        var admittedCells: List<TableCellStyle>? = null
+        for (threshold in thresholds) {
+            val resolver = base.resolverAtMaxWidth(threshold) ?: continue
+            if (resolver.computed(table).hidden ||
+                resolver.publisherBoxStyle(table) != base.publisherBoxStyle(table)
+            ) return null
+            val matches = cells.all { cell ->
+                val own = resolver.computed(cell)
+                val original = base.computed(cell)
+                own.display == "block" && !own.hidden &&
+                    own.visibilityHidden == original.visibilityHidden &&
+                    own.textTransform == original.textTransform &&
+                    // Named family annotations and inline effects already
+                    // belong to the shared source text, not the cell block.
+                    own.fontFamilyName == original.fontFamilyName &&
+                    own.underline == original.underline && own.strike == original.strike &&
+                    own.superScript == original.superScript && own.subScript == original.subScript &&
+                    own.unicodeBidi == original.unicodeBidi &&
+                    sameResponsiveGeneratedContent(cell, base, resolver)
+            }
+            if (!matches) {
+                // A second, narrower rule that changes the admitted block
+                // arrangement cannot be represented by a single variant.
+                if (admitted != null) return null
+                continue
+            }
+            // The responsive contract changes cell geometry and block
+            // typography; its AnnotatedString remains shared with the wide
+            // layout. Reject media changes that would require remapping it.
+            if (descendants.any { element ->
+                    !sameResponsiveInlinePresentation(base.computed(element), resolver.computed(element)) ||
+                        base.publisherBoxStyle(element) != resolver.publisherBoxStyle(element) ||
+                        !sameResponsiveGeneratedContent(element, base, resolver)
+                }
+            ) return null
+            val variants = cells.map { cell ->
+                responsiveCellStyle(cell, table, cell.normalName() == "th", resolver)
+            }
+            if (admitted == null) {
+                val styles = IdentityHashMap<Element, TableCellStyle>(cells.size)
+                cells.forEachIndexed { index, cell -> styles[cell] = variants[index] }
+                admitted = ResponsiveTableStyle(threshold, styles)
+                admittedCells = variants
+            } else if (variants != admittedCells) {
+                return null
+            }
+        }
+        return admitted
+    }
+
+    private fun sameResponsiveInlinePresentation(a: CssResolver.Computed, b: CssResolver.Computed): Boolean =
+        a.hidden == b.hidden && a.display == b.display &&
+            a.italic == b.italic && a.bold == b.bold && a.fontSizeEm == b.fontSizeEm &&
+            a.fontFamilyName == b.fontFamilyName && a.fontFeatureSettings == b.fontFeatureSettings &&
+            a.monospace == b.monospace && a.underline == b.underline && a.strike == b.strike &&
+            a.superScript == b.superScript && a.subScript == b.subScript &&
+            a.foregroundColorArgb == b.foregroundColorArgb && a.backgroundColorArgb == b.backgroundColorArgb &&
+            a.direction == b.direction && a.unicodeBidi == b.unicodeBidi &&
+            a.visibilityHidden == b.visibilityHidden && a.textTransform == b.textTransform &&
+            a.widthFrac == b.widthFrac && a.widthEm == b.widthEm && a.heightEm == b.heightEm &&
+            a.maxWidthFrac == b.maxWidthFrac && a.maxWidthEm == b.maxWidthEm &&
+            a.maxHeightEm == b.maxHeightEm && a.maxHeightViewportFrac == b.maxHeightViewportFrac &&
+            a.imageInvert == b.imageInvert
+
+    private fun sameResponsiveGeneratedContent(element: Element, base: CssResolver, narrow: CssResolver): Boolean {
+        fun same(a: CssResolver.GeneratedRun?, b: CssResolver.GeneratedRun?): Boolean {
+            if (a == null || b == null) return a == null && b == null
+            return a.text == b.text && a.italic == b.italic && a.bold == b.bold && a.scale == b.scale &&
+                a.foregroundColorArgb == b.foregroundColorArgb && a.backgroundColorArgb == b.backgroundColorArgb &&
+                a.fontFeatureSettings == b.fontFeatureSettings && a.fontFamilyName == b.fontFamilyName &&
+                a.textTransform == b.textTransform && a.visibilityHidden == b.visibilityHidden &&
+                a.publisherBox == b.publisherBox
+        }
+        return same(base.generated(element, after = false), narrow.generated(element, after = false)) &&
+            same(base.generated(element, after = true), narrow.generated(element, after = true))
+    }
+
+    private fun responsiveCellStyle(
+        cell: Element,
+        table: Element,
+        header: Boolean,
+        resolver: CssResolver,
+    ): TableCellStyle {
+        val computed = resolver.computed(cell)
+        val box = resolver.publisherBoxStyle(cell)
+            ?: PublisherBoxStyle.DEFAULT.takeIf { computed.paddingSpecified || computed.borderSpecified }
+        return TableCellStyle(
+            block = tableCellBlockStyle(cell, table, resolver, css),
+            publisherBox = box,
+            align = cellAlign(cell, header, resolver),
+            publisherPaddingSpecified = computed.paddingSpecified,
+            publisherBorderSpecified = tableBorderSpecified(cell, table, resolver),
+        )
+    }
+
+    /**
+     * Table/row border declarations opt out of the reader's fallback grid,
+     * including explicit `none`/zero values that have no painted box. Borders
+     * themselves still belong to their source element; CSS does not inherit
+     * the table's outer frame into every cell.
+     */
+    private fun tableBorderSpecified(cell: Element, table: Element, resolver: CssResolver?): Boolean {
+        var element: Element? = cell
+        while (element != null) {
+            if (resolver?.computed(element)?.borderSpecified == true) {
+                if (element === cell || element === table) return true
+                val rowBox = resolver.publisherBoxStyle(element)
+                val hasPaintedRowBorder = listOf(
+                    rowBox?.borderTop, rowBox?.borderRight, rowBox?.borderBottom, rowBox?.borderLeft,
+                ).any { it != null && (it.usesCurrentColor || (it.colorArgb ushr 24) != 0) }
+                // Row/group frames are not retained by the grid renderer.
+                // Their explicit borderless policy is still representable;
+                // positive row borders must not erase the fallback grid.
+                if (!hasPaintedRowBorder) return true
+            }
+            if (element === table) {
+                // Legacy EPUB/MOBI markup can express a borderless table
+                // without a stylesheet. Positive borders use the default grid.
+                return element.hasAttr("border") && element.attr("border").trim().toIntOrNull() == 0
+            }
+            element = element.parent()
+        }
+        return false
     }
 
     private fun emitTableCaption(caption: Element) {
@@ -961,17 +1381,22 @@ class HtmlMapper(
     private fun appendCellContent(cell: Element, builder: InlineTextBuilder) {
         val wholeCellStyle = tableCellInlineStyle(cell)
         if (wholeCellStyle != null) builder.pushStyle(wholeCellStyle)
+        appendGeneratedRun(builder, generated(cell, after = false))
         for (child in cell.childNodes()) {
-            if (child is Element && child.normalName() in CELL_BLOCK_TAGS) {
-                if (!builder.isBlank) builder.lineBreak()
+            if (child is Element &&
+                (child.normalName() in CELL_BLOCK_TAGS || isCssFlowBlock(child))
+            ) {
+                if (!builder.isBlank && builder.lastCharacter != '\n') builder.lineBreak()
                 // Treat the block as an inline formatting scope inside the
                 // cell. Calling appendChildrenInline directly used to drop a
                 // p/div's own CSS while keeping only styles on its children.
                 appendInline(child, builder)
+                builder.lineBreak()
             } else {
                 appendInline(child, builder)
             }
         }
+        appendGeneratedRun(builder, generated(cell, after = true))
         if (wholeCellStyle != null) builder.pop()
     }
 
@@ -981,8 +1406,12 @@ class HtmlMapper(
      * embedded font families are resolved later by the renderer and the
      * publisher-formatting toggle must continue to control them.
      */
-    private fun tableCellBlockStyle(cell: Element, table: Element): BlockStyle? {
-        val resolver = css
+    private fun tableCellBlockStyle(
+        cell: Element,
+        table: Element,
+        resolver: CssResolver? = css,
+        baseResolver: CssResolver? = resolver,
+    ): BlockStyle? {
         val language = languageFor(cell)
         val tableLanguage = languageFor(table)
         if (resolver == null) {
@@ -998,7 +1427,7 @@ class HtmlMapper(
         }
 
         val own = resolver.computed(cell)
-        val base = resolver.computed(table)
+        val base = (baseResolver ?: resolver).computed(table)
         val ownDirection = when (own.direction) {
             "ltr" -> BookTextDirection.LTR
             "rtl" -> BookTextDirection.RTL
@@ -1020,6 +1449,7 @@ class HtmlMapper(
                 kotlin.math.abs(own.fontSizeEm - base.fontSizeEm) > 0.001f
             },
             fontFamily = own.fontFamilyName.takeIf { it != base.fontFamilyName },
+            fontFeatureSettings = own.fontFeatureSettings.takeIf { it != base.fontFeatureSettings },
             lineHeightMult = when {
                 own.lineHeightMult == null && base.lineHeightMult != null -> 1.3f
                 own.lineHeightMult != null && (
@@ -1077,6 +1507,7 @@ class HtmlMapper(
             bold = own?.bold ?: base.bold,
             fontScale = own?.fontScale ?: base.fontScale,
             fontFamily = own?.fontFamily ?: base.fontFamily,
+            fontFeatureSettings = own?.fontFeatureSettings ?: base.fontFeatureSettings,
             lineHeightMult = own?.lineHeightMult ?: base.lineHeightMult,
             language = own?.language ?: base.language,
             direction = own?.direction ?: base.direction,
@@ -1089,7 +1520,8 @@ class HtmlMapper(
     /**
      * Legacy HTML uses `align=` instead of CSS, especially in MOBI6. Search
      * wrapper blocks too: `<div align="center"><p>…</p></div>` is common.
-     * A computed CSS alignment still wins in [blockStyleFor].
+     * Used when no CSS resolver is available. With a resolver, presentational
+     * hints participate at their owning element before CSS and inheritance.
      */
     private fun attributeAlign(element: Element): BlockAlign? {
         var node: Element? = element
@@ -1106,8 +1538,8 @@ class HtmlMapper(
         return null
     }
 
-    private fun cellAlign(cell: Element, header: Boolean): BlockAlign? {
-        val cssAlign = css?.let {
+    private fun cellAlign(cell: Element, header: Boolean, resolver: CssResolver? = css): BlockAlign? {
+        val cssAlign = resolver?.let {
             // Only the cell's own/row/table alignment matters — an inherited
             // body-wide justify would look broken in narrow cells.
             when (it.computed(cell).textAlign) {
@@ -1138,6 +1570,7 @@ class HtmlMapper(
     }
 
     private fun emitImageContent(src: String, node: Element?) {
+        if (node?.let { css?.computed(it)?.hidden } == true) return
         val alt = node?.let(::imageAlt)
         if (src.isEmpty()) {
             emitMissingImageAlt(alt)
@@ -1151,11 +1584,19 @@ class HtmlMapper(
         // An ornament set to `height: 1em` must stay that size instead of
         // being stretched across the column.
         val computed = node?.let { css?.computed(it) }
+        val darkStyle = node?.let { css?.darkImageStyle(it) }
         out += ContentElement.Image(
             path = path,
             widthFrac = computed?.widthFrac,
             widthEm = computed?.widthEm,
             heightEm = computed?.heightEm,
+            maxHeightEm = computed?.maxHeightEm,
+            maxHeightViewportFrac = computed?.maxHeightViewportFrac,
+            maxWidthEm = computed?.maxWidthEm,
+            maxWidthFrac = computed?.maxWidthFrac,
+            darkModeInvert = darkStyle?.imageInvert == true,
+            darkModeBackgroundArgb = darkStyle?.backgroundColorArgb,
+            darkModeBackgroundCurrentColor = darkStyle?.backgroundUsesCurrentColor == true,
             altText = alt,
             spaceBeforeSpecified = computed?.marginTopSpecified == true,
             spaceAfterSpecified = computed?.marginBottomSpecified == true,
@@ -1245,10 +1686,22 @@ class HtmlMapper(
      * longer the publication resource directory.
      */
     private fun emitSvg(source: Element) {
+        if (css?.computed(source)?.hidden == true) return
         resolveSvg(source)?.let {
             val computed = css?.computed(source)
+            val darkStyle = css?.darkImageStyle(source)
             out += ContentElement.Image(
                 path = it,
+                widthFrac = computed?.widthFrac,
+                widthEm = computed?.widthEm,
+                heightEm = computed?.heightEm,
+                maxWidthFrac = computed?.maxWidthFrac,
+                maxWidthEm = computed?.maxWidthEm,
+                maxHeightEm = computed?.maxHeightEm,
+                maxHeightViewportFrac = computed?.maxHeightViewportFrac,
+                darkModeInvert = darkStyle?.imageInvert == true,
+                darkModeBackgroundArgb = darkStyle?.backgroundColorArgb,
+                darkModeBackgroundCurrentColor = darkStyle?.backgroundUsesCurrentColor == true,
                 altText = source.attr("aria-label").ifBlank {
                     source.selectFirst("title")?.text().orEmpty()
                 }.trim().takeIf(String::isNotEmpty),
@@ -1259,6 +1712,7 @@ class HtmlMapper(
     }
 
     private fun resolveSvg(source: Element): String? {
+        if (css?.computed(source)?.hidden == true) return null
         val svg = source.clone()
         if (svg.attr("xmlns").isEmpty()) {
             svg.attr("xmlns", "http://www.w3.org/2000/svg")
@@ -1356,6 +1810,7 @@ class HtmlMapper(
             firstLineIndent = computed.textIndentEm?.let { it > 0.05f },
             firstLineIndentEm = computed.textIndentEm,
             fontFamily = computed.fontFamilyName,
+            fontFeatureSettings = computed.fontFeatureSettings,
             lineHeightMult = computed.lineHeightMult,
             hyphens = computed.hyphensAuto,
             // The values themselves stay on PublisherBoxSpan. These bits let
@@ -1383,21 +1838,30 @@ class HtmlMapper(
     /** A generated run appended as styled inline text. */
     private fun appendGeneratedRun(builder: InlineTextBuilder, run: CssResolver.GeneratedRun?) {
         if (run == null) return
+        val family = run.fontFamilyName?.takeUnless { it in GENERIC_FONT_FAMILIES }
+        if (family != null) builder.pushAnnotation(INLINE_FONT_FAMILY_TAG, family)
+        if (run.visibilityHidden) builder.pushAnnotation(HIDDEN_TEXT_TAG, "true")
         val style = generatedSpanStyle(run)
         if (style != null) builder.pushStyle(style)
-        builder.text(run.text)
+        builder.text(transformText(run.text, run.textTransform))
         if (style != null) builder.pop()
+        if (run.visibilityHidden) builder.pop()
+        if (family != null) builder.pop()
     }
 
     private fun generatedSpanStyle(run: CssResolver.GeneratedRun): SpanStyle? {
         var style = SpanStyle()
         var any = false
-        if (run.italic == true) {
-            style = style.copy(fontStyle = FontStyle.Italic)
+        run.fontFeatureSettings?.let {
+            style = style.copy(fontFeatureSettings = it)
             any = true
         }
-        if (run.bold == true) {
-            style = style.copy(fontWeight = FontWeight.Bold)
+        if (run.italic != null) {
+            style = style.copy(fontStyle = if (run.italic) FontStyle.Italic else FontStyle.Normal)
+            any = true
+        }
+        if (run.bold != null) {
+            style = style.copy(fontWeight = if (run.bold) FontWeight.Bold else FontWeight.Normal)
             any = true
         }
         if (run.scale !in 0.99f..1.01f) {
@@ -1420,20 +1884,38 @@ class HtmlMapper(
         val run = generated(element, after) ?: return
         val builder = InlineTextBuilder()
         appendGeneratedRun(builder, run)
-        if (builder.isBlank) return
-        val block = blockStyleFor(element)?.copy(firstLineIndent = false)
-            ?: BlockStyle(firstLineIndent = false)
-        out += ContentElement.Paragraph(
-            builder.build(),
-            if (quote) ParagraphStyle.QUOTE else ParagraphStyle.NORMAL,
-            block,
-        )
+        val generatedBox = run.publisherBox
+        if (builder.isBlank && generatedBox == null) return
+        val start = out.size
+        if (builder.isBlank) {
+            // Empty content can still draw a publisher separator; the zero
+            // height leaf gives its border/margins a retained range without
+            // inventing visible text or a full default paragraph gap.
+            out += ContentElement.Spacer(generatedBox?.minHeightEm ?: 0f)
+        } else {
+            out += ContentElement.Paragraph(
+                builder.build(),
+                if (quote) ParagraphStyle.QUOTE else ParagraphStyle.NORMAL,
+                looseBlockTextStyle(element).copy(firstLineIndent = false),
+            )
+        }
+        if (generatedBox != null) {
+            publisherBoxes += PublisherBoxSpan(
+                id = "$publisherBoxIdPrefix:generated-box-${publisherBoxSequence++}",
+                parentId = publisherBoxStack.lastOrNull(),
+                startElement = start,
+                endElementExclusive = out.size,
+                style = generatedBox,
+            )
+        }
     }
 
     /** Returns a generated run only when the shared book budget accepts it. */
     private fun generated(element: Element, after: Boolean): CssResolver.GeneratedRun? {
         val run = css?.generated(element, after) ?: return null
-        return run.takeIf { expansionBudget.acceptGenerated(it.text.length) }
+        // An explicit empty string still suppresses default q punctuation
+        // and can paint a border. It consumes no generated-text budget.
+        return run.takeIf { it.text.isEmpty() || expansionBudget.acceptGenerated(it.text.length) }
     }
 
     private fun firstBlockChild(container: Element): Element? =
@@ -1475,6 +1957,81 @@ class HtmlMapper(
 
     // -------------------------------------------------------------- inline
 
+    /** Fixed-width author initials/ornaments remain inside their source line. */
+    private fun appendInlineTextBox(
+        element: Element,
+        builder: InlineTextBuilder,
+        preserveWhitespace: Boolean,
+        depth: Int,
+    ): Boolean {
+        val resolver = css ?: return false
+        if (element.normalName() !in SIMPLE_INLINE_TEXT_BOX_TAGS ||
+            element.childNodes().any { it !is TextNode }
+        ) return false
+        val own = resolver.computed(element)
+        val width = own.widthEm ?: return false
+        if (own.display != "inline-block" || !width.isFinite() || width <= 0f ||
+            own.superScript || own.subScript || own.floatSide != null || own.paddingSpecified ||
+            own.borderSpecified || own.heightEm != null || own.maxWidthEm != null || own.maxWidthFrac != null ||
+            own.backgroundColorArgb?.let { it ushr 24 != 0 } == true ||
+            own.marginTopEm != 0f || own.marginBottomEm != 0f ||
+            own.marginStartEm != 0f || own.marginEndEm != 0f ||
+            own.marginStartFrac != 0f || own.marginEndFrac != 0f ||
+            own.marginInlineStartEm != 0f || own.marginInlineEndEm != 0f ||
+            own.marginInlineStartFrac != 0f || own.marginInlineEndFrac != 0f ||
+            resolver.generated(element, after = false) != null || resolver.generated(element, after = true) != null
+        ) return false
+        val raw = element.wholeText()
+        if ('\n' in raw || raw.codePointCount(0, raw.length) !in 1..2) return false
+        val container = generateSequence(element.parent()) { it.parent() }.firstOrNull {
+            it.normalName() in INLINE_TEXT_BLOCK_TAGS || isCssFlowBlock(it)
+        } ?: element.parent() ?: return false
+        val widthEm = width / resolver.computed(container).fontSizeEm
+        if (!widthEm.isFinite() || widthEm !in 0.05f..16f) return false
+        val content = InlineTextBuilder()
+        val style = inlineStyleFor(element)
+        if (style != null) content.pushStyle(style)
+        appendChildrenInline(element, content, preserveWhitespace, depth)
+        if (style != null) content.pop()
+        val text = content.build()
+        if (text.isEmpty() || text.text.codePointCount(0, text.length) > 2) return false
+        val spec = InlineTextBoxSpec(
+            id = "inline-box:$publisherBoxIdPrefix:${builder.length}",
+            widthEm = widthEm,
+            align = own.textAlign?.takeIf { it in setOf("start", "end", "left", "right", "center") } ?: "start",
+            sourceLength = text.length,
+        )
+        builder.pushAnnotation(INLINE_TEXT_BOX_TAG, spec.encode())
+        builder.inlineAnnotated(spec.id, text)
+        builder.pop()
+        return true
+    }
+
+    /** Author-requested case conversion follows the text's declared language. */
+    private fun transformText(
+        text: String,
+        transform: String?,
+        element: Element? = null,
+        previousCharacter: Char? = null,
+    ): String {
+        if (transform == null || transform == "none") return text
+        val locale = element?.let(::languageFor)?.let(Locale::forLanguageTag) ?: Locale.ROOT
+        return when (transform) {
+            "uppercase" -> text.uppercase(locale)
+            "lowercase" -> text.lowercase(locale)
+            "capitalize" -> CAPITALIZABLE_LETTER.replace(text) {
+                if (it.range.first == 0 && previousCharacter != null &&
+                    (previousCharacter.isLetterOrDigit() || previousCharacter in "’'"))
+                {
+                    it.value
+                } else {
+                    it.value.uppercase(locale)
+                }
+            }
+            else -> text
+        }
+    }
+
     private fun appendChildrenInline(
         element: Element,
         out: InlineTextBuilder,
@@ -1493,12 +2050,71 @@ class HtmlMapper(
         }
     }
 
+    /** Native ruby keeps the base in source coordinates and retains rich rt. */
+    private fun appendRuby(
+        ruby: Element,
+        out: InlineTextBuilder,
+        preserveWhitespace: Boolean,
+        depth: Int,
+        suppressedStyleElement: Element?,
+    ) {
+        var base = InlineTextBuilder()
+        for (child in ruby.childNodes()) {
+            if (child is Element && child.normalName() == "rp") continue
+            if (child !is Element || child.normalName() != "rt") {
+                appendInline(child, base, preserveWhitespace, depth + 1, suppressedStyleElement)
+                continue
+            }
+            if (css?.computed(child)?.hidden == true) {
+                out.appendAnnotated(base.build())
+                base = InlineTextBuilder()
+                continue
+            }
+            val baseText = base.build().trimmed()
+            val reading = InlineTextBuilder()
+            val style = inlineStyleFor(child) ?: if (css == null) {
+                SpanStyle(fontSize = TextUnit(0.5f, TextUnitType.Em))
+            } else null
+            if (style != null) reading.pushStyle(style)
+            appendChildrenInline(child, reading, preserveWhitespace, depth + 1, suppressedStyleElement)
+            if (style != null) reading.pop()
+            val readingText = reading.build().trimmed()
+            val mark = if ('\n' !in baseText.text &&
+                baseText.getStringAnnotations(INLINE_IMAGE_TAG, 0, baseText.length).isEmpty()) {
+                InlineRuby.from("ruby:${out.length}", baseText.length, readingText)
+            } else null
+            if (mark == null) {
+                // Malformed or unsupported complex ruby remains readable.
+                out.appendAnnotated(baseText)
+                if (readingText.isNotEmpty()) {
+                    out.pushStyle(SpanStyle(fontSize = TextUnit(0.6f, TextUnitType.Em),
+                        baselineShift = BaselineShift(0.35f)))
+                    out.appendAnnotated(readingText)
+                    out.pop()
+                }
+            } else {
+                val fallback = AnnotatedString.Builder().apply {
+                    append(baseText)
+                    pushStyle(SpanStyle(fontSize = TextUnit(0.6f, TextUnitType.Em),
+                        baselineShift = BaselineShift(0.35f)))
+                    append(readingText)
+                    pop()
+                }.toAnnotatedString()
+                out.pushAnnotation(INLINE_RUBY_TAG, mark.encode())
+                out.inlineAnnotated(mark.id, fallback)
+                out.pop()
+            }
+            base = InlineTextBuilder()
+        }
+        out.appendAnnotated(base.build())
+    }
+
     /** Trims formatting-source whitespace without discarding span/link ranges. */
     private fun AnnotatedString.trimmed(): AnnotatedString {
         var start = 0
         var end = length
-        while (start < end && text[start].isWhitespace()) start++
-        while (end > start && text[end - 1].isWhitespace()) end--
+        while (start < end && text[start] in " \t\r\n\u000C") start++
+        while (end > start && text[end - 1] in " \t\r\n\u000C") end--
         return if (start == 0 && end == length) this else subSequence(start, end)
     }
 
@@ -1510,16 +2126,24 @@ class HtmlMapper(
         suppressedStyleElement: Element? = null,
     ) {
         when (node) {
-            is TextNode -> if (preserveWhitespace) {
-                out.preformattedText(node.wholeText)
-            } else {
-                out.text(node.wholeText)
+            is TextNode -> {
+                val parent = node.parent()
+                val computed = parent?.let { css?.computed(it) }
+                val hidden = computed?.visibilityHidden == true
+                val family = computed?.fontFamilyName?.takeUnless { it in GENERIC_FONT_FAMILIES }
+                if (family != null) out.pushAnnotation(INLINE_FONT_FAMILY_TAG, family)
+                if (hidden) out.pushAnnotation(HIDDEN_TEXT_TAG, "true")
+                val text = transformText(node.wholeText, computed?.textTransform, parent, out.lastCharacter)
+                if (preserveWhitespace) out.preformattedText(text) else out.text(text)
+                if (hidden) out.pop()
+                if (family != null) out.pop()
             }
 
             is Element -> {
                 val bidiMode = inlineBidiMode(node)
                 if (bidiMode != null) out.pushAnnotation(BIDI_TAG, bidiMode.name)
                 try {
+                    if (node.normalName() in NON_TEXT_CONTENT_TAGS) return
                     if (depth >= maxStructureDepth) {
                         node.childNodes()
                             .filterIsInstance<TextNode>()
@@ -1530,11 +2154,15 @@ class HtmlMapper(
                         return
                     }
                     if (css?.computed(node)?.hidden == true) return
+                    if (appendInlineTextBox(node, out, preserveWhitespace, depth)) return
                     if (isMathElement(node)) {
                         registerMathAnchors(node)
                         mathFormatter.append(node, out)
                         return
                     }
+                    val scopedStyle = if (node === suppressedStyleElement) null else inlineStyleFor(node)
+                    if (scopedStyle != null) out.pushStyle(scopedStyle)
+                    try {
                     when (node.normalName()) {
                     "br" -> out.lineBreak()
                     "wbr" -> out.wordBreakOpportunity()
@@ -1569,10 +2197,7 @@ class HtmlMapper(
                         }
                     }
 
-                    // EPUB 3 ruby: base text renders normally, the reading
-                    // (<rt>) becomes a small superscript right after its
-                    // base, fallback parentheses (<rp>) are dropped.
-                    "ruby" -> appendChildrenInline(
+                    "ruby" -> appendRuby(
                         node, out, preserveWhitespace, depth, suppressedStyleElement,
                     )
                     "rp" -> Unit
@@ -1608,15 +2233,19 @@ class HtmlMapper(
                     }
                     "mark" -> {
                         out.pushStyle(SpanStyle(background = Color(0x66FFD54F)))
-                        val style = inlineStyleFor(node)
-                        if (style != null) out.pushStyle(style)
+                        appendGeneratedRun(out, generated(node, after = false))
                         appendChildrenInline(
                             node, out, preserveWhitespace, depth, suppressedStyleElement,
                         )
-                        if (style != null) out.pop()
+                        appendGeneratedRun(out, generated(node, after = true))
                         out.pop()
                     }
                     "a" -> {
+                        fun appendLinkContent() {
+                            appendGeneratedRun(out, generated(node, after = false))
+                            appendChildrenInline(node, out, preserveWhitespace, depth, suppressedStyleElement)
+                            appendGeneratedRun(out, generated(node, after = true))
+                        }
                         val href = node.attr("href").trim()
                         val key = href.takeIf { it.isNotEmpty() }?.let(resolveLink)
                         if (key != null) {
@@ -1627,37 +2256,27 @@ class HtmlMapper(
                                 if (note) FOOTNOTE_TAG else LINK_TAG,
                                 key,
                             )
-                            appendChildrenInline(
-                                node, out, preserveWhitespace, depth, suppressedStyleElement,
-                            )
+                            appendLinkContent()
                             out.pop()
                         } else if (safeExternalHref(href)) {
                             out.pushAnnotation(EXTERNAL_LINK_TAG, href)
-                            appendChildrenInline(
-                                node, out, preserveWhitespace, depth, suppressedStyleElement,
-                            )
+                            appendLinkContent()
                             out.pop()
                         } else {
-                            appendChildrenInline(
-                                node, out, preserveWhitespace, depth, suppressedStyleElement,
-                            )
+                            appendLinkContent()
                         }
                     }
 
                     else -> {
-                        val style = if (node === suppressedStyleElement) {
-                            null
-                        } else {
-                            inlineStyleFor(node)
-                        }
-                        if (style != null) out.pushStyle(style)
                         appendGeneratedRun(out, generated(node, after = false))
                         appendChildrenInline(
                             node, out, preserveWhitespace, depth, suppressedStyleElement,
                         )
                         appendGeneratedRun(out, generated(node, after = true))
-                        if (style != null) out.pop()
                     }
+                    }
+                    } finally {
+                        if (scopedStyle != null) out.pop()
                     }
                 } finally {
                     if (bidiMode != null) out.pop()
@@ -1684,6 +2303,10 @@ class HtmlMapper(
 
         var style = SpanStyle()
         var any = false
+        if (own.fontFeatureSettings != base.fontFeatureSettings) {
+            style = style.copy(fontFeatureSettings = own.fontFeatureSettings ?: "")
+            any = true
+        }
         if (own.italic != null && own.italic != base.italic) {
             style = style.copy(fontStyle = if (own.italic) FontStyle.Italic else FontStyle.Normal)
             any = true
@@ -1748,6 +2371,7 @@ class HtmlMapper(
         }
         return mergeSpanStyles(if (any) style else null, languageStyle)
     }
+
 
     /** Presentational HTML attributes used heavily by MOBI6. */
     private fun legacyInlineStyle(element: Element): SpanStyle? {
@@ -2008,6 +2632,19 @@ class HtmlMapper(
             "span", "a", "em", "i", "b", "strong", "u", "s", "sup", "sub",
             "small", "big", "code", "br", "img", "ruby", "rt", "rp", "rb",
         )
+        val NON_CONTENT_TAGS = setOf("br", "wbr", "style", "script", "head", "title", "link", "meta")
+        val NON_TEXT_CONTENT_TAGS = setOf("style", "script", "head", "title", "link", "meta", "source", "track")
+        val CAPITALIZABLE_LETTER = Regex("(?<![\\p{L}\\p{N}’'])[\\p{L}]")
+        val CSS_BLOCK_DISPLAYS = setOf("block", "flow-root", "list-item", "flex", "grid", "table")
+        val CSS_HORIZONTAL_DISPLAYS = setOf("flex", "inline-flex", "table", "inline-table")
+        val CSS_ROW_EXCLUDED_TAGS = setOf("table", "tr", "td", "th")
+        val GENERIC_FONT_FAMILIES = setOf("serif", "sans-serif", "sans", "monospace", "cursive", "fantasy", "system-ui")
+        val COMPLEX_HORIZONTAL_CELL_TAGS = setOf("table", "ul", "ol", "audio", "video", "img", "svg")
+        const val MAX_CSS_ROW_CELLS = 24
+        const val MAX_RESPONSIVE_TABLE_CELLS = 4_096
+        const val MAX_RESPONSIVE_TABLE_DESCENDANTS = 8_192
+        val SIMPLE_INLINE_TEXT_BOX_TAGS = setOf("span", "i", "em", "b", "strong", "small", "abbr", "u", "s")
+        val INLINE_TEXT_BLOCK_TAGS = setOf("p", "h1", "h2", "h3", "h4", "h5", "h6", "td", "th", "pre", "li", "dt", "dd", "line")
         val IMAGE_TAGS = setOf("img", "image")
         val PUBLISHER_BOX_TAGS = setOf(
             "p", "li", "dt", "dd", "pre",

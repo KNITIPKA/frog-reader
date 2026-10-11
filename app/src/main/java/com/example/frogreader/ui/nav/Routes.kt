@@ -56,4 +56,4 @@ enum class NavTab {
 data class BookMetadataRoute(val bookId: String)
 
 @Serializable
-data class BookInfoRoute(val bookId: String, val reviewRequested: Boolean = false)
+data class BookInfoRoute(val bookId: String, val reviewRequested: Boolean = false, val editRequested: Boolean = false)

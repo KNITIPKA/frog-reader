@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="reading_log_days">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
+    <plurals name="library_imported_many">
+        <item quantity="one">%1$d book added to your library</item>
+        <item quantity="other">%1$d books added to your library</item>
+    </plurals>
+    <plurals name="library_imported_many_partial">
+        <item quantity="one">%1$d book added, %2$d couldn\'t be read</item>
+        <item quantity="other">%1$d books added, %2$d couldn\'t be read</item>
+    </plurals>
+    <plurals name="library_selected_count">
+        <item quantity="one">%1$d selected</item>
+        <item quantity="other">%1$d selected</item>
+    </plurals>
+    <plurals name="reader_search_matches">
+        <item quantity="one">%1$d match</item>
+        <item quantity="other">%1$d matches</item>
+    </plurals>
+    <plurals name="reader_search_pages_range">
+        <item quantity="one">This book has %1$d page</item>
+        <item quantity="other">This book has %1$d pages</item>
+    </plurals>
+    <plurals name="backup_export_done">
+        <item quantity="one">Backed up %1$d book.</item>
+        <item quantity="other">Backed up %1$d books.</item>
+    </plurals>
+    <plurals name="backup_restore_done_missing">
+        <item quantity="one">Restored %1$s and %2$s. %3$d has no file yet.</item>
+        <item quantity="other">Restored %1$s and %2$s. %3$d have no file yet.</item>
+    </plurals>
+    <plurals name="reader_chapter_pages_left">
+        <item quantity="one">%1$d page left in chapter</item>
+        <item quantity="other">%1$d pages left in chapter</item>
+    </plurals>
+    <plurals name="completion_days">
+        <item quantity="one">It took you %1$d day</item>
+        <item quantity="other">It took you %1$d days</item>
+    </plurals>
+    <plurals name="stats_streak_hint">
+        <item quantity="one">Days with at least %1$d minute of reading</item>
+        <item quantity="other">Days with at least %1$d minutes of reading</item>
+    </plurals>
+    <plurals name="profile_today_reading">
+        <item quantity="one">Today: %1$d minute read, %2$d minute goal</item>
+        <item quantity="other">Today: %1$d minutes read, %2$d minute goal</item>
+    </plurals>
+    <plurals name="profile_day_reading">
+        <item quantity="one">%1$s: %2$d minute, %3$d%% of goal</item>
+        <item quantity="other">%1$s: %2$d minutes, %3$d%% of goal</item>
+    </plurals>
+    <plurals name="backup_frequency_subtitle">
+        <item quantity="one">The %1$d most recent backup is kept</item>
+        <item quantity="other">The %1$d most recent backups are kept</item>
+    </plurals>
+    <plurals name="profile_achievements_progress">
+        <item quantity="one">%1$d of %2$d unlocked</item>
+        <item quantity="other">%1$d of %2$d unlocked</item>
+    </plurals>
+    <plurals name="scan_looking">
+        <item quantity="one">%1$d found so far…</item>
+        <item quantity="other">%1$d found so far…</item>
+    </plurals>
+    <plurals name="scan_found">
+        <item quantity="one">%1$d book · %2$d already in your library</item>
+        <item quantity="other">%1$d books · %2$d already in your library</item>
+    </plurals>
+    <plurals name="scan_selected_count">
+        <item quantity="one">%1$d selected</item>
+        <item quantity="other">%1$d selected</item>
+    </plurals>
+    <plurals name="scan_add_n">
+        <item quantity="one">Add %1$d book</item>
+        <item quantity="other">Add %1$d books</item>
+    </plurals>
+    <plurals name="reading_queue_legacy_note">
+        <item quantity="one">Your existing note is kept in full. To change it, shorten it to %1$d character.</item>
+        <item quantity="other">Your existing note is kept in full. To change it, shorten it to %1$d characters.</item>
+    </plurals>
+    <plurals name="backup_log_entries_count">
+        <item quantity="one">%1$d log entry</item>
+        <item quantity="other">%1$d log entries</item>
+    </plurals>
+</resources>

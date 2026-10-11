@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="reading_log_cover_optional">Cover (optional)</string>
+    <string name="reading_log_cover_gallery">Gallery</string>
+    <string name="reading_log_cover_camera">Camera</string>
+    <string name="reading_log_cover_remove">Remove</string>
+    <string name="reading_log_date_not_set">Not set</string>
+    <string name="reading_log_full_review">Read full review</string>
+</resources>

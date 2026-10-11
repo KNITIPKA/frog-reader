@@ -1,0 +1,8 @@
+<resources>
+    <string name="selection_quote_another_color">New quote</string>
+    <string name="quote_color_default">Theme color</string>
+    <string name="quote_color_blue">Blue</string>
+    <string name="quote_color_rose">Rose</string>
+    <string name="quote_color_amber">Amber</string>
+    <string name="quote_color_violet">Violet</string>
+</resources>

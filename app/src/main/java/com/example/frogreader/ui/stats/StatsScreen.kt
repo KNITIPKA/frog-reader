@@ -18,7 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.LocalFireDepartment
-import androidx.compose.material.icons.rounded.MenuBook
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,11 +29,13 @@ import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,6 +44,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLocale
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -151,7 +154,7 @@ fun StatsScreen(
                             color = MaterialTheme.colorScheme.onTertiaryContainer,
                         )
                         Text(
-                            text = stringResource(R.string.stats_streak_hint, goalMinutes),
+                            text = pluralStringResource(R.plurals.stats_streak_hint, goalMinutes, goalMinutes),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f),
                         )
@@ -177,8 +180,10 @@ fun StatsScreen(
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
+            val goalSliderState = remember { SliderState(trackRange = 5f..180f) }
+            goalSliderState.value = settings.dailyGoalMinutes.toFloat()
             Slider(
-                value = settings.dailyGoalMinutes.toFloat(),
+                state = goalSliderState,
                 onValueChange = { value ->
                     val rounded = ((value / 5).roundToInt() * 5).coerceIn(5, 180)
                     if (rounded != settings.dailyGoalMinutes) {
@@ -186,7 +191,6 @@ fun StatsScreen(
                         viewModel.setDailyGoal(rounded)
                     }
                 },
-                valueRange = 5f..180f,
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -220,7 +224,7 @@ fun StatsScreen(
                     modifier = Modifier.weight(1f),
                 )
                 StatTile(
-                    icon = Icons.Rounded.MenuBook,
+                    icon = Icons.AutoMirrored.Rounded.MenuBook,
                     value = finishedBooks.toString(),
                     label = stringResource(R.string.stats_books_finished),
                     modifier = Modifier.weight(1f),

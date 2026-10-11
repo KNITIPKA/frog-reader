@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="settings_reader_chrome_title">Reader controls</string>
+    <string name="settings_reader_chrome_subtitle">Floating panels or full-width bars</string>
+    <string name="reader_chrome_floating">Floating</string>
+    <string name="reader_chrome_classic">Classic</string>
+    <string name="reader_chrome_floating_description">Rounded panels inset from the page edges</string>
+    <string name="reader_chrome_classic_description">Full-width bars at the top and bottom of the page</string>
     <string name="reader_expand_panel">Expand reading panel</string>
     <string name="reader_collapse_panel">Collapse reading panel</string>
     <plurals name="reader_chapters_remaining">
@@ -9,6 +15,5 @@
     <string name="reader_last_chapter">Last chapter</string>
     <string name="reader_chapter_percent_remaining">%1$d%% left in chapter</string>
     <string name="reader_book_page_position">%1$d/%2$d</string>
-    <string name="reader_book_page_description">Page %1$d of %2$d</string>
     <string name="reader_book_percent_position">%1$d%%</string>
 </resources>

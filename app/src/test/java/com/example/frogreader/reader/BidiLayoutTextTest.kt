@@ -2,9 +2,11 @@ package com.example.frogreader.reader
 
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.intl.LocaleList
+import androidx.compose.ui.text.style.TextAlign
 import com.example.frogreader.data.model.BIDI_TAG
 import com.example.frogreader.data.model.InlineBidiMode
 import com.example.frogreader.ui.reader.BidiLayoutText
@@ -81,9 +83,42 @@ class BidiLayoutTextTest {
         val bidi = BidiLayoutText.of(source)
 
         assertSame(source, bidi.display)
-        assertFalse(bidi.hasControls)
+        assertFalse(bidi.hasLayoutChanges)
         assertEquals(4, bidi.layoutStart(4))
         assertEquals(4, bidi.sourceOffset(4))
+    }
+
+    @Test
+    fun `explicit paragraphs use Compose breaks while source keeps authored newlines`() {
+        val source = AnnotatedString.Builder("Left\nאב\nCenter").apply {
+            addStyle(ParagraphStyle(textAlign = TextAlign.Left), 0, 4)
+            addStyle(ParagraphStyle(textAlign = TextAlign.Right), 5, 7)
+            addStyle(ParagraphStyle(textAlign = TextAlign.Center), 8, 14)
+            addStringAnnotation(BIDI_TAG, InlineBidiMode.ISOLATE_RTL.name, 5, 7)
+            addStringAnnotation("note", "second paragraph", 5, 7)
+        }.toAnnotatedString()
+        val layout = BidiLayoutText.of(source)
+        assertEquals("Left\nאב\nCenter", layout.source.text)
+        assertEquals("Left\u2067אב\u2069Center", layout.display.text)
+        assertTrue(layout.hasLayoutChanges)
+        val paragraphs = layout.display.paragraphStyles
+        assertEquals(listOf("Left", "\u2067אב\u2069", "Center"), paragraphs.map {
+            layout.display.text.substring(it.start, it.end)
+        })
+        assertEquals(listOf(0, 4, 8), paragraphs.map { it.start })
+        assertEquals(listOf(4, 8, 14), paragraphs.map { it.end })
+        val note = layout.display.getStringAnnotations("note", 0, layout.display.length).single()
+        assertEquals("אב", layout.display.text.substring(note.start, note.end))
+        assertEquals(5, layout.sourceOffset(note.start))
+        assertEquals(7, layout.sourceOffset(note.end))
+        assertEquals(5, layout.sourceOffset(layout.layoutStart(5)))
+        assertEquals(source.length, layout.sourceOffset(layout.display.length))
+    }
+
+    @Test
+    fun `plain multiline text retains its literal line breaks`() {
+        val source = AnnotatedString("One\n\nTwo")
+        assertSame(source, BidiLayoutText.of(source).display)
     }
 
     private fun isBidiControl(char: Char): Boolean = char in setOf(

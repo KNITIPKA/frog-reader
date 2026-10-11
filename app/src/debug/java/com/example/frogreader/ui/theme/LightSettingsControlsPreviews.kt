@@ -11,6 +11,7 @@ import androidx.compose.ui.unit.dp
 import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.AppTheme
 import com.example.frogreader.data.BackupFrequency
+import com.example.frogreader.data.model.BackupMode
 import com.example.frogreader.ui.settings.ReadingSettingsPage
 import com.example.frogreader.ui.settings.BackupHero
 import com.example.frogreader.ui.settings.BackupScopeRow
@@ -21,6 +22,7 @@ import com.example.frogreader.ui.settings.SettingsCard
 import com.example.frogreader.ui.settings.SettingsControlRow
 import com.example.frogreader.ui.settings.SettingsDivider
 import com.example.frogreader.ui.settings.SettingsSectionLabel
+import com.example.frogreader.ui.settings.SettingsHelper
 
 @Preview(name = "Light · reading settings", widthDp = 393, heightDp = 852, showSystemUi = true)
 @Composable
@@ -34,7 +36,24 @@ private fun LightReadingSettingsPreview() {
 @Preview(name = "Light · backup controls", widthDp = 393, heightDp = 852, showSystemUi = true)
 @Composable
 private fun LightBackupControlsPreview() {
-    FrogReaderTheme(AppTheme.WHITE) {
+    BackupControlsPreview(AppTheme.WHITE, BackupMode.FULL)
+}
+
+@Preview(name = "Midnight · backup · Data only", widthDp = 393, heightDp = 900, showSystemUi = true)
+@Composable
+private fun MidnightBackupControlsPreview() = BackupControlsPreview(AppTheme.OLED, BackupMode.DATA)
+
+@Preview(name = "Midnight · backup · books · large text", widthDp = 360, heightDp = 900, fontScale = 1.5f)
+@Composable
+private fun MidnightBackupLargeTextPreview() = BackupControlsPreview(AppTheme.OLED, BackupMode.FULL)
+
+@Preview(name = "Beige · backup controls", widthDp = 393, heightDp = 900, showSystemUi = true)
+@Composable
+private fun BeigeBackupControlsPreview() = BackupControlsPreview(AppTheme.SEPIA, BackupMode.DATA)
+
+@Composable
+private fun BackupControlsPreview(theme: AppTheme, mode: BackupMode) {
+    FrogReaderTheme(theme) {
         SettingsPageScaffold(title = "Backup", onBack = {}) {
             BackupHero(
                 state = BackupViewModel.State.Idle, lastBackupAt = null,
@@ -44,9 +63,10 @@ private fun LightBackupControlsPreview() {
             Spacer(Modifier.height(24.dp))
             SettingsSectionLabel("Back up now includes")
             SettingsCard {
-                BackupScopeRow(false, "Data only", "Shelves, quotes, notes, progress and settings", "Small", true, {})
-                BackupScopeRow(true, "Data and books", "The same, plus every book file and cover", "~359 MB", true, {})
+                BackupScopeRow(mode == BackupMode.DATA, "Data only", "Reading Log with covers, Reading Queue, notes, progress and settings", "Small", true, {})
+                BackupScopeRow(mode == BackupMode.FULL, "Data and books", "The same, plus every book file and cover", "~359 MB", true, {})
             }
+            SettingsHelper("Automatic backups always use Data only, avoiding large background transfers.")
             Spacer(Modifier.height(24.dp))
             SettingsSectionLabel("Automatic backups")
             SettingsCard {

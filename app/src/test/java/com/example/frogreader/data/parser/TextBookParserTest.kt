@@ -165,4 +165,14 @@ class TextBookParserTest {
         val malformed = file("broken.txt", "").apply { writeBytes(byteArrayOf(0xff.toByte(), 0xfe.toByte(), 65)) }
         assertThrows(IOException::class.java) { TextBookParser.readText(malformed) }
     }
+
+    @Test fun `Markdown retains nesting above library defaults and rejects excessive inline nesting`() {
+        val paragraphs = content("> ".repeat(110) + "Within bound")
+            .chapters.single().elements.filterIsInstance<ContentElement.Paragraph>()
+        assertEquals(listOf("Within bound"), paragraphs.map { it.text.text })
+        assertEquals(ParagraphStyle.QUOTE, paragraphs.single().style)
+        assertThrows(IOException::class.java) {
+            content("*".repeat(280) + "Too deep" + "*".repeat(280))
+        }
+    }
 }

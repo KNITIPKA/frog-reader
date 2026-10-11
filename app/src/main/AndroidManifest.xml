@@ -5,6 +5,9 @@
     <!-- Unlocking the app. A normal permission: granted at install, never asked for. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Cover capture is optional; CAMERA permission must not imply required hardware. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!-- Discover only activities that can process selected text (Android 11+). -->
@@ -47,6 +50,7 @@
         android:icon="@mipmap/ic_frogus"
         android:label="@string/app_name"
         android:localeConfig="@xml/locales_config"
+        tools:targetApi="33"
         android:roundIcon="@mipmap/ic_frogus_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.FrogReader">

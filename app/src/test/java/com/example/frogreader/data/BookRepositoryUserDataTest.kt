@@ -4,6 +4,7 @@ import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.Bookmark
 import com.example.frogreader.data.model.Quote
+import com.example.frogreader.data.model.QuoteColor
 import com.example.frogreader.data.model.ReadingProgress
 import com.example.frogreader.data.model.ReadingStatus
 import kotlinx.coroutines.test.runTest
@@ -35,6 +36,28 @@ class BookRepositoryUserDataTest {
         fileName = "$id.epub",
         addedAtMillis = 1_000L,
     )
+
+    @Test
+    fun `overlapping quotes keep their own colors and notes across restart and deletion undo`() = runTest {
+        StoreFixture.seed(testDir, listOf(book("a")))
+        val repository = BookRepository(context = null)
+        val original = Quote("q1", "the entire paragraph", 0, 1_000L,
+            startItem = 1, startChar = 0, endItem = 1, endChar = 100, note = "original")
+        val nested = Quote("q2", "part of the paragraph", 0, 2_000L,
+            startItem = 1, startChar = 10, endItem = 1, endChar = 30,
+            note = "another thought", color = QuoteColor.BLUE)
+        repository.addQuote("a", original)
+        repository.addQuote("a", nested)
+        val reopened = BookRepository(context = null)
+        assertEquals(listOf(QuoteColor.DEFAULT, QuoteColor.BLUE), reopened.bookById("a")!!.quotes.map { it.color })
+        reopened.removeQuote("a", nested.id)
+        assertEquals(listOf(original.id), reopened.bookById("a")!!.quotes.map { it.id })
+        reopened.restoreQuote("a", nested)
+        val restored = BookRepository(context = null).bookById("a")!!.quotes
+        assertEquals("original", restored.single { it.id == original.id }.note)
+        assertEquals(QuoteColor.BLUE, restored.single { it.id == nested.id }.color)
+        assertEquals("another thought", restored.single { it.id == nested.id }.note)
+    }
 
     @Before
     fun setUp() {
@@ -228,6 +251,40 @@ class BookRepositoryUserDataTest {
         assertTrue(tombstones.containsKey("q1"))
         assertTrue(!tombstones.containsKey("q2"))
         assertEquals(1, StoreFixture.quotesOnDisk(testDir, "a").size)
+    }
+
+    @Test
+    fun `removing selected quotes preserves other passages and book data on disk`() = runTest {
+        val first = Quote("q1", "one", 0, 1_000L)
+        val second = Quote("q2", "two", 0, 2_000L)
+        val kept = Quote("q3", "three", 0, 3_000L, note = "Keep this note")
+        val other = Quote("q4", "another book", 0, 4_000L)
+        val original = book("a").copy(
+            quotes = listOf(first, second, kept),
+            rating = 4,
+            review = "Keep this review",
+            progress = ReadingProgress(fraction = 0.4f),
+            bookmarks = listOf(Bookmark("m1", 10, 0, "preview", 1_000L)),
+        )
+        StoreFixture.seed(testDir, listOf(original, book("b").copy(quotes = listOf(other))))
+        val repository = BookRepository(context = null)
+        val libraryBefore = File(testDir, "library.json").readText()
+        val progressBefore = File(testDir, "progress.json").readText()
+
+        repository.removeQuotes("a", setOf("q1", "q2", "missing", "q4"))
+
+        val reopened = BookRepository(context = null)
+        val result = requireNotNull(reopened.bookById("a"))
+        assertEquals(listOf("q3"), result.quotes.map { it.id })
+        assertEquals(kept.note, result.quotes.single().note)
+        assertEquals(original.rating, result.rating)
+        assertEquals(original.review, result.review)
+        assertEquals(original.progress, result.progress)
+        assertEquals(listOf("m1"), result.bookmarks.map { it.id })
+        assertEquals(listOf("q4"), reopened.bookById("b")?.quotes?.map { it.id })
+        assertEquals(setOf("q1", "q2"), StoreFixture.tombstonesOnDisk(testDir).keys)
+        assertEquals(libraryBefore, File(testDir, "library.json").readText())
+        assertEquals(progressBefore, File(testDir, "progress.json").readText())
     }
 
     @Test

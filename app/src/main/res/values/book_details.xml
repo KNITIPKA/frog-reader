@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="book_details_your_reading">Your reading</string>
+    <string name="book_details_more">More details</string>
+    <string name="book_details_save_changes">Save changes</string>
+    <string name="reading_log_set_rating">Rate %1$s out of 5 stars</string>
+    <string name="reading_log_stars_hint">Tap a star; tap again for a half star.</string>
+    <string name="reading_log_source">Read in</string>
+    <string name="reading_log_source_external">Other app</string>
+    <string name="reading_log_status_short">Status</string>
+    <string name="reading_log_unknown_date_hint">You can add a date later.</string>
+    <string name="reading_log_not_finished">Not finished</string>
+    <string name="reading_log_choose_day">Select a day</string>
+    <string name="reading_log_previous_month">Previous month</string>
+    <string name="reading_log_next_month">Next month</string>
+</resources>

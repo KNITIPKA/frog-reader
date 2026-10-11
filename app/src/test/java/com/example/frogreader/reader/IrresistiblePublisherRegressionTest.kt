@@ -1,5 +1,7 @@
 package com.example.frogreader.reader
 
+import com.example.frogreader.testfixtures.LocalBookFixtures
+
 import androidx.compose.ui.text.style.LineHeightStyle
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.model.BookFormat
@@ -18,10 +20,10 @@ class IrresistiblePublisherRegressionTest {
     @get:Rule val temp = TemporaryFolder()
 
     @Test fun `screenshot paragraphs retain author zero margins and untrimmed line height`() {
-        val source = File(
-            System.getProperty("frogreader.irresistibleEpub")
-                ?: "/Users/frog/Downloads/Irresistibleд.epub",
-        )
+        val source = System.getProperty("frogreader.irresistibleEpub")
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::File)
+            ?: LocalBookFixtures.find("Irresistibleд.epub")
         assumeTrue(source.isFile)
         val book = BookParsers.parseContent(source, BookFormat.EPUB, temp.root)
         val paragraphs = book.chapters.flatMap { it.elements }.filterIsInstance<ContentElement.Paragraph>()

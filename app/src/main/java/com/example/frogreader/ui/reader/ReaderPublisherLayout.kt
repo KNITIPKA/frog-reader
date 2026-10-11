@@ -21,6 +21,8 @@ data class ReaderPublisherBox(
     val floatSide: PublisherFloatSide?,
     val startsAtElement: Boolean,
     val endsAtElement: Boolean,
+    /** Shared source content for measuring an auto-width inline-block. */
+    val inlineContent: PublisherInlineContent? = null,
 )
 
 /** A semantic item rendered inside a figure-like CSS float. */
@@ -95,19 +97,25 @@ internal fun planPublisherChapter(
         result
     }
 
+    // Sort once and sweep the half-open intervals. Scanning/sorting every
+    // source span for every leaf made long books with verse/panels quadratic.
+    val orderedSpans = spans.filter { it.startElement < it.endElementExclusive }
+        .sortedWith(
+            compareBy<PublisherBoxSpan> { depth(it) }
+                .thenBy(PublisherBoxSpan::startElement)
+                .thenByDescending(PublisherBoxSpan::endElementExclusive),
+        )
+    val starts = HashMap<Int, MutableList<Int>>()
+    val ends = HashMap<Int, MutableList<Int>>()
+    orderedSpans.forEachIndexed { order, span ->
+        starts.getOrPut(span.startElement) { mutableListOf() }.add(order)
+        ends.getOrPut(span.endElementExclusive) { mutableListOf() }.add(order)
+    }
+    val active = java.util.TreeMap<Int, PublisherBoxSpan>()
     val boxesByElement = List(elements.size) { elementIndex ->
-        spans.asSequence()
-            .filter { span ->
-                span.startElement < span.endElementExclusive &&
-                    elementIndex >= span.startElement &&
-                    elementIndex < span.endElementExclusive
-            }
-            .sortedWith(
-                compareBy<PublisherBoxSpan> { depth(it) }
-                    .thenBy(PublisherBoxSpan::startElement)
-                    .thenByDescending(PublisherBoxSpan::endElementExclusive),
-            )
-            .map { span ->
+        ends[elementIndex]?.forEach(active::remove)
+        starts[elementIndex]?.forEach { order -> active[order] = orderedSpans[order] }
+        active.values.map { span ->
                 ReaderPublisherBox(
                     id = span.id,
                     parentId = span.parentId,
@@ -117,8 +125,33 @@ internal fun planPublisherChapter(
                     endsAtElement = span.drawEnd &&
                         span.endElementExclusive == elementIndex + 1,
                 )
-            }
-            .toList()
+            }.toMutableList()
+    }
+
+    // Keep one shared group per inline-block; every line must use the width
+    // of the entire stanza so its centering is stable across pages.
+    for (span in spans.asReversed()) {
+        if ((!span.style.shrinkToFit && !span.style.fitTextFlow && !span.style.centerContentVertically) ||
+            span.startElement !in elements.indices ||
+            span.endElementExclusive > elements.size ||
+            span.endElementExclusive - span.startElement !in 1..MAX_INLINE_BLOCK_LEAVES
+        ) continue
+        if (span.style.centerContentVertically &&
+            span.endElementExclusive - span.startElement > 64) continue
+        val contents = (span.startElement until span.endElementExclusive).map { index ->
+            val boxes = boxesByElement[index]
+            val ownIndex = boxes.indexOfFirst { it.id == span.id }
+            PublisherInlineLeaf(elements[index], boxes.drop(ownIndex + 1))
+        }
+        if (contents.any { it.element !is ContentElement.Paragraph && it.element !is ContentElement.Heading }) {
+            continue
+        }
+        val group = PublisherInlineContent(contents)
+        for (index in span.startElement until span.endElementExclusive) {
+            val boxes = boxesByElement[index]
+            val ownIndex = boxes.indexOfFirst { it.id == span.id }
+            if (ownIndex >= 0) boxes[ownIndex] = boxes[ownIndex].copy(inlineContent = group)
+        }
     }
 
     val clearBefore = MutableList(elements.size) { PublisherClear.NONE }
@@ -196,6 +229,8 @@ internal fun planPublisherChapter(
         suppressedElements = suppressed,
     )
 }
+
+private const val MAX_INLINE_BLOCK_LEAVES = 512
 
 /**
  * A collapsed float's source leaves stay in document coordinates but their

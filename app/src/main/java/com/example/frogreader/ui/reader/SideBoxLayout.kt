@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.reader
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.absoluteOffset
@@ -83,6 +84,7 @@ fun planSideBox(
     language: String?,
     widthPx: Int,
     publisherFloat: ReaderPublisherFloat? = null,
+    viewportHeightPx: Int? = null,
 ): SideBoxSpec? = with(density) {
     // Drop caps have their own switch; text wrapping around a floated
     // picture stays part of the publisher's full formatting.
@@ -100,9 +102,10 @@ fun planSideBox(
             bookFonts = bookFonts,
             language = language,
             containingWidthPx = widthPx,
+            viewportHeightPx = viewportHeightPx,
         ) ?: return null
         val beside = planBeside(
-            paragraph, measurer, settings, fontSize, bookFonts, language,
+            paragraph, measurer, density, settings, fontSize, bookFonts, language,
             widthPx, capText = null, imagePath = null,
             leftSide = publisherFloat.side ==
                 com.example.frogreader.data.model.PublisherFloatSide.LEFT,
@@ -119,7 +122,7 @@ fun planSideBox(
         // full structure as an ordinary stacked figure followed by the whole
         // paragraph, with a measured height shared by pagination and render.
         val paragraphBidi = BidiLayoutText.of(paragraph.text)
-        val paragraphHeight = measurer.measure(
+        val paragraphHeight = measurer.measureReader(
             text = paragraphBidi.display,
             style = ReaderMetrics.textStyle(
                 paragraph,
@@ -130,7 +133,9 @@ fun planSideBox(
                 language = language,
             ),
             constraints = Constraints(maxWidth = widthPx.coerceAtLeast(1)),
-            placeholders = inlineImagePlaceholders(paragraphBidi.display),
+            density = density,
+            bookFonts = bookFonts,
+            publisherStyles = settings.bookStyles,
         ).size.height
         return SideBoxSpec(
             capText = null,
@@ -156,7 +161,7 @@ fun planSideBox(
         val boxH = (boxW * aspect).roundToInt()
             .coerceAtMost((widthPx * 0.9f).roundToInt())
         return planBeside(
-            paragraph, measurer, settings, fontSize, bookFonts, language,
+            paragraph, measurer, density, settings, fontSize, bookFonts, language,
             widthPx, capText = null, imagePath = float.path, leftSide = float.left,
             boxW = boxW, boxH = boxH, gapPx = gapPx,
             minimumBesideWidthPx = minimumBesideWidthPx,
@@ -180,21 +185,26 @@ fun planSideBox(
     // baseline (N from the CSS scale). Baselines are measured precisely;
     // only the caps' visible height uses the ~0.72 cap-height ratio.
     val referenceSp = fontSize * cap.scale.coerceIn(1.8f, 4f)
-    val reference = measurer.measure(
+    val reference = measurer.measureReader(
         text = AnnotatedString(capText),
         style = ReaderMetrics.dropCapStyle(settings, referenceSp, cap, bookFonts, language),
         constraints = Constraints(),
+        density = density,
+        bookFonts = bookFonts,
+        publisherStyles = settings.bookStyles,
     )
     if (reference.size.height <= 0 || reference.size.width <= 0) return null
 
     val probeWidth = (widthPx - reference.size.width - gapPx)
         .coerceAtLeast(minimumBesideWidthPx)
     val bidiRest = BidiLayoutText.of(rest)
-    val probe = measurer.measure(
+    val probe = measurer.measureReader(
         text = bidiRest.display,
         style = besideStyle,
         constraints = Constraints(maxWidth = probeWidth),
-        placeholders = inlineImagePlaceholders(bidiRest.display),
+        density = density,
+        bookFonts = bookFonts,
+        publisherStyles = settings.bookStyles,
     )
     if (probe.lineCount == 0) return null
     val lines = Math.round(cap.scale).coerceIn(2, 4).coerceAtMost(probe.lineCount)
@@ -211,16 +221,19 @@ fun planSideBox(
     if (targetVisualPx <= 0f) return null
     val capSp = (fontSize * targetVisualPx / (CAP_HEIGHT_RATIO * bodyFontPx))
         .coerceIn(fontSize, fontSize * 8f)
-    val capLayout = measurer.measure(
+    val capLayout = measurer.measureReader(
         text = AnnotatedString(capText),
         style = ReaderMetrics.dropCapStyle(settings, capSp, cap, bookFonts, language),
         constraints = Constraints(),
+        density = density,
+        bookFonts = bookFonts,
+        publisherStyles = settings.bookStyles,
     )
     if (capLayout.size.width <= 0) return null
     // Place the cap so its baseline sits on the Nth line's baseline.
     val capTopPx = (baselineLast - capLayout.firstBaseline).roundToInt()
     return planBeside(
-        paragraph, measurer, settings, fontSize, bookFonts, language,
+        paragraph, measurer, density, settings, fontSize, bookFonts, language,
         widthPx, capText = capText, imagePath = null, leftSide = cap.leftSide,
         boxW = capLayout.size.width, boxH = boxH, gapPx = gapPx,
         minimumBesideWidthPx = minimumBesideWidthPx,
@@ -245,6 +258,7 @@ private fun measurePublisherFloat(
     bookFonts: Map<String, FontFamily>,
     language: String?,
     containingWidthPx: Int,
+    viewportHeightPx: Int?,
 ): MeasuredPublisherFloat? = with(density) {
     if (publisherFloat.contents.isEmpty() || containingWidthPx <= 0) return null
     val style = publisherFloat.style
@@ -296,7 +310,6 @@ private fun measurePublisherFloat(
                 val text = when (element) {
                     is ContentElement.Paragraph -> element.text
                     is ContentElement.Heading -> element.styledText
-                    else -> AnnotatedString("")
                 }
                 val contentWidthDp = geometry.contentWidthPx.toDp()
                 val (start, end) = ReaderMetrics.horizontalInsets(
@@ -307,7 +320,7 @@ private fun measurePublisherFloat(
                 val textWidth = (geometry.contentWidthPx -
                     start.roundToPx() - end.roundToPx()).coerceAtLeast(1)
                 val bidi = BidiLayoutText.of(text)
-                measurer.measure(
+                measurer.measureReader(
                     text = bidi.display,
                     style = ReaderMetrics.textStyle(
                         element,
@@ -317,7 +330,9 @@ private fun measurePublisherFloat(
                         language = language,
                     ),
                     constraints = Constraints(maxWidth = textWidth),
-                    placeholders = inlineImagePlaceholders(bidi.display),
+                    density = density,
+                    bookFonts = bookFonts,
+                    publisherStyles = settings.bookStyles,
                 ).size.height + vertical
             }
 
@@ -326,6 +341,7 @@ private fun measurePublisherFloat(
                 contentWidthPx = geometry.contentWidthPx,
                 fontSizePx = fontPx,
                 maxHeightPx = maxImageHeight,
+                viewportHeightPx = viewportHeightPx,
                 publisherOwnsWidth = publisherBoxesOwnImageWidth(
                     content.publisherBoxes,
                     enabled = true,
@@ -403,6 +419,7 @@ private const val DEFAULT_FLOAT_WIDTH_FRACTION = 0.34f
 private fun planBeside(
     paragraph: ContentElement.Paragraph,
     measurer: TextMeasurer,
+    density: Density,
     settings: ReaderSettings,
     fontSize: Float,
     bookFonts: Map<String, FontFamily>,
@@ -436,11 +453,13 @@ private fun planBeside(
         language = language,
     )
     val bidiRest = BidiLayoutText.of(rest)
-    val layout = measurer.measure(
+    val layout = measurer.measureReader(
         text = bidiRest.display,
         style = besideStyle,
         constraints = Constraints(maxWidth = besideW.coerceAtLeast(1)),
-        placeholders = inlineImagePlaceholders(bidiRest.display),
+        density = density,
+        bookFonts = bookFonts,
+        publisherStyles = settings.bookStyles,
     )
     if (layout.lineCount == 0) return null
     val bottoms = FloatArray(layout.lineCount) { layout.getLineBottom(it) }
@@ -458,16 +477,19 @@ private fun planBeside(
         retreatToWordBoundary(rest.text, 0, end)
             .takeIf { it > 0 }
             ?.let { end = it }
+        end = readerAtomicBreakOffset(rest, end)
         if (end <= 0) return null
         // Standalone re-measure: a fragment's own first/last-line font
         // paddings differ from the big layout's interior lines.
         val fragment = rest.subSequence(0, end)
         val bidiFragment = BidiLayoutText.of(fragment)
-        val fragmentHeight = measurer.measure(
+        val fragmentHeight = measurer.measureReader(
             text = bidiFragment.display,
             style = besideStyle,
             constraints = Constraints(maxWidth = besideW.coerceAtLeast(1)),
-            placeholders = inlineImagePlaceholders(bidiFragment.display),
+            density = density,
+            bookFonts = bookFonts,
+            publisherStyles = settings.bookStyles,
         ).size.height
         besideEndRelative = end
         compositeH = maxOf(boxH, fragmentHeight)
@@ -509,6 +531,7 @@ fun SideBoxComposite(
     language: String?,
     colors: ReaderColors,
     totalWidthPx: Int,
+    modifier: Modifier = Modifier,
     surroundingBackground: Color = colors.background,
     publisherBackgroundAlreadyApplied: Boolean = false,
     invertImages: Boolean = false,
@@ -516,7 +539,6 @@ fun SideBoxComposite(
     itemIndex: Int = -1,
     footnotes: FootnoteHandler? = null,
     searchHighlight: String? = null,
-    modifier: Modifier = Modifier,
 ) {
     val blockColors = publisherColorPair(
         element.block,
@@ -595,10 +617,11 @@ fun SideBoxComposite(
                     colorFilter = imageColorFilter(invertImages),
                 )
             }
-            Text(
+            ReaderText(
                 text = bidiBeside.display,
                 style = besideStyle,
-                inlineContent = inlineImageContent(bidiBeside.display, invertImages),
+                invertImages = invertImages, bookFonts = bookFonts,
+                    publisherStyles = settings.bookStyles, maxWidthPx = sideBox.besideWidthPx,
                 onTextLayout = { besideFragment?.layout = it },
                 modifier = Modifier.readerHighlights(besideFragment, highlights),
             )
@@ -677,7 +700,8 @@ private fun PublisherFloatColumn(
         modifier = Modifier
             .width(width)
             .height(height)
-            .drawPublisherBoxes(frameGeometry, 0f, fontSizePx),
+            .drawPublisherBoxes(frameGeometry, 0f, fontSizePx,
+                readableReaderForeground(colors.text, frameBackground)),
     ) {
         Column(
             modifier = Modifier
@@ -766,24 +790,34 @@ private fun PublisherFloatLeaf(
         boxes = content.publisherBoxes,
         surroundingBackground = surroundingBackground,
     )
+    val leafInk = publisherColorPair(
+        block = when (element) {
+            is ContentElement.Paragraph -> element.block
+            is ContentElement.Heading -> element.block
+            is ContentElement.Table -> element.block
+            else -> null
+        },
+        enabled = settings.bookStyles,
+        defaultForeground = colors.text,
+        surroundingBackground = leafBackground,
+        backgroundAlreadyApplied = hasPublisherBoxBackground(content.publisherBoxes),
+    ).foreground
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(with(density) { fixedHeightPx.coerceAtLeast(1).toDp() })
-            .drawPublisherBoxes(geometry, 0f, fontSizePx),
+            .drawPublisherBoxes(geometry, 0f, fontSizePx, leafInk),
     ) {
         when (element) {
             is ContentElement.Paragraph, is ContentElement.Heading -> {
                 val raw = when (element) {
                     is ContentElement.Paragraph -> element.text
                     is ContentElement.Heading -> element.styledText
-                    else -> AnnotatedString("")
                 }
                 val block = when (element) {
                     is ContentElement.Paragraph -> element.block
                     is ContentElement.Heading -> element.block
-                    else -> null
                 }
                 val defaultColor = if ((element as? ContentElement.Paragraph)?.style ==
                     com.example.frogreader.data.model.ParagraphStyle.QUOTE
@@ -817,7 +851,7 @@ private fun PublisherFloatLeaf(
                     length = raw.length,
                     bidi = bidi,
                 )
-                Text(
+                ReaderText(
                     text = bidi.display,
                     style = ReaderMetrics.textStyle(
                         element,
@@ -826,7 +860,8 @@ private fun PublisherFloatLeaf(
                         bookFonts = bookFonts,
                         language = language,
                     ).copy(color = pair.foreground),
-                    inlineContent = inlineImageContent(bidi.display, invertImages),
+                    invertImages = invertImages, bookFonts = bookFonts,
+                    publisherStyles = settings.bookStyles, maxWidthPx = with(density) { exactWidth.roundToPx() },
                     onTextLayout = { fragment?.layout = it },
                     modifier = Modifier
                         .absoluteOffset(x = left, y = top)
@@ -836,6 +871,9 @@ private fun PublisherFloatLeaf(
             }
 
             is ContentElement.Image -> {
+                val imageAppearance = publisherImageAppearance(
+                    element, settings.bookStyles, leafBackground, leafInk, invertImages,
+                )
                 val imageHeightPx = (fixedHeightPx - with(density) {
                     (top + bottom).roundToPx()
                 }).coerceAtLeast(1)
@@ -859,10 +897,11 @@ private fun PublisherFloatLeaf(
                         model = File(element.path),
                         contentDescription = element.altText,
                         contentScale = ContentScale.Fit,
-                        colorFilter = imageColorFilter(invertImages),
+                        colorFilter = imageColorFilter(imageAppearance.invert),
                         modifier = Modifier
                             .width(with(density) { displayImageWidthPx.toDp() })
-                            .height(with(density) { imageHeightPx.toDp() }),
+                            .height(with(density) { imageHeightPx.toDp() })
+                            .then(imageAppearance.background?.let { Modifier.background(it) } ?: Modifier),
                     )
                 }
             }

@@ -25,11 +25,34 @@ import androidx.compose.ui.unit.sp
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.data.model.PublisherRowLayout
 import com.example.frogreader.ui.reader.selection.ReaderHighlights
 import com.example.frogreader.ui.reader.selection.SelectionText
 import com.example.frogreader.ui.reader.selection.readerHighlights
 import com.example.frogreader.ui.reader.selection.rememberTextFragment
 import kotlin.math.roundToInt
+
+/** The reader supplies a grid only when the publication leaves borders unspecified. */
+internal enum class TableCellBorders { PUBLISHER, READER_GRID, NONE }
+
+internal fun tableCellBorders(
+    table: ContentElement.Table,
+    cell: com.example.frogreader.data.model.TableCell,
+    publisherStyles: Boolean,
+    stacked: Boolean = false,
+): TableCellBorders {
+    val box = cell.publisherBox
+    val visiblePublisherBorder = box?.let {
+        it.borderTop != null || it.borderRight != null ||
+            it.borderBottom != null || it.borderLeft != null
+    } == true
+    if (publisherStyles && (cell.publisherBorderSpecified || visiblePublisherBorder)) {
+        return TableCellBorders.PUBLISHER
+    }
+    // Synthetic flex/poetry rows and authored stacked cells are text layouts.
+    if (table.publisherRowLayout != null || stacked) return TableCellBorders.NONE
+    return TableCellBorders.READER_GRID
+}
 
 private data class TableCellPaddingPx(
     val left: Int,
@@ -44,17 +67,18 @@ private fun tableCellPaddingPx(
     fontSizePx: Float,
     referenceWidthPx: Int,
     defaultPx: Int,
+    includeMargins: Boolean = false,
 ): TableCellPaddingPx {
     if (!settings.bookStyles) {
         return TableCellPaddingPx(defaultPx, defaultPx, defaultPx, defaultPx)
     }
     val box = cell.publisherBox ?: com.example.frogreader.data.model.PublisherBoxStyle.DEFAULT
-    val hasVisibleAuthoredPadding = box != null && (
+    val hasVisibleAuthoredPadding = (
         box.paddingLeftEm > 0f || box.paddingLeftFrac > 0f ||
             box.paddingRightEm > 0f || box.paddingRightFrac > 0f ||
             box.paddingTopEm > 0f || box.paddingBottomEm > 0f
         )
-    if (!cell.publisherPaddingSpecified && !hasVisibleAuthoredPadding) {
+    if (!cell.publisherPaddingSpecified && !hasVisibleAuthoredPadding && !includeMargins) {
         return TableCellPaddingPx(defaultPx, defaultPx, defaultPx, defaultPx)
     }
     fun horizontal(em: Float, fraction: Float): Int =
@@ -64,9 +88,11 @@ private fun tableCellPaddingPx(
             .coerceAtLeast(0)
     return TableCellPaddingPx(
         left = horizontal(box.paddingLeftEm, box.paddingLeftFrac),
-        top = (box.paddingTopEm.coerceAtLeast(0f) * fontSizePx).roundToInt(),
+        top = ((box.paddingTopEm.coerceAtLeast(0f) +
+            if (includeMargins) box.marginTopEm.coerceAtLeast(0f) else 0f) * fontSizePx).roundToInt(),
         right = horizontal(box.paddingRightEm, box.paddingRightFrac),
-        bottom = (box.paddingBottomEm.coerceAtLeast(0f) * fontSizePx).roundToInt(),
+        bottom = ((box.paddingBottomEm.coerceAtLeast(0f) +
+            if (includeMargins) box.marginBottomEm.coerceAtLeast(0f) else 0f) * fontSizePx).roundToInt(),
     )
 }
 
@@ -82,8 +108,56 @@ class TableLayout(
     val rowHeightsPx: IntArray,
     /** Cell font scale chosen so the columns fit: 1, 0.85 or 0.7. */
     val fontScale: Float,
+    /** Physical starts of columns plus the outer table end, including CSS gaps. */
+    val columnOffsetsPx: IntArray = tableColumnGeometry(colWidthsPx, colWidthsPx.sum(), null).offsetsPx,
+    val tableWidthPx: Int = columnOffsetsPx.lastOrNull() ?: 0,
+    /** Per-source-cell heights, when an authored narrow media query is active. */
+    val stackedCellHeightsPx: List<IntArray>? = null,
 ) {
-    val tableWidthPx: Int get() = colWidthsPx.sum()
+}
+
+internal fun ContentElement.Table.shouldStackCells(widthPx: Int, density: Density, enabled: Boolean): Boolean {
+    val limit = stackCellsBelowCssPx ?: return false
+    return enabled && limit.isFinite() && limit > 0f && widthPx / density.density <= limit &&
+        rows.all { row -> row.cells.all { it.narrowStyle != null && it.colSpan == 1 && it.rowSpan == 1 } }
+}
+
+private fun com.example.frogreader.data.model.TableCell.forTableLayout(stacked: Boolean):
+    com.example.frogreader.data.model.TableCell {
+    val style = narrowStyle?.takeIf { stacked } ?: return this
+    return com.example.frogreader.data.model.TableCell(text, colSpan, rowSpan, style.align, header,
+        style.block, style.publisherBox, style.publisherPaddingSpecified, style.publisherBorderSpecified)
+}
+
+internal data class TableColumnGeometry(val offsetsPx: IntArray, val widthPx: Int)
+
+/** CSS row distribution adds gaps between cells rather than widening their text. */
+internal fun tableColumnGeometry(
+    columnWidthsPx: IntArray,
+    availablePx: Int,
+    rowLayout: PublisherRowLayout?,
+): TableColumnGeometry {
+    val count = columnWidthsPx.size
+    val natural = columnWidthsPx.sum()
+    val free = (availablePx - natural).coerceAtLeast(0)
+    val fillsWidth = count > 0 && rowLayout != null && rowLayout != PublisherRowLayout.NATURAL
+    val offsets = IntArray(count + 1)
+    var contentBefore = 0
+    for (column in columnWidthsPx.indices) {
+        val spaceBefore = when (rowLayout) {
+            PublisherRowLayout.SPACE_BETWEEN -> if (count > 1) {
+                (free.toLong() * column / (count - 1)).toInt()
+            } else 0
+            PublisherRowLayout.SPACE_AROUND ->
+                (free.toLong() * (column * 2 + 1) / (count * 2)).toInt()
+            PublisherRowLayout.NATURAL, null -> 0
+        }
+        offsets[column] = contentBefore + spaceBefore
+        contentBefore += columnWidthsPx[column]
+    }
+    val width = if (fillsWidth) maxOf(availablePx, natural) else natural
+    offsets[count] = width
+    return TableColumnGeometry(offsets, width)
 }
 
 /**
@@ -105,9 +179,37 @@ fun measureTableLayout(
 ): TableLayout = with(density) {
     val grid = TableGrid.build(table.rows)
     val columnCount = grid.columnCount.coerceAtLeast(1)
-    val defaultCellPadPx = ReaderMetrics.tableCellPadding.roundToPx()
+    val defaultCellPadPx = if (table.publisherRowLayout != null) 0 else {
+        ReaderMetrics.tableCellPadding.roundToPx()
+    }
     val fontSizePx = fontSize.sp.toPx()
     val availablePx = contentWidthPx.coerceAtLeast(1)
+
+    if (table.shouldStackCells(availablePx, density, settings.bookStyles)) {
+        val heights = table.rows.map { row ->
+            row.cells.map { sourceCell ->
+                val cell = sourceCell.forTableLayout(stacked = true)
+                if (cell.text.isEmpty()) return@map 0
+                val padding = tableCellPaddingPx(cell, settings, fontSizePx, availablePx, 0,
+                    includeMargins = true)
+                val style = ReaderMetrics.tableCellStyle(settings, fontSize, 1f, cell.header,
+                    language, table.block, cell.block, bookFonts)
+                val bidi = BidiLayoutText.of(cell.text)
+                measurer.measureReader(bidi.display, style,
+                    constraints = Constraints(maxWidth =
+                        (availablePx - padding.left - padding.right).coerceAtLeast(1)),
+                    density = density,
+                    bookFonts = bookFonts,
+                    publisherStyles = settings.bookStyles,
+                ).size.height +
+                    padding.top + padding.bottom
+            }.toIntArray()
+        }
+        val columns = IntArray(columnCount) { availablePx / columnCount }
+        columns[0] += availablePx % columnCount
+        return@with TableLayout(grid, columns, heights.map { it.sum() }.toIntArray(), 1f,
+            tableWidthPx = availablePx, stackedCellHeightsPx = heights)
+    }
 
     class SpanIntrinsic(val col: Int, val span: Int, val minPx: Int, val maxPx: Int)
 
@@ -132,38 +234,44 @@ fun measureTableLayout(
                 val style = ReaderMetrics.tableCellStyle(
                     settings, fontSize, scale, cell.header, language,
                     table.block, cell.block, bookFonts,
+                    semanticFontScale = if (table.publisherRowLayout != null) 1f else 0.92f,
                 )
                 val bidiCell = BidiLayoutText.of(cell.text)
                 val maxIntrinsic = measurer
-                    .measure(
+                    .measureReader(
                         bidiCell.display,
                         style,
-                        placeholders = tableCellPlaceholders(bidiCell.display),
                         constraints = Constraints(),
+                        density = density,
+                        bookFonts = bookFonts,
+                        publisherStyles = settings.bookStyles,
                     )
                     .size.width + padding.left + padding.right
-                val minIntrinsic = tableCellMinIntrinsicWidthPx(cell.text) { run, placeholders ->
+                val minIntrinsic = tableCellMinIntrinsicWidthPx(cell.text) { run, _ ->
                     val bidiRun = BidiLayoutText.of(run)
-                    measurer.measure(
+                    measurer.measureReader(
                         text = bidiRun.display,
                         style = style,
-                        placeholders = if (bidiRun.hasControls) {
-                            tableCellPlaceholders(bidiRun.display)
-                        } else {
-                            placeholders
-                        },
                         constraints = Constraints(),
+                        density = density,
+                        bookFonts = bookFonts,
+                        publisherStyles = settings.bookStyles,
                     ).size.width
                 } + padding.left + padding.right
                 if (span <= 1) {
+                    val maximumWidth = maximumTableCellWidthPx(
+                        cell.publisherBox, settings.bookStyles, availablePx, fontSizePx,
+                    )
+                    val constrainedMin = minOf(minIntrinsic, maximumWidth ?: Int.MAX_VALUE)
+                    val constrainedMax = minOf(maxIntrinsic, maximumWidth ?: Int.MAX_VALUE)
                     val authoredWidth = authoredTableCellWidthPx(
                         box = cell.publisherBox,
                         enabled = settings.bookStyles,
                         availableWidthPx = availablePx,
                         fontSizePx = fontSizePx,
                     )
-                    if (minIntrinsic > minW[col]) minW[col] = minIntrinsic
-                    if (maxIntrinsic > maxW[col]) maxW[col] = maxIntrinsic
+                    if (constrainedMin > minW[col]) minW[col] = constrainedMin
+                    if (constrainedMax > maxW[col]) maxW[col] = constrainedMax
                     if (authoredWidth != null) {
                         if (authoredWidth > minW[col]) minW[col] = authoredWidth
                         if (authoredWidth > maxW[col]) maxW[col] = authoredWidth
@@ -207,15 +315,18 @@ fun measureTableLayout(
             val style = ReaderMetrics.tableCellStyle(
                 settings, fontSize, chosenScale, cell.header, language,
                 table.block, cell.block, bookFonts,
+                semanticFontScale = if (table.publisherRowLayout != null) 1f else 0.92f,
             )
             val bidiCell = BidiLayoutText.of(cell.text)
-            val textHeight = measurer.measure(
+            val textHeight = measurer.measureReader(
                 text = bidiCell.display,
                 style = style,
-                placeholders = tableCellPlaceholders(bidiCell.display),
                 constraints = Constraints(
                     maxWidth = (cellWidth - padding.left - padding.right).coerceAtLeast(1),
                 ),
+                density = density,
+                bookFonts = bookFonts,
+                publisherStyles = settings.bookStyles,
             ).size.height
             val total = textHeight + padding.top + padding.bottom
             val rowSpan = cell.rowSpan.coerceIn(1, 20).coerceAtMost(table.rows.size - r)
@@ -236,7 +347,8 @@ fun measureTableLayout(
         if (spanCell.heightPx > sum) rowHeights[end - 1] += spanCell.heightPx - sum
     }
 
-    TableLayout(grid, widths, rowHeights, chosenScale)
+    val columns = tableColumnGeometry(widths, availablePx, table.publisherRowLayout)
+    TableLayout(grid, widths, rowHeights, chosenScale, columns.offsetsPx, columns.widthPx)
 }
 
 internal fun authoredTableCellWidthPx(
@@ -251,7 +363,23 @@ internal fun authoredTableCellWidthPx(
         box.widthEm != null -> box.widthEm.coerceAtLeast(0.05f) * fontSizePx
         else -> return null
     }
-    return requested.roundToInt().coerceIn(1, availableWidthPx)
+    return requested.roundToInt().coerceIn(
+        1,
+        maximumTableCellWidthPx(box, enabled, availableWidthPx, fontSizePx) ?: availableWidthPx,
+    )
+}
+
+private fun maximumTableCellWidthPx(
+    box: com.example.frogreader.data.model.PublisherBoxStyle?,
+    enabled: Boolean,
+    availableWidthPx: Int,
+    fontSizePx: Float,
+): Int? {
+    if (!enabled || box == null || availableWidthPx <= 0) return null
+    return listOfNotNull(
+        box.maxWidthFrac?.takeIf { it.isFinite() && it > 0f }?.let { availableWidthPx * it },
+        box.maxWidthEm?.takeIf { it.isFinite() && it > 0f }?.let { fontSizePx * it },
+    ).minOrNull()?.roundToInt()?.coerceIn(1, availableWidthPx)
 }
 
 /**
@@ -271,31 +399,31 @@ internal fun tableCellMinIntrinsicWidthPx(
 ): Int {
     if (text.isEmpty()) return 0
 
-    val runs = NON_WHITESPACE_RUN.findAll(text.text).toList()
+    val runs = readerUnbreakableRuns(text)
     if (runs.isEmpty()) return 0
-    val imageMarks = tableCellPlaceholders(text)
+    val imageMarks = readerAtomicRanges(text)
     val candidateRanges = linkedSetOf<IntRange>()
 
-    runs.sortedByDescending { it.value.length }
+    runs.sortedByDescending { it.last - it.first }
         .take(3)
-        .forEach { candidateRanges += it.range }
+        .forEach { candidateRanges += it }
 
     // Include the complete non-breaking run around every placeholder. This
     // also handles an image directly adjacent to text without a break point.
     if (imageMarks.isNotEmpty()) {
-        val orderedMarks = imageMarks.sortedBy { it.start }
+        val orderedMarks = imageMarks
         var markIndex = 0
         for (run in runs) {
-            val runStart = run.range.first
-            val runEnd = run.range.last + 1
-            while (markIndex < orderedMarks.size && orderedMarks[markIndex].end <= runStart) {
+            val runStart = run.first
+            val runEnd = run.last + 1
+            while (markIndex < orderedMarks.size && orderedMarks[markIndex].second <= runStart) {
                 markIndex++
             }
             if (markIndex < orderedMarks.size &&
-                orderedMarks[markIndex].start < runEnd &&
-                orderedMarks[markIndex].end > runStart
+                orderedMarks[markIndex].first < runEnd &&
+                orderedMarks[markIndex].second > runStart
             ) {
-                candidateRanges += run.range
+                candidateRanges += run
             }
         }
     }
@@ -308,8 +436,6 @@ internal fun tableCellMinIntrinsicWidthPx(
     }
     return widest
 }
-
-private val NON_WHITESPACE_RUN = Regex("\\S+")
 
 /**
  * Draws rows [rowStart] until [rowEnd] of a measured table: absolutely
@@ -326,6 +452,7 @@ fun TableBlock(
     settings: ReaderSettings,
     fontSize: Float,
     language: String?,
+    modifier: Modifier = Modifier,
     bookFonts: Map<String, FontFamily> = emptyMap(),
     invertImages: Boolean = false,
     footnotes: FootnoteHandler? = null,
@@ -337,9 +464,9 @@ fun TableBlock(
     publisherBackgroundAlreadyApplied: Boolean = false,
     highlights: ReaderHighlights? = null,
     itemIndex: Int = -1,
-    modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
+    val stacked = layout.stackedCellHeightsPx != null
     val cellSpans = remember(table) { SelectionText.tableCellSpans(table) }
     val tableColors = publisherColorPair(
         table.block,
@@ -360,8 +487,7 @@ fun TableBlock(
 
     val placements = remember(table, layout, rowStart, rowEnd, headerRepeated) {
         val columnCount = layout.grid.columnCount.coerceAtLeast(1)
-        val colOffsets = IntArray(columnCount + 1)
-        for (c in 1..columnCount) colOffsets[c] = colOffsets[c - 1] + layout.colWidthsPx[c - 1]
+        val colOffsets = layout.columnOffsetsPx
         val rtlColumns = ReaderMetrics.isRtl(table)
 
         val drawRows = buildList {
@@ -378,7 +504,14 @@ fun TableBlock(
         val list = mutableListOf<CellPlacement>()
         for ((visual, r) in drawRows.withIndex()) {
             val row = table.rows[r]
+            var stackedY = rowOffsets[visual]
             for ((ci, cell) in row.cells.withIndex()) {
+                if (stacked) {
+                    val height = layout.stackedCellHeightsPx[r][ci]
+                    if (height > 0) list += CellPlacement(r, ci, 0, stackedY, layout.tableWidthPx, height)
+                    stackedY += height
+                    continue
+                }
                 val col = layout.grid.cellColumns[r][ci].coerceAtMost(columnCount - 1)
                 val span = cell.colSpan.coerceIn(1, 10).coerceAtMost(columnCount - col)
                 val rowSpan = cell.rowSpan.coerceIn(1, 20)
@@ -394,18 +527,24 @@ fun TableBlock(
                 list += CellPlacement(
                     row = r,
                     cellIndex = ci,
-                    x = tableCellPhysicalX(colOffsets, col, span, rtlColumns),
+                    x = if (rtlColumns) {
+                        layout.tableWidthPx - colOffsets[col + span - 1] - layout.colWidthsPx[col + span - 1]
+                    } else colOffsets[col],
                     y = rowOffsets[visual],
-                    width = colOffsets[col + span] - colOffsets[col],
+                    width = colOffsets[col + span - 1] + layout.colWidthsPx[col + span - 1] - colOffsets[col],
                     height = height,
                 )
             }
         }
         list
     }
+    val placementCells = remember(table, placements, stacked) {
+        placements.map { table.rows[it.row].cells[it.cellIndex].forTableLayout(stacked) }
+    }
 
-    val borderColor = colors.secondaryText.copy(alpha = 0.35f)
-    val defaultCellPaddingPx = with(density) { ReaderMetrics.tableCellPadding.roundToPx() }
+    val defaultCellPaddingPx = with(density) {
+        if (table.publisherRowLayout != null) 0 else ReaderMetrics.tableCellPadding.roundToPx()
+    }
     val fontSizePx = with(density) { fontSize.sp.toPx() }
     val placementPaddings = remember(
         table,
@@ -414,21 +553,22 @@ fun TableBlock(
         fontSizePx,
         defaultCellPaddingPx,
     ) {
-        placements.map { placement ->
+        placements.mapIndexed { index, placement ->
             tableCellPaddingPx(
-                table.rows[placement.row].cells[placement.cellIndex],
+                placementCells[index],
                 settings,
                 fontSizePx,
                 placement.width,
                 defaultCellPaddingPx,
+                includeMargins = stacked,
             )
         }
     }
     Layout(
         modifier = modifier.drawBehind {
             val stroke = Stroke(width = 1f)
-            for (p in placements) {
-                val cell = table.rows[p.row].cells[p.cellIndex]
+            for ((index, p) in placements.withIndex()) {
+                val cell = placementCells[index]
                 val publisherBox = cell.publisherBox?.takeIf { settings.bookStyles }
                 if (settings.bookStyles) {
                     // [cell.block] contains the composited tbody/tr/cell
@@ -448,13 +588,15 @@ fun TableBlock(
                 }
                 val authoredBorder = publisherBox
                     ?: com.example.frogreader.data.model.PublisherBoxStyle.DEFAULT
-                val hasVisibleAuthoredBorder = settings.bookStyles && (
-                    authoredBorder.borderTop != null || authoredBorder.borderRight != null ||
-                        authoredBorder.borderBottom != null || authoredBorder.borderLeft != null
-                    )
-                if (settings.bookStyles &&
-                    (cell.publisherBorderSpecified || hasVisibleAuthoredBorder)
-                ) {
+                val borders = tableCellBorders(table, cell, settings.bookStyles, stacked)
+                if (borders == TableCellBorders.PUBLISHER) {
+                    val cellInk = publisherColorPair(
+                        foregroundArgb = cell.block?.foregroundColorArgb ?: table.block?.foregroundColorArgb,
+                        backgroundArgb = cell.block?.backgroundColorArgb ?: publisherBox?.backgroundColorArgb,
+                        enabled = true,
+                        defaultForeground = tableColors.foreground,
+                        surroundingBackground = tableColors.effectiveBackground,
+                    ).foreground
                     val left = p.x.toFloat()
                     val top = p.y.toFloat()
                     val right = left + p.width
@@ -466,6 +608,7 @@ fun TableBlock(
                         left,
                         bottom,
                         fontSizePx,
+                        cellInk,
                     )
                     drawPublisherBorder(
                         authoredBorder.borderRight,
@@ -474,6 +617,7 @@ fun TableBlock(
                         right,
                         bottom,
                         fontSizePx,
+                        cellInk,
                     )
                     drawPublisherBorder(
                         authoredBorder.borderTop,
@@ -482,6 +626,7 @@ fun TableBlock(
                         right,
                         top,
                         fontSizePx,
+                        cellInk,
                     )
                     drawPublisherBorder(
                         authoredBorder.borderBottom,
@@ -490,20 +635,42 @@ fun TableBlock(
                         right,
                         bottom,
                         fontSizePx,
+                        cellInk,
                     )
-                } else {
+                } else if (borders == TableCellBorders.READER_GRID) {
+                    // Use the cell's readable ink: page secondary text can
+                    // disappear on OLED or an authored cell background.
+                    val gridInk = publisherColorPair(
+                        foregroundArgb = cell.block?.foregroundColorArgb ?: table.block?.foregroundColorArgb,
+                        backgroundArgb = cell.block?.backgroundColorArgb ?: publisherBox?.backgroundColorArgb,
+                        enabled = settings.bookStyles,
+                        defaultForeground = tableColors.foreground,
+                        surroundingBackground = tableColors.effectiveBackground,
+                    ).foreground
                     drawRect(
-                        color = borderColor,
+                        color = gridInk.copy(alpha = 0.35f),
                         topLeft = Offset(p.x.toFloat(), p.y.toFloat()),
                         size = Size(p.width.toFloat(), p.height.toFloat()),
                         style = stroke,
                     )
                 }
             }
+            table.publisherBox?.takeIf { settings.bookStyles }?.let { frame ->
+                val right = layout.tableWidthPx.toFloat()
+                val bottom = size.height
+                drawPublisherBorder(frame.borderLeft, 0f, 0f, 0f, bottom, fontSizePx, tableColors.foreground)
+                drawPublisherBorder(frame.borderRight, right, 0f, right, bottom, fontSizePx, tableColors.foreground)
+                if (rowStart == 0 || headerRepeated) {
+                    drawPublisherBorder(frame.borderTop, 0f, 0f, right, 0f, fontSizePx, tableColors.foreground)
+                }
+                if (rowEnd >= table.rows.size) {
+                    drawPublisherBorder(frame.borderBottom, 0f, bottom, right, bottom, fontSizePx, tableColors.foreground)
+                }
+            }
         },
         content = {
-            for (p in placements) {
-                val cell = table.rows[p.row].cells[p.cellIndex]
+            for ((index, p) in placements.withIndex()) {
+                val cell = placementCells[index]
                 val align = cell.align ?: if (cell.header) BlockAlign.CENTER else null
                 val cellBackgroundArgb = cell.block
                     ?.takeIf { settings.bookStyles }
@@ -544,9 +711,10 @@ fun TableBlock(
                     length = cell.text.length,
                     bidi = bidiDisplay,
                 )
-                Text(
+                ReaderText(
                     text = display,
-                    inlineContent = tableCellInlineContent(display, invertImages),
+                    invertImages = invertImages, bookFonts = bookFonts,
+                    publisherStyles = settings.bookStyles, maxWidthPx = (p.width - placementPaddings[index].left - placementPaddings[index].right).coerceAtLeast(1),
                     style = ReaderMetrics
                         .tableCellStyle(
                             settings,
@@ -557,6 +725,7 @@ fun TableBlock(
                             table.block,
                             cell.block,
                             bookFonts,
+                            semanticFontScale = if (table.publisherRowLayout != null) 1f else 0.92f,
                         )
                         .copy(
                             color = cellColors.foreground,
@@ -575,8 +744,7 @@ fun TableBlock(
             }
         },
     ) { measurables, _ ->
-        var totalWidth = 0
-        for (w in layout.colWidthsPx) totalWidth += w
+        val totalWidth = layout.tableWidthPx
         var totalHeight = 0
         if (headerRepeated && rowStart > 0) totalHeight += layout.rowHeightsPx[0]
         for (r in rowStart.coerceAtLeast(0) until rowEnd.coerceAtMost(table.rows.size)) {
@@ -598,7 +766,10 @@ fun TableBlock(
             placeables.forEachIndexed { i, placeable ->
                 val p = placements[i]
                 val padding = placementPaddings[i]
-                placeable.place(p.x + padding.left, p.y + padding.top)
+                val centeredInset = if (table.centerCellsVertically) {
+                    (p.height - padding.top - padding.bottom - placeable.height).coerceAtLeast(0) / 2
+                } else 0
+                placeable.place(p.x + padding.left, p.y + padding.top + centeredInset)
             }
         }
     }

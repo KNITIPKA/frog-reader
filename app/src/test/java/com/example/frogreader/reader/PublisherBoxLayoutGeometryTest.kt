@@ -12,6 +12,51 @@ import org.junit.Test
 class PublisherBoxLayoutGeometryTest {
 
     @Test
+    fun `maximum width constrains centered publisher boxes without expanding smaller content`() {
+        fun geometry(widthEm: Float) = publisherBoxGeometry(
+            boxes = listOf(box(style = PublisherBoxStyle(
+                widthEm = widthEm,
+                maxWidthFrac = 0.5f,
+                horizontalAlign = PublisherBoxAlign.CENTER,
+            ))),
+            columnWidthPx = 200,
+            fontSizePx = 10f,
+            partStartsElement = true,
+            partEndsElement = true,
+            enabled = true,
+        )
+
+        assertEquals(100, geometry(20f).contentWidthPx)
+        assertEquals(50, geometry(20f).contentLeftPx)
+        assertEquals(60, geometry(6f).contentWidthPx)
+        assertEquals(70, geometry(6f).contentLeftPx)
+    }
+
+    @Test
+    fun `maximum width limits the content box while preserving border and padding`() {
+        val geometry = publisherBoxGeometry(
+            boxes = listOf(box(style = PublisherBoxStyle(
+                maxWidthEm = 8f,
+                paddingLeftEm = 1f,
+                paddingRightEm = 1f,
+                borderLeft = border(0.2f),
+                borderRight = border(0.2f),
+                horizontalAlign = PublisherBoxAlign.CENTER,
+            ))),
+            columnWidthPx = 200,
+            fontSizePx = 10f,
+            partStartsElement = true,
+            partEndsElement = true,
+            enabled = true,
+        )
+
+        assertEquals(80, geometry.contentWidthPx)
+        assertEquals(60, geometry.contentLeftPx)
+        assertFloatEquals(48f, geometry.boxes.single().leftPx)
+        assertFloatEquals(152f, geometry.boxes.single().rightPx)
+    }
+
+    @Test
     fun `disabled publisher layout is exact undecorated column`() {
         val geometry = publisherBoxGeometry(
             boxes = listOf(box(style = decoratedStyle())),

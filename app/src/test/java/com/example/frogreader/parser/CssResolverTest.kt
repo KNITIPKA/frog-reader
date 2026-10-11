@@ -17,6 +17,35 @@ class CssResolverTest {
     private fun doc(html: String): Document = Jsoup.parse(html)
 
     @Test
+    fun `heading hints and CSS resets resolve before inheritance`() {
+        val r = resolver("body { text-align:justify } #css { text-align:left }")
+        val d = doc("""<body>
+            <h1 id="hint" align="CENTER">Hint</h1>
+            <div align="right"><h2 id="wrapper">Wrapper</h2></div>
+            <center><h3 id="center">Center</h3><h4 id="css">CSS</h4></center>
+            <h5 id="inherit" align="center" style="text-align:inherit">Inherit</h5>
+            <h6 id="unset" align="center" style="text-align:unset">Unset</h6>
+            <h1 id="initial" align="center" style="text-align:initial">Initial</h1>
+            </body>""")
+        val expected = mapOf("hint" to "center", "wrapper" to "right", "center" to "center", "css" to "left",
+            "inherit" to "justify", "unset" to "justify", "initial" to "start")
+        expected.forEach { (id, align) -> assertEquals(id, align, r.computed(d.selectFirst("#$id")!!).textAlign) }
+    }
+
+    @Test
+    fun `match parent heading alignment uses the parent direction`() {
+        val r = resolver("")
+        val d = doc("""<div dir="rtl" style="text-align:start">
+            <h1 id="start" dir="ltr" style="text-align:match-parent">Start</h1></div>
+            <div dir="rtl" style="text-align:end">
+            <h2 id="end" dir="ltr" style="text-align:match-parent">End</h2></div>
+            <div dir="rtl"><h3 id="default" dir="ltr" style="text-align:match-parent">Default</h3></div>""")
+        assertEquals("right", r.computed(d.selectFirst("#start")!!).textAlign)
+        assertEquals("left", r.computed(d.selectFirst("#end")!!).textAlign)
+        assertEquals("right", r.computed(d.selectFirst("#default")!!).textAlign)
+    }
+
+    @Test
     fun `foreground inherits background stays local and legacy attributes join cascade`() {
         val r = resolver(
             """
@@ -236,8 +265,7 @@ class CssResolverTest {
 
     @Test
     fun `unsupported pseudo drops only its comma-group member`() {
-        // :nth-child is supported since stage 6 — :nth-last-child is not.
-        val r = resolver("a:hover, p.note, li:nth-last-child(1) { font-style: italic; }")
+        val r = resolver("a:hover, p.note, li:focus-within { font-style: italic; }")
         val d = doc("<p id='p' class='note'>t</p><li id='li'>x</li>")
 
         assertEquals(true, r.computed(d.selectFirst("#p")!!).italic)
@@ -310,6 +338,6 @@ class CssResolverTest {
         val computed = resolver.computed(paragraph)
         assertEquals(null, computed.italic)
         assertEquals(true, computed.bold)
-        assertEquals("center", computed.textAlign)
+        assertNull(computed.textAlign)
     }
 }

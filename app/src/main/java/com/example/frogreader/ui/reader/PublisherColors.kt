@@ -4,6 +4,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import com.example.frogreader.data.model.BlockStyle
+import com.example.frogreader.data.model.HIDDEN_TEXT_TAG
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -74,6 +75,23 @@ internal fun publisherColorPair(
  * geometry. Call this before adding reader-owned link/search/quote highlights.
  */
 internal fun AnnotatedString.withPublisherColors(
+    enabled: Boolean,
+    base: PublisherColorPair,
+): AnnotatedString {
+    val colored = resolvePublisherColors(enabled, base)
+    val hidden = getStringAnnotations(HIDDEN_TEXT_TAG, 0, length)
+    if (hidden.isEmpty()) return colored
+    return AnnotatedString.Builder(colored).apply {
+        // Visibility is structural. Apply it after both publisher color
+        // correction and the reader-typography override, without changing
+        // source coordinates or the width of generated alignment text.
+        hidden.forEach { range ->
+            addStyle(SpanStyle(color = Color.Transparent, background = Color.Transparent), range.start, range.end)
+        }
+    }.toAnnotatedString()
+}
+
+private fun AnnotatedString.resolvePublisherColors(
     enabled: Boolean,
     base: PublisherColorPair,
 ): AnnotatedString {

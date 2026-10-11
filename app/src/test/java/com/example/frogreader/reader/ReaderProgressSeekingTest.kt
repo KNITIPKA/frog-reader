@@ -8,7 +8,7 @@ import com.example.frogreader.ui.reader.ReaderProgressLayout
 import com.example.frogreader.ui.reader.ReaderProgressAnchor
 import com.example.frogreader.ui.reader.resolveReaderChapterPreview
 import com.example.frogreader.ui.reader.readerProgressSeekReached
-import com.example.frogreader.ui.reader.readerProgressPageFraction
+import com.example.frogreader.ui.reader.readerProgressVisualFraction
 import com.example.frogreader.ui.reader.readerChapterPagesLeft
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -19,7 +19,7 @@ import kotlin.math.roundToInt
 
 class ReaderProgressSeekingTest {
     @Test
-    fun `page counter preview and capsule switch together before a page turn settles`() {
+    fun `captions address the nearest page while the cursor keeps fractional page motion`() {
         val starts = listOf(0, 10, 11, 85, 100)
         val titles = listOf("First", "One page", "Long middle", "Last", "Final page")
         val pages = List(101) { BookPage(emptyList(), firstItemIndex = it) }
@@ -27,18 +27,43 @@ class ReaderProgressSeekingTest {
         val base = ReaderProgressLayout(starts.map { it / 100f }, 300f, 101)
         for ((livePage, expected) in listOf(9.49f to 9, 9.51f to 10, 10.51f to 11, 10.49f to 10,
             9.49f to 9, 84.51f to 85, 85.49f to 85, 99.51f to 100)) {
-            val shown = readerProgressPageFraction(livePage / 100f, 101)
+            val shown = readerProgressVisualFraction(livePage / 100f)
             val chapter = starts.indexOfLast { it <= expected }
+            assertEquals(livePage / 100f, shown, 0f)
             assertEquals(expected, ReaderNavigationPolicy.progressTargetIndex(shown, 0, 100))
-            assertEquals(chapter, base.chapters.indexAt(shown))
+            assertEquals(starts.indexOfLast { it <= livePage }, base.chapters.indexAt(shown))
             val preview = resolveReaderChapterPreview(shown, true, 101, pages, starts, starts, 101,
                 { item -> starts.indexOfLast { it <= item } }, contexts, "Test book", { titles[it] })
             assertEquals(titles[chapter], preview.label)
             val end = (starts.getOrNull(chapter + 1)?.minus(1) ?: 100)
             assertEquals(end - expected, readerChapterPagesLeft(starts, 101, shown))
         }
-        // Scrolling/unknown pagination keeps its continuous position.
-        assertEquals(0.34567f, readerProgressPageFraction(0.34567f, null), 0f)
+    }
+
+    @Test
+    fun `cursor follows every drag and settle frame including an aborted page turn`() {
+        // Exercise both a continuous rail and a focused segmented chapter.
+        for (stops in listOf(emptyList(), listOf(0f, 0.3f, 0.7f))) {
+            val base = ReaderProgressLayout(stops, 300f, 101)
+            val layout = base.focused(0.1f, false)
+            val start = layout.trackFraction(0.1f)
+            val end = layout.trackFraction(0.11f)
+            // Drag forward, then cancel and return to the original page.
+            for (step in (0..100).toList() + (100 downTo 0).toList()) {
+                val amount = step / 100f
+                val shown = readerProgressVisualFraction((10f + amount) / 100f)
+                assertEquals(start + (end - start) * amount, layout.trackFraction(shown), 0.000001f)
+            }
+        }
+    }
+
+    @Test
+    fun `visual progress clamps invalid input without snapping valid positions`() {
+        assertEquals(0.34567f, readerProgressVisualFraction(0.34567f), 0f)
+        assertEquals(0f, readerProgressVisualFraction(-1f), 0f)
+        assertEquals(1f, readerProgressVisualFraction(2f), 0f)
+        assertEquals(0f, readerProgressVisualFraction(Float.NaN), 0f)
+        assertEquals(0f, readerProgressVisualFraction(Float.POSITIVE_INFINITY), 0f)
     }
 
     @Test

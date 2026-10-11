@@ -4,7 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Matrix
-import android.media.ExifInterface
+import androidx.exifinterface.media.ExifInterface
 import android.graphics.Color
 import android.net.Uri
 import androidx.core.net.toUri
@@ -50,9 +50,17 @@ internal data class MetadataEditorState(
     val exported: Boolean = false,
     val fileInfo: MetadataFileInfo? = null,
     val errorAction: MetadataErrorAction = MetadataErrorAction.LOAD,
+    val ratingHalfStars: Int? = null,
+    val originalRatingHalfStars: Int? = null,
+    val review: String = "",
+    val originalReview: String = "",
+    val savedGeneration: Int = 0,
 ) {
-    val dirty: Boolean get() = draft != original || pickedCover != null || removeCover
+    val metadataDirty: Boolean get() = draft != original || pickedCover != null || removeCover
+    val reviewDirty: Boolean get() = ratingHalfStars != originalRatingHalfStars || review != originalReview
+    val dirty: Boolean get() = metadataDirty || reviewDirty
     val canSave: Boolean get() = !loading && !busy && dirty && draft?.let { runCatching { it.normalized().validate() }.isSuccess } == true
+        && review.length <= 20_000 && (ratingHalfStars == null || ratingHalfStars in 2..10)
 }
 
 internal class BookMetadataViewModel(
@@ -79,6 +87,9 @@ internal class BookMetadataViewModel(
                 pickedCover = if (oldFile == book?.fileName) savedState["cover"] else null,
                 removeCover = oldFile == book?.fileName && savedState.get<Boolean>("remove") == true,
                 loading = true,
+                ratingHalfStars = book?.ratingHalfStars ?: book?.rating?.times(2),
+                originalRatingHalfStars = book?.ratingHalfStars ?: book?.rating?.times(2),
+                review = book?.review.orEmpty(), originalReview = book?.review.orEmpty(),
             )
         )
     }
@@ -88,17 +99,29 @@ internal class BookMetadataViewModel(
 
     fun load() {
         viewModelScope.launch {
-            _state.value = _state.value.copy(loading = true, error = null)
+            _state.value = _state.value.copy(loading = true, error = null, saved = false, exported = false)
             try {
                 val (book, initial) = repository.editableMetadata(bookId)
                 val oldFile: String? = savedState["file"]
-                val draft = if (oldFile == book.fileName) restore(savedState, "draft") ?: initial else initial
-                val original = if (oldFile == book.fileName) restore(savedState, "original") ?: initial else initial
+                val restoredDraft = if (oldFile == book.fileName) restore(savedState, "draft") else null
+                val restoredOriginal = if (oldFile == book.fileName) restore(savedState, "original") else null
+                val restoreMetadata = restoredDraft != restoredOriginal || savedState.get<String>("cover") != null || savedState.get<Boolean>("remove") == true
+                val draft = if (restoreMetadata) restoredDraft ?: initial else initial
+                val original = if (restoreMetadata) restoredOriginal ?: initial else initial
+                val originalRating = book.ratingHalfStars ?: book.rating?.times(2)
+                val restoreReview = oldFile == book.fileName && savedState.contains("originalReview") &&
+                    (savedState.get<String>("review") != savedState.get<String>("originalReview") ||
+                        savedState.get<Int>("ratingHalfStars") != savedState.get<Int>("originalRatingHalfStars"))
                 _state.value = MetadataEditorState(
                     fileInfo = repository.metadataFileInfo(book),
                     book = book, draft = draft, original = original, cover = repository.coverFileFor(book), loading = false,
                     pickedCover = if (oldFile == book.fileName) savedState["cover"] else null,
                     removeCover = oldFile == book.fileName && savedState.get<Boolean>("remove") == true,
+                    ratingHalfStars = if (restoreReview) savedState["ratingHalfStars"] else originalRating,
+                    originalRatingHalfStars = if (restoreReview) savedState["originalRatingHalfStars"] else originalRating,
+                    review = if (restoreReview) savedState["review"] ?: book.review.orEmpty() else book.review.orEmpty(),
+                    originalReview = if (restoreReview) savedState["originalReview"] ?: book.review.orEmpty() else book.review.orEmpty(),
+                    savedGeneration = _state.value.savedGeneration,
                 )
                 persist()
             } catch (e: Exception) {
@@ -111,6 +134,21 @@ internal class BookMetadataViewModel(
     fun change(edit: EditableBookMetadata) {
         if (_state.value.busy) return
         _state.value = _state.value.copy(draft = edit, saved = false, exported = false, error = null)
+        persist()
+    }
+
+    fun startEditing() { if (!_state.value.loading && !_state.value.busy) load() }
+
+    fun discardChanges() {
+        if (_state.value.busy) return
+        _state.value = _state.value.let { it.copy(draft = it.original, pickedCover = null, removeCover = false,
+            ratingHalfStars = it.originalRatingHalfStars, review = it.originalReview, error = null) }
+        persist()
+    }
+
+    fun changeReview(ratingHalfStars: Int?, review: String) {
+        if (_state.value.busy) return
+        _state.value = _state.value.copy(ratingHalfStars = ratingHalfStars, review = review.take(20_000), saved = false, error = null)
         persist()
     }
 
@@ -138,19 +176,29 @@ internal class BookMetadataViewModel(
         if (!before.canSave) return
         _state.value = before.copy(busy = true, error = null)
         viewModelScope.launch {
+            var working = before.copy(error = null)
             try {
-                val cover = when {
-                    before.removeCover -> CoverEdit.Remove
-                    before.pickedCover != null -> readCover(before.pickedCover.toUri())
-                    else -> CoverEdit.Keep
+                if (before.metadataDirty) {
+                    val cover = when {
+                        before.removeCover -> CoverEdit.Remove
+                        before.pickedCover != null -> readCover(before.pickedCover.toUri())
+                        else -> CoverEdit.Keep
+                    }
+                    repository.saveBookMetadata(bookId, before.book!!.fileName, before.draft!!, cover)
+                    val (book, actual) = repository.editableMetadata(bookId)
+                    // If the personal review fails afterward, retry only the remaining changes.
+                    working = working.copy(book = book, draft = actual, original = actual,
+                        cover = repository.coverFileFor(book), pickedCover = null, removeCover = false)
                 }
-                repository.saveBookMetadata(bookId, before.book!!.fileName, before.draft!!, cover)
-                val (book, actual) = repository.editableMetadata(bookId)
-                _state.value = MetadataEditorState(book, actual, actual, repository.coverFileFor(book), loading = false, saved = true, fileInfo = before.fileInfo)
+                if (before.reviewDirty) repository.saveBookReview(bookId, before.ratingHalfStars, before.review)
+                _state.value = working.copy(busy = false, saved = true,
+                    review = before.review.trim(), originalReview = before.review.trim(),
+                    originalRatingHalfStars = before.ratingHalfStars, savedGeneration = before.savedGeneration + 1)
                 persist()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                _state.value = before.copy(error = e.message ?: "Could not save the book.", errorAction = MetadataErrorAction.SAVE)
+                _state.value = working.copy(busy = false, error = e.message ?: "Could not save the book.", errorAction = MetadataErrorAction.SAVE)
+                persist()
             }
         }
     }
@@ -181,6 +229,10 @@ internal class BookMetadataViewModel(
         savedState["original"] = s.original?.let { Json.encodeToString(EditableBookMetadata.serializer(), it) }
         savedState["cover"] = s.pickedCover
         savedState["remove"] = s.removeCover
+        savedState["ratingHalfStars"] = s.ratingHalfStars
+        savedState["originalRatingHalfStars"] = s.originalRatingHalfStars
+        savedState["review"] = s.review
+        savedState["originalReview"] = s.originalReview
     }
 
     private suspend fun readCover(uri: Uri): CoverEdit.Replace = withContext(Dispatchers.IO) {

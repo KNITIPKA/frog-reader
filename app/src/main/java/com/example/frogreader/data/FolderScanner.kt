@@ -1,5 +1,6 @@
 package com.example.frogreader.data
 
+import androidx.core.content.edit
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -167,7 +168,7 @@ object FolderScanner {
                 )
             }
         }
-        prefs.edit().remove(LEGACY_KEY).apply()
+        prefs.edit { remove(LEGACY_KEY) }
     }
 
     private val MOBI_EXTENSIONS = listOf(".mobi", ".prc", ".azw", ".azw3")

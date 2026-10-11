@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.profile
 
+import com.example.frogreader.ui.components.FrogSnackbarHost
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -27,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -43,6 +45,7 @@ import com.example.frogreader.data.model.Bookmark
 import com.example.frogreader.data.model.Quote
 import com.example.frogreader.ui.library.BookCover
 import com.example.frogreader.ui.theme.floatingSurface
+import com.example.frogreader.ui.theme.quoteInk
 import java.io.File
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -58,15 +61,15 @@ fun QuotesAndBookmarksScreen(
     val editor by model.editor.collectAsStateWithLifecycle()
     val busy by model.busy.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    val context = LocalContext.current
-    LaunchedEffect(model) {
+    val resources = LocalResources.current
+    LaunchedEffect(model, resources) {
         model.events.collectLatest { event ->
             when (event) {
-                QuotesAndBookmarksEvent.Failed -> snackbar.showSnackbar(context.getString(R.string.quotes_bookmarks_write_error))
+                QuotesAndBookmarksEvent.Failed -> snackbar.showSnackbar(resources.getString(R.string.quotes_bookmarks_write_error))
                 is QuotesAndBookmarksEvent.Deleted -> {
                     val result = snackbar.showSnackbar(
-                        context.getString(if (event.quote != null) R.string.quotes_bookmarks_quote_deleted else R.string.quotes_bookmarks_bookmark_deleted),
-                        actionLabel = context.getString(R.string.quotes_bookmarks_undo),
+                        resources.getString(if (event.quote != null) R.string.quotes_bookmarks_quote_deleted else R.string.quotes_bookmarks_bookmark_deleted),
+                        actionLabel = resources.getString(R.string.quotes_bookmarks_undo),
                         withDismissAction = true,
                         duration = SnackbarDuration.Long,
                     )
@@ -142,7 +145,7 @@ internal fun QuotesAndBookmarksContent(
 
     Scaffold(
         containerColor = colors.surface,
-        snackbarHost = { SnackbarHost(snackbar) },
+        snackbarHost = { FrogSnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.profile_quotes_bookmarks), style = MaterialTheme.typography.titleLarge,
@@ -381,6 +384,7 @@ private fun QuoteCard(
     val colors = MaterialTheme.colorScheme
     val clipboard = LocalClipboard.current
     val context = LocalContext.current
+    val unknownAuthor = stringResource(R.string.import_author_unknown)
     val scope = rememberCoroutineScope()
     var expanded by rememberSaveable(quote.id) { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
@@ -388,7 +392,7 @@ private fun QuoteCard(
     Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerLowest)) {
         Column(Modifier.fillMaxWidth().animateContentSize().padding(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.FormatQuote, null, Modifier.size(20.dp), tint = colors.onSurfaceVariant)
+                Icon(Icons.Rounded.FormatQuote, null, Modifier.size(20.dp), tint = colors.quoteInk(quote.color))
                 Text(stringResource(R.string.reader_chapter_n, quote.chapterIndex + 1),
                     style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant,
                     modifier = Modifier.weight(1f).padding(start = 8.dp))
@@ -405,7 +409,7 @@ private fun QuoteCard(
                             leadingIcon = { Icon(Icons.Rounded.Share, null) }, onClick = {
                                 showMenu = false
                                 val author = book.author?.trim()?.takeIf { it.isNotEmpty() }
-                                    ?: context.getString(R.string.import_author_unknown)
+                                    ?: unknownAuthor
                                 val text = buildString {
                                     append(quote.text.trimEnd())
                                     append("\n\n— ")

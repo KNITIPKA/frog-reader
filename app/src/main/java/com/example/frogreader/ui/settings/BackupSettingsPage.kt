@@ -47,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -152,10 +153,7 @@ internal fun BackupSettingsPage(
             SettingsControlRow(
                 icon = Icons.Rounded.Schedule,
                 title = stringResource(R.string.backup_frequency_title),
-                subtitle = stringResource(
-                    R.string.backup_frequency_subtitle,
-                    BackupRepository.DEFAULT_KEEP,
-                ),
+                subtitle = pluralStringResource(R.plurals.backup_frequency_subtitle, BackupRepository.DEFAULT_KEEP, BackupRepository.DEFAULT_KEEP),
                 selected = frequency,
                 options = listOf(
                     BackupFrequency.OFF to stringResource(R.string.backup_schedule_off),
@@ -264,9 +262,9 @@ internal fun BackupHero(
                     Text(
                         text = stringResource(
                             R.string.backup_library_summary,
-                            summary.bookCount,
-                            summary.quoteCount,
-                            summary.readingLogCount,
+                            pluralStringResource(R.plurals.shelf_books_count, summary.bookCount, summary.bookCount),
+                            pluralStringResource(R.plurals.quotes_bookmarks_quotes_count, summary.quoteCount, summary.quoteCount),
+                            pluralStringResource(R.plurals.backup_log_entries_count, summary.readingLogCount, summary.readingLogCount),
                         ),
                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -399,6 +397,9 @@ private fun BackupScopeRowContent(
     subtitle: String,
     estimate: String,
 ) {
+    val scheme = MaterialTheme.colorScheme
+    val titleColor = if (selected) scheme.onPrimaryContainer else scheme.onSurface
+    val captionColor = if (selected) scheme.onPrimaryContainer else scheme.onSurfaceVariant
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -406,23 +407,23 @@ private fun BackupScopeRowContent(
         Icon(
             imageVector = if (selected) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
             contentDescription = null,
-            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+            tint = if (selected) scheme.onPrimaryContainer else scheme.outline,
             modifier = Modifier.size(22.dp),
         )
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(title, style = MaterialTheme.typography.titleMedium, color = titleColor)
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = captionColor,
             )
         }
         Spacer(Modifier.width(10.dp))
         Text(
             estimate,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = captionColor,
         )
     }
 }
@@ -572,8 +573,8 @@ private fun RestoreConfirmDialog(
                     stringResource(
                         R.string.backup_restore_details,
                         made,
-                        manifest.bookCount,
-                        manifest.quoteCount,
+                        pluralStringResource(R.plurals.shelf_books_count, manifest.bookCount, manifest.bookCount),
+                        pluralStringResource(R.plurals.quotes_bookmarks_quotes_count, manifest.quoteCount, manifest.quoteCount),
                     ),
                 )
                 if (manifest.readingQueueCount > 0) {
@@ -618,16 +619,21 @@ private fun RestoreConfirmDialog(
 @Composable
 private fun BackupResultDialog(state: BackupViewModel.State, onDismiss: () -> Unit) {
     val message = when (state) {
-        is BackupViewModel.State.ExportDone -> stringResource(R.string.backup_export_done, state.books)
+        is BackupViewModel.State.ExportDone -> pluralStringResource(R.plurals.backup_export_done, state.books, state.books)
         is BackupViewModel.State.RestoreDone -> if (state.booksWithoutFile > 0) {
-            stringResource(
-                R.string.backup_restore_done_missing,
-                state.books,
-                state.quotes,
+            pluralStringResource(
+                R.plurals.backup_restore_done_missing,
+                state.booksWithoutFile,
+                pluralStringResource(R.plurals.shelf_books_count, state.books, state.books),
+                pluralStringResource(R.plurals.quotes_bookmarks_quotes_count, state.quotes, state.quotes),
                 state.booksWithoutFile,
             )
         } else {
-            stringResource(R.string.backup_restore_done, state.books, state.quotes)
+            stringResource(
+                R.string.backup_restore_done,
+                pluralStringResource(R.plurals.shelf_books_count, state.books, state.books),
+                pluralStringResource(R.plurals.quotes_bookmarks_quotes_count, state.quotes, state.quotes),
+            )
         }
         is BackupViewModel.State.Failed -> stringResource(
             if (state.restoring) R.string.backup_restore_failed else R.string.backup_failed,

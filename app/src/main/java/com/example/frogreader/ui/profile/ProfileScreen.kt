@@ -1,10 +1,12 @@
 package com.example.frogreader.ui.profile
 
-import com.example.frogreader.ui.theme.floatingSurface
+import com.example.frogreader.ui.components.FrogSnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import android.graphics.Bitmap
-import android.widget.Toast
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,6 +15,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -43,9 +47,6 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.AddPhotoAlternate
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -60,11 +61,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -99,15 +108,20 @@ fun ProfileScreen(
     onOpenQuotesAndBookmarks: () -> Unit = {},
     onOpenReadingQueue: () -> Unit = {},
     onOpenReadingLog: () -> Unit = {},
+    isActive: Boolean = true,
     viewModel: ProfileViewModel = viewModel(factory = ProfileViewModel.Factory),
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val nameSaveError by viewModel.nameSaveError.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-    LaunchedEffect(nameSaveError) {
+    val nameSaveErrorMessage = stringResource(R.string.profile_save_error)
+    val snackbar = remember { SnackbarHostState() }
+    val notificationScope = rememberCoroutineScope()
+    LaunchedEffect(nameSaveError, nameSaveErrorMessage) {
         if (nameSaveError) {
-            Toast.makeText(context, R.string.profile_save_error, Toast.LENGTH_LONG).show()
             viewModel.dismissNameSaveError()
+            notificationScope.launch {
+                snackbar.showSnackbar(nameSaveErrorMessage, duration = SnackbarDuration.Long)
+            }
         }
     }
     val books by viewModel.books.collectAsStateWithLifecycle()
@@ -124,18 +138,23 @@ fun ProfileScreen(
     val onPickAvatar = {
         photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
     }
-    ProfileDashboard(
-        settings = settings, books = books, stats = stats, today = today, avatar = avatar,
-        nowMillis = nowMillis,
-        readingQueueCount = readingQueue.size,
-        readingLogCount = readingLog.size,
-        contentPadding = contentPadding,
-        onOpenSettings = onOpenSettings, onOpenStats = onOpenStats,
-        onOpenAchievements = onOpenAchievements,
-        onOpenQuotesAndBookmarks = onOpenQuotesAndBookmarks, onOpenReadingQueue = onOpenReadingQueue, onOpenReadingLog = onOpenReadingLog,
-        onPickAvatar = onPickAvatar, onSaveGoal = viewModel::saveDailyGoal,
-        onSaveName = viewModel::updateName,
-    )
+    Box(Modifier.fillMaxSize()) {
+        ProfileDashboard(
+            settings = settings, books = books, stats = stats, today = today, avatar = avatar,
+            nowMillis = nowMillis,
+            readingQueueCount = readingQueue.size,
+            readingLogCount = readingLog.size,
+            contentPadding = contentPadding,
+            isActive = isActive,
+            onOpenSettings = onOpenSettings, onOpenStats = onOpenStats,
+            onOpenAchievements = onOpenAchievements,
+            onOpenQuotesAndBookmarks = onOpenQuotesAndBookmarks, onOpenReadingQueue = onOpenReadingQueue, onOpenReadingLog = onOpenReadingLog,
+            onPickAvatar = onPickAvatar, onSaveGoal = viewModel::saveDailyGoal,
+            onSaveName = viewModel::updateName,
+        )
+        FrogSnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter)
+            .padding(bottom = contentPadding.calculateBottomPadding() + 16.dp))
+    }
 
     if (avatarEditor.visible) {
         AvatarEditor(avatarEditor, onDismiss = viewModel::dismissAvatarEditor, onSave = viewModel::saveAvatar)
@@ -164,10 +183,28 @@ internal fun ProfileDashboard(
     onPickAvatar: () -> Unit = {},
     onSaveName: (String) -> Unit = {},
     onSaveGoal: suspend (Int) -> Unit = {},
+    isActive: Boolean = true,
 ) {
     val readMinutes = remember(stats) { stats.dailySeconds.values.sum() / 60 }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    var nameEditorBounds by remember { mutableStateOf<Rect?>(null) }
+    var dashboardPosition by remember { mutableStateOf(Offset.Zero) }
     BoxWithConstraints(
-        modifier = Modifier.fillMaxSize().padding(contentPadding),
+        modifier = Modifier.fillMaxSize().padding(contentPadding)
+            .onGloballyPositioned { dashboardPosition = it.positionInRoot() }
+            .pointerInput(focusManager, keyboard) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val bounds = nameEditorBounds
+                    if (bounds != null && !bounds.contains(down.position + dashboardPosition)) {
+                        // Buttons and empty space do not necessarily take focus.
+                        // Observe without consuming, so their own action still runs.
+                        focusManager.clearFocus()
+                        keyboard?.hide()
+                    }
+                }
+            },
     ) {
         val systemPadding = WindowInsets.systemBarsIgnoringVisibility
             .only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal).asPaddingValues()
@@ -183,7 +220,6 @@ internal fun ProfileDashboard(
                 onQueryChange = {},
                 searchHint = stringResource(R.string.profile_search_hint),
                 searchEnabled = false,
-                controlColor = MaterialTheme.colorScheme.surfaceContainer,
                 onOpenSettings = onOpenSettings,
             ) {
                 ProfileCard(
@@ -196,6 +232,8 @@ internal fun ProfileDashboard(
                     onOpenStats = onOpenStats,
                     onOpenAchievements = onOpenAchievements,
                     onSaveName = onSaveName,
+                    onNameEditorBoundsChanged = { nameEditorBounds = it },
+                    isActive = isActive,
                 )
             }
             // The sections card stretches down to the dock; it shrinks back as the
@@ -283,12 +321,14 @@ internal fun ProfileCard(
     achievementsTotal: Int = PlaceholderAchievementsTotal,
     lastReadAtMillis: Long? = null,
     nowMillis: Long = System.currentTimeMillis(),
+    onNameEditorBoundsChanged: (Rect?) -> Unit = {},
+    isActive: Boolean = true,
 ) {
     val frog = LocalFrogColors.current
     val scheme = MaterialTheme.colorScheme
     var menuOpen by rememberSaveable { mutableStateOf(false) }
+    var nameEditRequested by rememberSaveable { mutableStateOf(false) }
     val changeAvatarLabel = stringResource(R.string.profile_photo_change)
-    val context = LocalContext.current
     Surface(
         shape = RoundedCornerShape(FrogHeroCorner),
         shadowElevation = 2.dp,
@@ -337,22 +377,23 @@ internal fun ProfileCard(
                         onSave = onSaveName,
                         modifier = Modifier.fillMaxWidth(),
                         maxHeight = 56.dp,
+                        editRequested = nameEditRequested,
+                        onEditRequestHandled = { nameEditRequested = false },
+                        onEditorBoundsChanged = onNameEditorBoundsChanged,
+                        isActive = isActive,
                     )
                     ProfileLastRead(lastReadAtMillis, nowMillis)
                 }
                 Box(Modifier.align(Alignment.Top)) {
-                    IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(32.dp)) {
+                    IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(48.dp)) {
                         Icon(Icons.Rounded.MoreVert, stringResource(R.string.profile_more), Modifier.size(20.dp))
                     }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false },
-                        containerColor = scheme.floatingSurface, tonalElevation = 0.dp) {
-                        DropdownMenuItem(
-                            text = { Text(changeAvatarLabel) },
-                            leadingIcon = { Icon(Icons.Rounded.AddPhotoAlternate, null) },
-                            onClick = { menuOpen = false; onPickAvatar() },
-                        )
-
-                    }
+                    ProfileOptionsMenu(
+                        expanded = menuOpen,
+                        onDismissRequest = { menuOpen = false },
+                        onChangeName = { menuOpen = false; nameEditRequested = true },
+                        onChangeAvatar = { menuOpen = false; onPickAvatar() },
+                    )
                 }
             }
             Row(
@@ -365,7 +406,7 @@ internal fun ProfileCard(
                 ProfileActionTile(
                     icon = Icons.Rounded.EmojiEvents,
                     title = stringResource(R.string.profile_achievements),
-                    summary = stringResource(R.string.profile_achievements_progress, achievementsUnlocked, achievementsTotal),
+                    summary = stringResource(R.string.profile_coming_soon),
                     color = frog.profileLandscape.action,
                     contentColor = frog.profileLandscape.onAction,
                     iconColor = frog.profileLandscape.actionIcon,
@@ -373,14 +414,13 @@ internal fun ProfileCard(
                     secondaryColor = frog.profileLandscape.actionSecondary,
                     border = BorderStroke(1.dp, frog.profileLandscape.actionBorder),
                     modifier = Modifier.weight(1f).fillMaxHeight(),
-                    onClick = onOpenAchievements ?: {
-                        Toast.makeText(context, R.string.profile_coming_soon, Toast.LENGTH_SHORT).show()
-                    },
+                    onClick = onOpenAchievements ?: {},
+                    enabled = false,
                 )
                 ProfileActionTile(
                     icon = Icons.Rounded.BarChart,
                     title = stringResource(R.string.profile_stats),
-                    summary = null,
+                    summary = stringResource(R.string.profile_coming_soon),
                     color = frog.profileLandscape.action,
                     contentColor = frog.profileLandscape.onAction,
                     iconColor = frog.profileLandscape.actionIcon,
@@ -389,6 +429,7 @@ internal fun ProfileCard(
                     border = BorderStroke(1.dp, frog.profileLandscape.actionBorder),
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                     onClick = onOpenStats,
+                    enabled = false,
                 )
             }
         }
@@ -399,6 +440,7 @@ internal fun ProfileCard(
 private fun ProfileActionTile(
     icon: ImageVector,
     title: String,
+    modifier: Modifier = Modifier,
     summary: String? = null,
     color: Color,
     contentColor: Color,
@@ -406,11 +448,12 @@ private fun ProfileActionTile(
     iconBackground: Color,
     secondaryColor: Color,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     border: BorderStroke? = null,
 ) {
     Surface(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
         color = color,
@@ -448,7 +491,7 @@ private fun ProfileActionTile(
                         text = summary,
                         color = secondaryColor,
                         style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }

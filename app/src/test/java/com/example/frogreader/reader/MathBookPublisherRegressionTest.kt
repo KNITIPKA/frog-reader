@@ -1,5 +1,7 @@
 package com.example.frogreader.reader
 
+import com.example.frogreader.testfixtures.LocalBookFixtures
+
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.PublisherBorderStyle
 import com.example.frogreader.data.model.PublisherBoxAlign
@@ -23,9 +25,8 @@ import java.util.zip.ZipFile
  */
 class MathBookPublisherRegressionTest {
 
-    private val book = File(
-        "/Users/frog/Downloads/" +
-            "The_math_book_big_ideas_simply_explained_Karl_Warsi;_Janet_Dangerfield;.epub",
+    private val book = LocalBookFixtures.find(
+        "The_math_book_big_ideas_simply_explained_Karl_Warsi;_Janet_Dangerfield;.epub",
     )
 
     private data class Mapped(

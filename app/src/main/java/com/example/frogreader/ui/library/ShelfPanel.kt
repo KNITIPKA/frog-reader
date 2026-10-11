@@ -80,7 +80,6 @@ import com.example.frogreader.R
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.ui.theme.LocalFrogColors
 import kotlin.math.ceil
-import kotlin.math.roundToInt
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.animation.core.animateFloatAsState
@@ -956,8 +955,7 @@ private fun ShelfPanelBook(
 ) {
     val frog = LocalFrogColors.current
     val scheme = MaterialTheme.colorScheme
-    val fraction = book.progress.fraction.let { if (it.isNaN()) 0f else it.coerceIn(0f, 1f) }
-    val percent = (fraction * 100).roundToInt()
+    val percent = book.libraryReadPercent
 
     // The cover's rect, so the long-press menu can hang off this book rather
     // than off the middle of the card.
@@ -997,7 +995,7 @@ private fun ShelfPanelBook(
                         fontSize = 10.sp,
                         lineHeight = 12.sp,
                         fontWeight = FontWeight.Medium,
-                        color = scheme.onSurface,
+                        color = if (percent == 100) frog.completionInk else scheme.onSurface,
                     )
                 }
             }

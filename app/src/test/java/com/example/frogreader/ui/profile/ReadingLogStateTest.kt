@@ -14,6 +14,9 @@ class ReadingLogStateTest {
     private val old = ReadingLogEntry("old", "Old", startedOn = ReadingLogDate(2009), finishedOn = ReadingLogDate(2010, 5))
     private val recent = ReadingLogEntry("new", "New", startedOn = ReadingLogDate(2020, 4, 3), finishedOn = ReadingLogDate(2020, 5, 1))
     private val unknown = ReadingLogEntry("unknown", "Unknown")
+    private val sameDay = ReadingLogDate(2026, 10, 6)
+    private fun at(hour: Int) = sameDay.toLocalDate().atTime(hour, 0)
+        .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
     @Test fun unknownDatesStayLastInBothDirectionsAndKeepManualOrder() {
         val secondUnknown = unknown.copy(id = "other")
@@ -27,6 +30,53 @@ class ReadingLogStateTest {
         val slow = recent.copy(id = "slow", startedOn = ReadingLogDate(2000))
         assertEquals(listOf("old", "slow"), sortedReadingLog(listOf(slow, old), ReadingLogSort.STARTED_NEWEST).map { it.id })
         assertEquals(listOf("slow", "old"), sortedReadingLog(listOf(old, slow), ReadingLogSort.STARTED_OLDEST).map { it.id })
+    }
+
+    @Test fun aBookOpenedAfterAnotherFinishesLeadsNewestEvenOnTheSameDay() {
+        val dorian = recent.copy(id = "dorian", finishedOn = sameDay,
+            createdAtMillis = at(8), finishedAtMillis = at(10), updatedAtMillis = at(15))
+        val alice = recent.copy(id = "alice", status = ReadingLogStatus.IN_PROGRESS,
+            finishedOn = null, lastOpenedAtMillis = at(11), createdAtMillis = at(11))
+        val entries = listOf(dorian, alice)
+        assertEquals(listOf("alice", "dorian"), sortedReadingLog(entries, ReadingLogSort.FINISHED_NEWEST).map { it.id })
+        assertEquals(listOf("dorian", "alice"), sortedReadingLog(entries, ReadingLogSort.FINISHED_OLDEST).map { it.id })
+    }
+
+    @Test fun reopeningAnOlderOngoingReadingUsesItsOpeningTimeInsteadOfCreationTime() {
+        val completed = recent.copy(id = "completed", finishedOn = sameDay,
+            createdAtMillis = at(9), finishedAtMillis = at(12))
+        val resumed = old.copy(id = "resumed", status = ReadingLogStatus.IN_PROGRESS,
+            finishedOn = null, createdAtMillis = 1, lastOpenedAtMillis = at(14))
+        assertEquals(listOf("resumed", "completed"),
+            sortedReadingLog(listOf(completed, resumed), ReadingLogSort.FINISHED_NEWEST).map { it.id })
+    }
+
+    @Test fun sameDayFinishesUseCompletionTimeAndReviewEditsDoNotChangeTheirOrder() {
+        val first = recent.copy(id = "first", finishedOn = sameDay,
+            createdAtMillis = at(9), finishedAtMillis = at(10), updatedAtMillis = at(18))
+        val second = first.copy(id = "second", createdAtMillis = at(8), finishedAtMillis = at(11), updatedAtMillis = at(11))
+        assertEquals(listOf("second", "first"),
+            sortedReadingLog(listOf(first, second), ReadingLogSort.FINISHED_NEWEST).map { it.id })
+        assertEquals(listOf("first", "second"),
+            sortedReadingLog(listOf(second, first), ReadingLogSort.FINISHED_OLDEST).map { it.id })
+    }
+
+    @Test fun sameDayStartsUseCreationTimeInBothDirections() {
+        val earlier = recent.copy(id = "earlier", startedOn = sameDay, createdAtMillis = at(8))
+        val later = earlier.copy(id = "later", createdAtMillis = at(9))
+        assertEquals(listOf("later", "earlier"),
+            sortedReadingLog(listOf(earlier, later), ReadingLogSort.STARTED_NEWEST).map { it.id })
+        assertEquals(listOf("earlier", "later"),
+            sortedReadingLog(listOf(later, earlier), ReadingLogSort.STARTED_OLDEST).map { it.id })
+    }
+
+    @Test fun dateOnlyAndLegacySameDayReadingsUseCreationOrderAsATieBreaker() {
+        val earlier = recent.copy(id = "earlier", finishedOn = sameDay, createdAtMillis = at(8))
+        val later = earlier.copy(id = "later", createdAtMillis = at(9))
+        assertEquals(listOf("later", "earlier"),
+            sortedReadingLog(listOf(earlier, later), ReadingLogSort.FINISHED_NEWEST).map { it.id })
+        assertEquals(listOf("earlier", "later"),
+            sortedReadingLog(listOf(later, earlier), ReadingLogSort.FINISHED_OLDEST).map { it.id })
     }
 
     @Test fun inProgressAndAbandonedUseLastOpeningWithoutInventingFinishDate() {

@@ -11,36 +11,42 @@ import java.io.File
 
 /**
  * Literata — the open-source book face designed for long-form reading.
- * Bundled as variable fonts; weights are picked via the wght axis.
+ * Official release 3.103, bundled unchanged as variable fonts.
  */
-val LiterataFamily: FontFamily = FontFamily(
-    Font(
-        R.font.literata,
-        weight = FontWeight.Normal,
-        variationSettings = FontVariation.Settings(FontVariation.weight(400)),
-    ),
-    Font(
-        R.font.literata,
-        weight = FontWeight.Medium,
-        variationSettings = FontVariation.Settings(FontVariation.weight(500)),
-    ),
-    Font(
-        R.font.literata,
-        weight = FontWeight.Bold,
-        variationSettings = FontVariation.Settings(FontVariation.weight(700)),
-    ),
-    Font(
-        R.font.literata_italic,
-        weight = FontWeight.Normal,
-        style = FontStyle.Italic,
-        variationSettings = FontVariation.Settings(FontVariation.weight(400)),
-    ),
-    Font(
-        R.font.literata_italic,
-        weight = FontWeight.Bold,
-        style = FontStyle.Italic,
-        variationSettings = FontVariation.Settings(FontVariation.weight(700)),
-    ),
+val LiterataFamily: FontFamily = bundledVariableFamily(
+    regular = R.font.literata,
+    italic = R.font.literata_italic,
+    weights = 200..900 step 100,
+)
+
+/** IBM's complete Latin, Greek and Cyrillic fonts from Plex Sans Variable 0.2.0. */
+val IBMPlexSansFamily: FontFamily = bundledVariableFamily(
+    regular = R.font.ibm_plex_sans,
+    italic = R.font.ibm_plex_sans_italic,
+    weights = 100..700 step 100,
+)
+
+/** Register both real styles at every supported weight instead of synthesizing them. */
+private fun bundledVariableFamily(
+    regular: Int,
+    italic: Int,
+    weights: IntProgression,
+): FontFamily = FontFamily(
+    weights.flatMap { weight ->
+        listOf(
+            Font(
+                regular,
+                weight = FontWeight(weight),
+                variationSettings = FontVariation.Settings(FontVariation.weight(weight)),
+            ),
+            Font(
+                italic,
+                weight = FontWeight(weight),
+                style = FontStyle.Italic,
+                variationSettings = FontVariation.Settings(FontVariation.weight(weight)),
+            ),
+        )
+    },
 )
 
 /** Loaded user font files, keyed by path (a new pick gets a new path). */
@@ -64,6 +70,7 @@ private fun customFamilyFor(path: String?): FontFamily? {
 fun fontFamilyFor(font: ReaderFont, customFontPath: String? = null): FontFamily = when (font) {
     ReaderFont.LITERATA -> LiterataFamily
     ReaderFont.SERIF -> FontFamily.Serif
-    ReaderFont.SANS -> FontFamily.SansSerif
+    // Keep the stored SANS identifier so existing settings and backups stay readable.
+    ReaderFont.SANS -> IBMPlexSansFamily
     ReaderFont.CUSTOM -> customFamilyFor(customFontPath) ?: LiterataFamily
 }

@@ -8,6 +8,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.intl.LocaleList
 import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
 import com.example.frogreader.data.model.BlockAlign
@@ -705,6 +706,7 @@ object Fb2Parser {
                                 )
                             },
                             block = element.block,
+                            publisherBox = element.publisherBox,
                         )
 
                         else -> element
@@ -1195,6 +1197,7 @@ object Fb2Parser {
                     else -> out += ContentElement.Table(
                         rows,
                         withLanguage(parsed.second.applyTo(block), tableLanguage),
+                        publisherBox = parsed.second.publisherBox,
                     )
                 }
             }
@@ -1288,6 +1291,9 @@ object Fb2Parser {
                                                 ),
                                                 cellLanguage,
                                             ),
+                                            publisherBox = computed.publisherBox,
+                                            publisherBorderSpecified = computed.borderSpecified ||
+                                                rowStyle.borderless || tableStyle.borderSpecified,
                                         )
                                     }
 
@@ -1654,7 +1660,9 @@ object Fb2Parser {
 
     private fun headingBlock(computed: Fb2Stylesheet.Computed, language: String?): BlockStyle? =
         withLanguage(
-            computed.applyTo(BlockStyle())?.copy(
+            // FB2 titles/subtitles use a centered native default; the book's
+            // own alignment, including inherited CSS, replaces it.
+            computed.applyTo(BlockStyle(align = BlockAlign.CENTER))?.copy(
                 // FB2 keeps numerical margins on the leaf. Presence also
                 // preserves author zero/small margins against reader defaults.
                 spaceBeforeSpecified = computed.spaceBeforeEm != null,
@@ -1675,7 +1683,7 @@ object Fb2Parser {
         stylesheet: Fb2Stylesheet,
         inheritedLanguage: String?,
     ): AnnotatedString {
-        val parts = mutableListOf<AnnotatedString>()
+        val parts = mutableListOf<Pair<AnnotatedString, TextAlign?>>()
         val titleStyle = stylesheet.computed("title", parser.getAttributeValue(null, "style"))
         val titleLanguage = languageOf(parser) ?: inheritedLanguage
         while (true) {
@@ -1694,9 +1702,22 @@ object Fb2Parser {
                         titleLanguage,
                         relativeToStyle = titleStyle,
                     ).build()
-                    if (inline.length > 0) parts += inline
+                    if (inline.length > 0) {
+                        // A title can contain several independently aligned
+                        // paragraphs. SpanStyle cannot carry their alignment.
+                        val align = when (computed.align) {
+                            BlockAlign.CENTER -> TextAlign.Center
+                            BlockAlign.LEFT -> TextAlign.Left
+                            BlockAlign.RIGHT -> TextAlign.Right
+                            BlockAlign.START -> TextAlign.Start
+                            BlockAlign.END -> TextAlign.End
+                            BlockAlign.JUSTIFY -> TextAlign.Justify
+                            null -> TextAlign.Unspecified
+                        }
+                        parts += inline to align
+                    }
                 } else if (parser.name == "empty-line") {
-                    parts += AnnotatedString("")
+                    parts += AnnotatedString("") to null
                     parser.skipElement()
                 } else {
                     parser.skipElement()
@@ -1713,11 +1734,27 @@ object Fb2Parser {
         }
     }
 
-    private fun joinAnnotated(parts: List<AnnotatedString>): AnnotatedString {
+    private fun joinAnnotated(parts: List<Pair<AnnotatedString, TextAlign?>>): AnnotatedString {
         val combined = AnnotatedString.Builder()
-        parts.forEachIndexed { index, part ->
+        val alignments = parts.mapNotNull { it.second }.distinct()
+        val uniformAlignment = alignments.size <= 1
+        parts.forEachIndexed { index, (text, align) ->
             if (index > 0) combined.append("\n")
-            combined.append(part)
+            val start = combined.length
+            combined.append(text)
+            if (!uniformAlignment) {
+                combined.addStyle(
+                    androidx.compose.ui.text.ParagraphStyle(textAlign = align ?: TextAlign.Unspecified),
+                    start, combined.length,
+                )
+            }
+        }
+        // Uniform titles keep one paragraph and their original line-height
+        // rhythm, including empty lines. Only different alignments need
+        // separate native paragraphs and mapped layout boundaries.
+        val commonAlign = alignments.singleOrNull()
+        if (uniformAlignment && commonAlign != null && commonAlign != TextAlign.Unspecified) {
+            combined.addStyle(androidx.compose.ui.text.ParagraphStyle(textAlign = commonAlign), 0, combined.length)
         }
         return combined.toAnnotatedString()
     }

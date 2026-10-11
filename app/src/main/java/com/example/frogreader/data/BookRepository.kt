@@ -1,5 +1,6 @@
 package com.example.frogreader.data
 
+import androidx.core.graphics.scale
 import android.content.Context
 import android.net.Uri
 import android.graphics.Bitmap
@@ -184,6 +185,7 @@ open class BookRepository(private val context: Context? = null) {
 
     private var mutableStored: Stored? = null
     private var pendingUserMigration = false
+    private var pendingProgressMigration = false
 
     /**
      * Touching this forces the lazy first read, which is what sets
@@ -205,19 +207,25 @@ open class BookRepository(private val context: Context? = null) {
     val readingLog: StateFlow<List<ReadingLogEntry>> get() = _readingLog.asStateFlow()
 
     fun readingLogEntryFor(bookId: String): ReadingLogEntry? {
-        val activeId = bookById(bookId)?.activeReadingLogId
-        return readingLog.value.firstOrNull { it.id == activeId }
-            ?: readingLog.value.filter { it.linkedBookId == bookId }.maxByOrNull { it.createdAtMillis }
+        val book = bookById(bookId)?.takeUnless { it.suppressReadingLog } ?: return null
+        return readingLog.value.firstOrNull { it.id == book.activeReadingLogId && it.linkedBookId == bookId }
     }
 
     suspend fun saveReadingLogEntry(entry: ReadingLogEntry): String {
         val id = entry.id.ifBlank { UUID.randomUUID().toString() }
-        require(entry.title.trim().isNotEmpty() && entry.title.trim().length <= 200)
-        require(entry.author.trim().length <= 160 && entry.series.trim().length <= 200)
+        // Imported identities can exceed the manual form's limits. A locked snapshot
+        // must still allow dates, ratings and reviews to be saved without truncation.
+        val unchangedIdentity = readingLog.value.firstOrNull { it.id == id }?.let { old ->
+            old.source == ReadingLogSource.FROGREADER && entry.source == old.source &&
+                entry.title == old.title && entry.author == old.author && entry.series == old.series
+        } == true
+        require(entry.title.trim().isNotEmpty() && (unchangedIdentity || entry.title.trim().length <= 200))
+        require(unchangedIdentity || entry.author.trim().length <= 160 && entry.series.trim().length <= 200)
         require(entry.review.length <= 20_000)
         require(entry.ratingHalfStars == null || entry.ratingHalfStars in 2..10)
         require(entry.startedOn?.isValid() != false && entry.finishedOn?.isValid() != false)
         require(entry.readingSeconds >= 0)
+        require(entry.progressFraction == null || entry.progressFraction.isFinite() && entry.progressFraction in 0f..1f)
         require(entry.coverFileName == null || entry.coverFileName.isNotBlank() &&
             entry.coverFileName !in listOf(".", "..") && entry.coverFileName == File(entry.coverFileName).name)
         if (entry.startedOn != null && entry.finishedOn != null) {
@@ -231,13 +239,27 @@ open class BookRepository(private val context: Context? = null) {
         }
         updateStored { before ->
             val old = before.user.readingLog.firstOrNull { it.id == id }
+            val currentBook = mergeBooks(before).firstOrNull { it.id == entry.linkedBookId && it.activeReadingLogId == id }
             val clean = entry.copy(id = id, title = entry.title.trim(), author = entry.author.trim(),
                 series = entry.series.trim(), review = entry.review.trim(),
+                // A stale editor cannot move an abandoned reading's saved stopping point.
+                progressFraction = if (currentBook != null && entry.source == ReadingLogSource.FROGREADER) {
+                    if (entry.status == ReadingLogStatus.ABANDONED && old?.status != ReadingLogStatus.ABANDONED)
+                        currentBook.readingLogProgressFraction else old?.progressFraction ?: currentBook.readingLogProgressFraction
+                } else old?.progressFraction ?: entry.progressFraction,
+                bookFormat = if (entry.source == ReadingLogSource.FROGREADER) old?.bookFormat
+                    ?: mergeBooks(before).firstOrNull { it.id == entry.linkedBookId }?.format ?: entry.bookFormat else null,
+                // A stale editor draft must not overwrite an order saved more recently.
+                startedDateOrder = old?.startedDateOrder?.takeIf { it.date == entry.orderingDate(true) && it.date.day == null && it.rank >= 0 },
+                finishedDateOrder = old?.finishedDateOrder?.takeIf { it.date == entry.orderingDate(false) && it.date.day == null && it.rank >= 0 },
+                finishedAtMillis = entry.finishedAtMillis?.takeIf {
+                    entry.status == ReadingLogStatus.FINISHED && ReadingLogDate.fromMillis(it) == entry.finishedOn
+                },
                 createdAtMillis = old?.createdAtMillis ?: entry.createdAtMillis.takeIf { it > 0 } ?: System.currentTimeMillis())
             val next = if (old == null) before.user.readingLog + clean else before.user.readingLog.map { if (it.id == id) clean else it }
             var changed = before.copy(user = before.user.copy(readingLog = next))
             // A historical review belongs to that reading. Only the current reading appears in library info.
-            val book = mergeBooks(before).firstOrNull { it.id == clean.linkedBookId && it.activeReadingLogId == id }
+            val book = currentBook
             if (book != null) changed = split(mergeBooks(before).map {
                 if (it.id != book.id) it else it.copy(ratingHalfStars = clean.ratingHalfStars,
                     rating = clean.ratingHalfStars?.takeIf { stars -> stars % 2 == 0 }?.div(2),
@@ -245,7 +267,7 @@ open class BookRepository(private val context: Context? = null) {
                     startedAtMillis = clean.startedOn?.takeIf { date -> date.day != null }?.toLocalDate()
                         ?.atStartOfDay(java.time.ZoneId.systemDefault())?.toInstant()?.toEpochMilli() ?: it.startedAtMillis,
                     finishedAtMillis = if (clean.status == ReadingLogStatus.FINISHED)
-                        clean.finishedOn?.takeIf { date -> date.day != null }?.toLocalDate()
+                        clean.finishedAtMillis ?: clean.finishedOn?.takeIf { date -> date.day != null }?.toLocalDate()
                             ?.atStartOfDay(java.time.ZoneId.systemDefault())?.toInstant()?.toEpochMilli() else null,
                     status = when (clean.status) {
                         ReadingLogStatus.IN_PROGRESS -> ReadingStatus.READING
@@ -258,29 +280,65 @@ open class BookRepository(private val context: Context? = null) {
         return id
     }
 
-    suspend fun deleteReadingLogEntry(id: String) = updateStored { before ->
-        // Deleting history is explicit. Do not recreate that reading on the next page turn.
-        val books = mergeBooks(before).map { if (it.activeReadingLogId == id)
-            it.copy(activeReadingLogId = null, suppressReadingLog = true) else it }
-        val changed = split(books, before)
-        changed.copy(user = changed.user.copy(readingLog = before.user.readingLog.filterNot { it.id == id }))
+    /** A removed current reading starts fresh on the next open; old history never owns its progress. */
+    suspend fun deleteReadingLogEntry(id: String): ReadingLogDeletion? {
+        var deletion: ReadingLogDeletion? = null
+        var previousReading: Book? = null
+        updateStored { before ->
+            val removed = before.user.readingLog.firstOrNull { it.id == id } ?: return@updateStored before
+            val books = mergeBooks(before).map { book ->
+                val latest = book.activeReadingLogId ?: before.user.readingLog
+                    .filter { it.linkedBookId == book.id }.maxByOrNull { it.createdAtMillis }?.id
+                val hasCurrentReading = book.activeReadingLogId != null || book.suppressReadingLog ||
+                    book.startedAtMillis != null || book.hasFinishedReading || book.status in
+                    listOf(ReadingStatus.READING, ReadingStatus.ABANDONED) || book.readingSeconds > 0 || book.progress != ReadingProgress()
+                if (removed.linkedBookId == book.id && latest == id && hasCurrentReading) {
+                    previousReading = book
+                    book.withoutCurrentReading()
+                } else book
+            }
+            // Undo may restore only history after another reading has already
+            // started. Retain the removed reading's latest position in that case.
+            val removedSnapshot = if (removed.status == ReadingLogStatus.IN_PROGRESS && previousReading != null)
+                removed.copy(progressFraction = previousReading.readingLogProgressFraction ?: removed.progressFraction) else removed
+            deletion = ReadingLogDeletion(removedSnapshot, before.user.readingLog.indexOfFirst { it.id == id }, previousReading)
+            val changed = split(books, before)
+            changed.copy(user = changed.user.copy(readingLog = before.user.readingLog.filterNot { it.id == id }))
+        }
+        return deletion
     }
 
-    suspend fun restoreReadingLogEntry(entry: ReadingLogEntry, index: Int) = updateStored { before ->
+    suspend fun restoreReadingLogEntry(entry: ReadingLogEntry, index: Int, previousReading: Book? = null) = updateStored { before ->
         if (before.user.readingLog.any { it.id == entry.id }) before else {
             val next = before.user.readingLog.toMutableList().apply { add(index.coerceIn(0, size), entry) }
             var changed = before.copy(user = before.user.copy(readingLog = next))
-            val book = mergeBooks(before).firstOrNull { it.id == entry.linkedBookId && it.suppressReadingLog }
-            if (book != null && next.filter { it.linkedBookId == book.id }.maxByOrNull { it.createdAtMillis }?.id == entry.id)
+            val book = previousReading?.let { snapshot -> mergeBooks(before).firstOrNull { it.id == snapshot.id && it.id == entry.linkedBookId &&
+                it.activeReadingLogId == null && (it.suppressReadingLog || it.status == ReadingStatus.NONE &&
+                it.startedAtMillis == null && it.finishedAtMillis == null && it.readingSeconds == 0L) } }
+            if (book != null)
                 changed = split(mergeBooks(before).map { if (it.id == book.id)
-                    it.copy(activeReadingLogId = entry.id, suppressReadingLog = false) else it }, changed)
+                    it.copy(activeReadingLogId = previousReading.activeReadingLogId, suppressReadingLog = previousReading.suppressReadingLog,
+                        progress = previousReading.progress, startedAtMillis = previousReading.startedAtMillis,
+                        finishedAtMillis = previousReading.finishedAtMillis, readingSeconds = previousReading.readingSeconds,
+                        status = previousReading.status) else it }, changed)
             changed
         }
     }
 
+    private fun Book.withoutCurrentReading() = copy(
+        progress = ReadingProgress(), startedAtMillis = null, finishedAtMillis = null,
+        readingSeconds = 0, status = ReadingStatus.NONE, activeReadingLogId = null, suppressReadingLog = false,
+    )
+
     suspend fun reorderReadingLog(ids: List<String>) = updateStored { before ->
         val remaining = before.user.readingLog.associateByTo(LinkedHashMap()) { it.id }
         before.copy(user = before.user.copy(readingLog = ids.distinct().mapNotNull { remaining.remove(it) } + remaining.values))
+    }
+
+    /** Save chronology for one uncertain date without changing the manual list or the other date axis. */
+    suspend fun reorderReadingLogDateGroup(chronologicalIds: List<String>, byStart: Boolean, date: ReadingLogDate) = updateStored { before ->
+        before.copy(user = before.user.copy(readingLog =
+            withReadingLogDateOrder(before.user.readingLog, chronologicalIds, byStart, date)))
     }
 
     open fun coverFileFor(entry: ReadingLogEntry): File? = entry.coverFileName
@@ -304,19 +362,19 @@ open class BookRepository(private val context: Context? = null) {
         val target = File(coversDir, name)
         val temporary = File(coversDir, "$name.tmp")
         try {
-            val orientation = runCatching { openStream(uri).use { android.media.ExifInterface(it)
-                .getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION,
-                    android.media.ExifInterface.ORIENTATION_NORMAL) } }
-                .getOrDefault(android.media.ExifInterface.ORIENTATION_NORMAL)
+            val orientation = runCatching { openStream(uri).use { androidx.exifinterface.media.ExifInterface(it)
+                .getAttributeInt(androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL) } }
+                .getOrDefault(androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL)
             val matrix = android.graphics.Matrix().apply {
                 when (orientation) {
-                    android.media.ExifInterface.ORIENTATION_ROTATE_90 -> postRotate(90f)
-                    android.media.ExifInterface.ORIENTATION_ROTATE_180 -> postRotate(180f)
-                    android.media.ExifInterface.ORIENTATION_ROTATE_270 -> postRotate(270f)
-                    android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> postScale(-1f, 1f)
-                    android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> postScale(1f, -1f)
-                    android.media.ExifInterface.ORIENTATION_TRANSPOSE -> { postRotate(90f); postScale(-1f, 1f) }
-                    android.media.ExifInterface.ORIENTATION_TRANSVERSE -> { postRotate(270f); postScale(-1f, 1f) }
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90 -> postRotate(90f)
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_180 -> postRotate(180f)
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270 -> postRotate(270f)
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> postScale(-1f, 1f)
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> postScale(1f, -1f)
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSPOSE -> { postRotate(90f); postScale(-1f, 1f) }
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_TRANSVERSE -> { postRotate(270f); postScale(-1f, 1f) }
                 }
             }
             if (!matrix.isIdentity) oriented = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
@@ -324,7 +382,7 @@ open class BookRepository(private val context: Context? = null) {
             val height = minOf(oriented.height, (width * 3f / 2f).roundToInt().coerceAtLeast(1))
             val crop = Bitmap.createBitmap(oriented, (oriented.width - width) / 2, (oriented.height - height) / 2, width, height)
             cropped = crop
-            val outputImage = if (width > 1000) Bitmap.createScaledBitmap(crop, 1000, 1500, true) else crop
+            val outputImage = if (width > 1000) crop.scale(1000, 1500, true) else crop
             scaled = outputImage
             coversDir.mkdirs()
             FileOutputStream(temporary).use { out -> check(outputImage.compress(Bitmap.CompressFormat.JPEG, 92, out)); out.fd.sync() }
@@ -356,6 +414,19 @@ open class BookRepository(private val context: Context? = null) {
                 changed.user.readingLog + fresh.logEntry(id) else changed.user.readingLog))
         }
         return id
+    }
+
+    /** Continue the same abandoned reading, retaining its position, dates, time and review. */
+    suspend fun resumeReading(bookId: String) = updateStored { before ->
+        val book = mergeBooks(before).firstOrNull { it.id == bookId } ?: throw IOException("Book no longer exists.")
+        check(book.status == ReadingStatus.ABANDONED || book.status == ReadingStatus.READING) { "This reading cannot be resumed." }
+        val resumed = book.copy(status = ReadingStatus.READING, finishedAtMillis = null,
+            lastOpenedAtMillis = System.currentTimeMillis(), suppressReadingLog = false)
+        val entries = before.user.readingLog.map { if (it.id == book.activeReadingLogId)
+            it.copy(status = ReadingLogStatus.IN_PROGRESS, finishedOn = null,
+                lastOpenedAtMillis = resumed.lastOpenedAtMillis) else it }
+        syncCurrentReadings(split(mergeBooks(before).map { if (it.id == bookId) resumed else it },
+            before.copy(user = before.user.copy(readingLog = entries))), openedBookId = bookId)
     }
 
     /** One consistent snapshot, including priorities, under the write lock. Call on IO. */
@@ -506,8 +577,9 @@ open class BookRepository(private val context: Context? = null) {
     private fun Book.logEntry(id: String): ReadingLogEntry = ReadingLogEntry(
         id = id, title = title, author = author.orEmpty(), series = series.orEmpty(),
         source = ReadingLogSource.FROGREADER,
+        bookFormat = format,
         status = when {
-            status == ReadingStatus.FINISHED -> ReadingLogStatus.FINISHED
+            hasFinishedReading -> ReadingLogStatus.FINISHED
             status == ReadingStatus.ABANDONED -> ReadingLogStatus.ABANDONED
             else -> ReadingLogStatus.IN_PROGRESS
         }, startedOn = startedAtMillis?.let { ReadingLogDate.fromMillis(it) },
@@ -515,35 +587,63 @@ open class BookRepository(private val context: Context? = null) {
         linkedBookId = this.id, coverFileName = coverFileName, readingSeconds = readingSeconds,
         lastOpenedAtMillis = lastOpenedAtMillis, ratingHalfStars = effectiveRatingHalfStars,
         review = review.orEmpty(), createdAtMillis = startedAtMillis ?: finishedAtMillis ?: addedAtMillis,
+        finishedAtMillis = finishedAtMillis,
+        progressFraction = readingLogProgressFraction,
     )
+
+    private val Book.readingLogProgressFraction: Float?
+        get() = progress.fraction.takeIf { it.isFinite() }?.coerceIn(0f, 1f)
 
     /** Only changes when reading/user data changes; page positions do not rewrite userdata. */
     private fun syncCurrentReadings(from: Stored, openedBookId: String? = null): Stored {
-        val entries = from.user.readingLog.toMutableList()
-        val books = mergeBooks(from).map { book ->
+        val originals = mergeBooks(from)
+        val formats = originals.associate { it.id to it.format }
+        // Backfill older snapshots while the real library file still identifies its format.
+        val entries = from.user.readingLog.map { entry ->
+            if (entry.source == ReadingLogSource.FROGREADER && entry.bookFormat == null)
+                entry.copy(bookFormat = formats[entry.linkedBookId]) else entry
+        }.toMutableList()
+        val books = originals.map { book ->
             if (book.suppressReadingLog) return@map book
             val at = entries.indexOfFirst { it.id == book.activeReadingLogId }
             if (at < 0) {
-                if (book.startedAtMillis == null && book.finishedAtMillis == null && book.status != ReadingStatus.FINISHED)
+                if (book.startedAtMillis == null && book.finishedAtMillis == null &&
+                    book.status !in listOf(ReadingStatus.READING, ReadingStatus.FINISHED, ReadingStatus.ABANDONED))
                     return@map book
-                val id = book.activeReadingLogId ?: "reading-log-${book.id}"
+                // A deleted reading's id remains a tombstone. Reusing it could also
+                // collide with an earlier reading that is still in the history.
+                val legacyId = "reading-log-${book.id}"
+                val candidate = book.activeReadingLogId ?: legacyId
+                val id = candidate.takeUnless { key -> key in from.user.deletedIds || entries.any { it.id == key } }
+                    ?: UUID.randomUUID().toString()
                 entries += book.logEntry(id)
                 book.copy(activeReadingLogId = id)
             } else {
                 val old = entries[at]
                 // Identity and cover are snapshots. Finished readings retain their opening timestamp.
                 val desiredStatus = when {
-                    book.status == ReadingStatus.FINISHED -> ReadingLogStatus.FINISHED
+                    book.hasFinishedReading -> ReadingLogStatus.FINISHED
                     book.status == ReadingStatus.ABANDONED -> ReadingLogStatus.ABANDONED
                     else -> ReadingLogStatus.IN_PROGRESS
                 }
+                val finishedOn = when {
+                    desiredStatus == ReadingLogStatus.IN_PROGRESS -> null
+                    old.status != ReadingLogStatus.FINISHED && book.finishedAtMillis != null ->
+                        ReadingLogDate.fromMillis(book.finishedAtMillis)
+                    else -> old.finishedOn
+                }
+                val finishedAt = if (desiredStatus == ReadingLogStatus.FINISHED)
+                    (old.finishedAtMillis ?: book.finishedAtMillis)?.takeIf { ReadingLogDate.fromMillis(it) == finishedOn }
+                    else null
                 entries[at] = old.copy(status = desiredStatus,
                     readingSeconds = book.readingSeconds, ratingHalfStars = book.effectiveRatingHalfStars,
                     review = book.review.orEmpty(),
+                    progressFraction = if (desiredStatus == ReadingLogStatus.ABANDONED &&
+                        (old.status != ReadingLogStatus.ABANDONED || old.progressFraction == null))
+                        book.readingLogProgressFraction else old.progressFraction,
                     lastOpenedAtMillis = if (book.id == openedBookId && old.status == ReadingLogStatus.IN_PROGRESS)
                         book.lastOpenedAtMillis else old.lastOpenedAtMillis,
-                    finishedOn = if (old.status != ReadingLogStatus.FINISHED && book.finishedAtMillis != null)
-                        ReadingLogDate.fromMillis(book.finishedAtMillis) else old.finishedOn)
+                    finishedOn = finishedOn, finishedAtMillis = finishedAt)
                 book
             }
         }
@@ -1130,35 +1230,30 @@ open class BookRepository(private val context: Context? = null) {
     /**
      * Records that a book was opened, without the reader waiting for it.
      *
-     * Both writes land in [updateSnapshot]: a full re-serialize of the library
-     * index, an fsync, a `.bak` copy, an atomic move and a Glance widget
-     * rebuild. Awaiting that before the book was even read off disk cost
-     * 60-150ms of every single open, measured.
-     *
-     * Nothing on screen depends on the result. Until the settings write lands,
-     * the reader falls back to the app-wide settings — which is the very value
-     * being written.
+     * [markStarted] pins code defaults together with the open stamp in one
+     * transaction. The reader uses those same defaults until the write lands.
+     * Keeping bookkeeping off the first frame avoids waiting for fsync and
+     * the widget rebuild before showing the book.
      */
-    open fun noteOpened(bookId: String, defaultSettings: suspend () -> ReaderSettings) {
+    open fun noteOpened(bookId: String) {
         bookkeeping.launch {
             runCatching { markStarted(bookId) }
-            // First open pins the current settings as THIS book's own: from
-            // now on, changes made in other books cannot touch it.
-            if (bookById(bookId)?.readerSettings == null) {
-                runCatching { saveReaderSettings(bookId, defaultSettings()) }
-            }
         }
     }
 
-    /** Stamps the first-opened time once and updates lastOpenedAtMillis. */
+    /** Stamps the open and promotes the book and its containing shelf together. */
     open suspend fun markStarted(bookId: String) {
         val now = System.currentTimeMillis()
         updateStored { before ->
             val books = mergeBooks(before).map { book ->
                 if (book.id == bookId) {
                     book.copy(
-                        startedAtMillis = book.startedAtMillis ?: now,
+                        startedAtMillis = if (book.hasFinishedReading || book.status == ReadingStatus.ABANDONED) book.startedAtMillis
+                            else book.startedAtMillis ?: now,
                         lastOpenedAtMillis = now,
+                        // Check inside the store transaction so first-open bookkeeping
+                        // cannot overwrite an edit already saved by the reader.
+                        readerSettings = book.readerSettings ?: ReaderSettings(),
                         // Opening a book is what moves it off the want-to-read
                         // list. A book already finished or abandoned keeps that
                         // status until the user says otherwise.
@@ -1171,7 +1266,15 @@ open class BookRepository(private val context: Context? = null) {
                     book
                 }
             }
-            syncCurrentReadings(split(books, before), openedBookId = bookId)
+            val changed = split(books, before)
+            val shelves = changed.index.shelves.map { shelf ->
+                if (bookId in shelf.bookIds) {
+                    shelf.copy(sortKey = now, bookIds = listOf(bookId) + (shelf.bookIds - bookId))
+                } else {
+                    shelf
+                }
+            }
+            syncCurrentReadings(changed.copy(index = changed.index.copy(shelves = shelves)), openedBookId = bookId)
         }
     }
 
@@ -1179,7 +1282,7 @@ open class BookRepository(private val context: Context? = null) {
     open suspend fun markFinished(bookId: String) {
         updateIndex { books ->
             books.map { book ->
-                if (book.id == bookId && book.finishedAtMillis == null) {
+                if (book.id == bookId && !book.hasFinishedReading) {
                     book.copy(
                         finishedAtMillis = System.currentTimeMillis(),
                         status = ReadingStatus.FINISHED,
@@ -1195,7 +1298,7 @@ open class BookRepository(private val context: Context? = null) {
         if (seconds <= 0) return
         updateIndex { books ->
             books.map { book ->
-                if (book.id == bookId && book.finishedAtMillis == null) {
+                if (book.id == bookId && !book.hasFinishedReading) {
                     book.copy(readingSeconds = book.readingSeconds + seconds)
                 } else {
                     book
@@ -1221,6 +1324,29 @@ open class BookRepository(private val context: Context? = null) {
                 }
             }
         }
+    }
+
+    /** Late writes from a closed reader must not restore a deleted or replaced reading. */
+    private suspend fun updateCurrentReading(bookId: String, readingLogId: String?, transform: (Book) -> Book) {
+        updateIndex { books -> books.map { book ->
+            if (book.id == bookId && book.activeReadingLogId == readingLogId &&
+                (readingLogId != null || book.suppressReadingLog)) transform(book) else book
+        } }
+    }
+
+    suspend fun saveProgressForReading(bookId: String, progress: ReadingProgress, readingLogId: String?) =
+        updateCurrentReading(bookId, readingLogId) { it.copy(progress = progress, lastOpenedAtMillis = System.currentTimeMillis()) }
+
+    suspend fun addReadingSecondsForReading(bookId: String, seconds: Long, readingLogId: String?) {
+        if (seconds <= 0) return
+        updateCurrentReading(bookId, readingLogId) {
+            if (!it.hasFinishedReading && it.status == ReadingStatus.READING) it.copy(readingSeconds = it.readingSeconds + seconds) else it
+        }
+    }
+
+    suspend fun markFinishedForReading(bookId: String, readingLogId: String?) = updateCurrentReading(bookId, readingLogId) {
+        if (!it.hasFinishedReading && it.status == ReadingStatus.READING)
+            it.copy(finishedAtMillis = System.currentTimeMillis(), status = ReadingStatus.FINISHED) else it
     }
 
     /** Updates a book's reading status. */
@@ -1254,6 +1380,28 @@ open class BookRepository(private val context: Context? = null) {
             ratingHalfStars = ratingHalfStars,
             rating = ratingHalfStars?.takeIf { stars -> stars % 2 == 0 }?.div(2),
             review = text, reviewUpdatedAtMillis = System.currentTimeMillis()) } }
+    }
+
+    /** The completion form belongs to the reading that opened it, including delayed saves. */
+    open suspend fun saveReviewForReading(bookId: String, readingLogId: String?, ratingHalfStars: Int?, review: String) {
+        require(ratingHalfStars == null || ratingHalfStars in 2..10)
+        require(review.length <= 20_000)
+        val text = review.trim().ifBlank { null }
+        updateStored { before ->
+            val books = mergeBooks(before)
+            val current = books.firstOrNull { it.id == bookId }
+                ?: throw IOException("The book no longer exists.")
+            if (current.activeReadingLogId != readingLogId || readingLogId == null && !current.suppressReadingLog) {
+                throw IOException("This reading is no longer current.")
+            }
+            syncCurrentReadings(split(books.map { book ->
+                if (book.id != bookId) book else book.copy(
+                    ratingHalfStars = ratingHalfStars,
+                    rating = ratingHalfStars?.takeIf { it % 2 == 0 }?.div(2),
+                    review = text, reviewUpdatedAtMillis = System.currentTimeMillis(),
+                )
+            }, before))
+        }
     }
 
     open suspend fun setReview(bookId: String, review: String?) {
@@ -1548,10 +1696,16 @@ open class BookRepository(private val context: Context? = null) {
     }
 
     suspend fun removeQuote(bookId: String, quoteId: String) {
+        removeQuotes(bookId, setOf(quoteId))
+    }
+
+    /** Remove all quotes touched by a reader selection in one atomic update. */
+    suspend fun removeQuotes(bookId: String, quoteIds: Set<String>) {
+        if (quoteIds.isEmpty()) return
         updateIndex { books ->
             books.map { book ->
                 if (book.id != bookId) return@map book
-                book.copy(quotes = book.quotes.filterNot { it.id == quoteId })
+                book.copy(quotes = book.quotes.filterNot { it.id in quoteIds })
             }
         }
     }
@@ -1692,7 +1846,17 @@ open class BookRepository(private val context: Context? = null) {
             user = user,
             progress = progressStore.readOrDefault(ProgressStore()),
         )
-        syncCurrentReadings(original).also { if (it.user != original.user) pendingUserMigration = true }
+        // Older builds used suppression for deleting the current log and left its
+        // progress behind. An empty history is enough to repair that stale state.
+        // Existing intentional unlogged readings with retained history stay intact.
+        val repairedBooks = mergeBooks(original).map { book ->
+            if (book.suppressReadingLog && book.activeReadingLogId == null &&
+                original.user.readingLog.none { it.linkedBookId == book.id }) book.withoutCurrentReading() else book
+        }
+        syncCurrentReadings(split(repairedBooks, original)).also {
+            if (it.user != original.user) pendingUserMigration = true
+            if (it.progress != original.progress) pendingProgressMigration = true
+        }
     }
 
     /**
@@ -1750,12 +1914,25 @@ open class BookRepository(private val context: Context? = null) {
             book.quotes.forEach { quotes[it.id] = it.copy(bookId = book.id) }
             book.bookmarks.forEach { bookmarks[it.id] = it.copy(bookId = book.id) }
         }
+        // Live progress remains in progress.json. Capture it only when a current
+        // reading loses its library position, such as deletion or an unlogged reread.
+        val currentReadingIds = books.mapNotNullTo(HashSet()) { it.activeReadingLogId.takeUnless { _ -> it.suppressReadingLog } }
+        val endedReadings = before.user.userData.mapNotNull { (bookId, userData) ->
+            userData.activeReadingLogId?.takeUnless { it in currentReadingIds || userData.suppressReadingLog }?.let {
+                it to (before.progress.progress[bookId]?.position?.fraction ?: 0f)
+            }
+        }.toMap()
+        val readingLog = if (endedReadings.isEmpty()) before.user.readingLog else before.user.readingLog.map { entry ->
+            val fraction = endedReadings[entry.id]?.takeIf { it.isFinite() }?.coerceIn(0f, 1f)
+            if (entry.status == ReadingLogStatus.IN_PROGRESS && fraction != null) entry.copy(progressFraction = fraction) else entry
+        }
         return before.copy(
             index = before.index.copy(books = books.map { it.toRecord() }),
             user = before.user.copy(
                 userData = user,
                 quotes = quotes,
                 bookmarks = bookmarks,
+                readingLog = readingLog,
             ),
             progress = ProgressStore(progress),
         )
@@ -1869,11 +2046,12 @@ open class BookRepository(private val context: Context? = null) {
 
                 if (after.index != before.index) indexStore.write(after.index)
                 if (after.user != before.user || pendingUserMigration) userStore.write(after.user)
-                if (after.progress != before.progress) progressStore.write(after.progress)
+                if (after.progress != before.progress || pendingProgressMigration) progressStore.write(after.progress)
 
                 // Publish only durable data; a failed save must not appear successful in search/UI.
                 mutableStored = after
                 pendingUserMigration = false
+                pendingProgressMigration = false
                 _books.value = mergeBooks(after)
                 _shelves.value = after.index.shelves
                 _readingQueue.value = after.user.readingQueue

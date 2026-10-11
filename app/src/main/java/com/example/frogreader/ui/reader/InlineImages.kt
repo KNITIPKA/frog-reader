@@ -12,7 +12,6 @@ import coil3.compose.AsyncImage
 import com.example.frogreader.data.model.INLINE_IMAGE_ALT_TAG
 import com.example.frogreader.data.model.INLINE_IMAGE_TAG
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Images that live inside the text flow — decorative initials drawn as
@@ -29,12 +28,10 @@ import java.util.concurrent.ConcurrentHashMap
  */
 private const val INLINE_IMAGE_HEIGHT_EM = 0.9f
 
-/** Decoding image bounds hits the disk; pagination asks for the same few. */
-private val aspectCache = ConcurrentHashMap<String, Float>()
-
 /** Placeholder box for the image at [path], sized from its aspect ratio. */
 private fun placeholderFor(path: String): Placeholder {
-    val aspect = aspectCache.getOrPut(path) { imageAspectRatio(path) ?: 1f }
+    // The shared geometry probe is bounded and observes replaced source files.
+    val aspect = imageAspectRatio(path) ?: 1f
     return Placeholder(
         width = (INLINE_IMAGE_HEIGHT_EM / aspect.coerceAtLeast(0.05f)).em,
         height = INLINE_IMAGE_HEIGHT_EM.em,

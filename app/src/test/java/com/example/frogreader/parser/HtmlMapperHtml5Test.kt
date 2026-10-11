@@ -50,7 +50,7 @@ class HtmlMapperHtml5Test {
         assertEquals(BlockAlign.CENTER, caption.block?.align)
         assertEquals(true, caption.block?.italic)
         assertEquals(0.9f, requireNotNull(caption.block!!.fontScale), 0.001f)
-        assertEquals(false, caption.block?.firstLineIndent)
+        assertEquals(false, caption.block.firstLineIndent)
     }
 
     @Test

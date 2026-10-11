@@ -3,6 +3,7 @@ package com.example.frogreader.parser
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.LINK_TAG
 import com.example.frogreader.data.parser.EpubParser
+import com.example.frogreader.testfixtures.LocalBookFixtures
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.LinkAnnotation
 import com.example.frogreader.ui.reader.FootnoteHandler
@@ -24,12 +25,7 @@ class ContentsPageTest {
     @get:Rule
     val tempFolder = TemporaryFolder()
 
-    private fun book(): File {
-        val local = File(
-            "/Users/frog/AndroidStudioProjects/FrogReader/.testbooks/Irresistible_en.epub",
-        )
-        return local
-    }
+    private fun book(): File = LocalBookFixtures.find("Irresistible_en.epub")
 
     @Test
     fun `real contents links preserve display identity across scrolling recompositions`() {

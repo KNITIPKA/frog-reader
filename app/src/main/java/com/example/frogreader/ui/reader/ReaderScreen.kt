@@ -1,19 +1,25 @@
 package com.example.frogreader.ui.reader
 
+import com.example.frogreader.ui.components.FrogSnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
 import com.example.frogreader.ui.translation.rememberTranslationAction
 import androidx.activity.compose.LocalActivity
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,7 +33,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.magnifier
 import androidx.compose.foundation.rememberScrollState
@@ -47,7 +52,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
@@ -56,12 +64,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.Close
@@ -84,6 +94,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableIntState
@@ -117,23 +128,26 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onPlaced
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalAccessibilityManager
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.unit.DpOffset
-import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.LinkInteractionListener
@@ -145,11 +159,13 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Velocity
@@ -169,6 +185,7 @@ import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.AppTheme
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.ReadingMode
+import com.example.frogreader.data.PageTurnAnimation
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.EXTERNAL_LINK_TAG
@@ -176,11 +193,16 @@ import com.example.frogreader.data.model.FOOTNOTE_TAG
 import com.example.frogreader.data.model.LINK_TAG
 import com.example.frogreader.data.model.LinkedDocumentTarget
 import com.example.frogreader.data.model.NoteDocument
+import com.example.frogreader.data.model.PageProgression
 import com.example.frogreader.data.model.ParagraphStyle
 import com.example.frogreader.data.model.Quote
+import com.example.frogreader.data.model.QuoteColor
+import com.example.frogreader.data.model.ReaderChromeStyle
 import com.example.frogreader.ui.reader.selection.BookSelection
 import com.example.frogreader.ui.reader.selection.BookAnchor
 import com.example.frogreader.ui.reader.selection.ReaderHighlights
+import com.example.frogreader.ui.reader.selection.QuoteHighlight
+import com.example.frogreader.ui.reader.selection.quoteHighlights
 import com.example.frogreader.ui.reader.selection.SelectionAutoAdvance
 import com.example.frogreader.ui.reader.selection.SelectionAutoAdvanceEffect
 import com.example.frogreader.ui.reader.selection.SelectionController
@@ -195,6 +217,7 @@ import com.example.frogreader.data.effectiveTheme
 import com.example.frogreader.ui.theme.isDark
 import com.example.frogreader.ui.theme.floatingSurface
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -211,9 +234,10 @@ import kotlin.time.Duration.Companion.milliseconds
 fun ReaderScreen(
     bookId: String,
     onBack: () -> Unit,
+    onExitToLibrary: () -> Unit = onBack,
     initialQuoteId: String? = null,
     initialBookmarkId: String? = null,
-    onReview: (String) -> Unit = {},
+    contentMotion: Modifier = Modifier,
 ) {
     val viewModel: ReaderViewModel =
         viewModel(key = "reader-$bookId", factory = ReaderViewModel.factory(bookId))
@@ -221,8 +245,10 @@ fun ReaderScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
     val offerReread by viewModel.offerReread.collectAsStateWithLifecycle()
+    val completionVisible by viewModel.completionVisible.collectAsStateWithLifecycle()
     val readingGeneration by viewModel.readingGeneration.collectAsStateWithLifecycle()
     val restartingReading by viewModel.restartingReading.collectAsStateWithLifecycle()
+    val resumingReading by viewModel.resumingReading.collectAsStateWithLifecycle()
     val rereadError by viewModel.rereadError.collectAsStateWithLifecycle()
     val readingSaveError by viewModel.readingSaveError.collectAsStateWithLifecycle()
     var rereadChoiceHandled by rememberSaveable(bookId) { mutableStateOf(false) }
@@ -242,10 +268,11 @@ fun ReaderScreen(
     var chromeVisible by rememberSaveable { mutableStateOf(false) }
     val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
     val readerTheme = appSettings.effectiveTheme(systemDark)
-    SystemBarsEffect(readerTheme, chromeVisible)
+    val readerAppSettings = remember(appSettings, readerTheme) { appSettings.copy(theme = readerTheme) }
+    SystemBarsEffect(readerTheme, chromeVisible || completionVisible)
     val opening = rememberReaderOpeningMotion(bookId)
 
-    Box(Modifier.fillMaxSize().background(readerColors(appSettings.theme).background)) {
+    Box(Modifier.fillMaxSize().background(readerColors(readerTheme).background)) {
         when (val current = state) {
             ReaderState.Loading -> Unit
 
@@ -278,13 +305,14 @@ fun ReaderScreen(
                     initialBookmarkId = initialBookmarkId,
                     settings = settings,
                     viewModel = viewModel,
-                    appSettings = appSettings,
+                    appSettings = readerAppSettings,
                     chromeVisible = chromeVisible,
                     onToggleChrome = { chromeVisible = !chromeVisible },
                     onShowChrome = { chromeVisible = true },
                     onBack = onBack,
-                    onReview = { onReview(bookId) },
+                    onExitToLibrary = onExitToLibrary,
                     opening = opening,
+                    contentMotion = contentMotion,
                 )
             }
         }
@@ -297,44 +325,22 @@ fun ReaderScreen(
             }
         }
     }
-    if (offerReread && !rereadChoiceHandled && initialQuoteId == null && initialBookmarkId == null) {
-        AlertDialog(
-            onDismissRequest = {
-                if (!restartingReading) {
+    (state as? ReaderState.Ready)?.let { ready ->
+        ReaderRereadDialog(
+            visible = offerReread && !rereadChoiceHandled && opening.finished &&
+                initialQuoteId == null && initialBookmarkId == null,
+            book = ready.book,
+            cover = viewModel.coverFileFor(ready.book),
+            busy = restartingReading,
+            resuming = resumingReading,
+            error = rereadError,
+            onBrowse = {
+                if (viewModel.keepPreviousReading()) {
                     rereadChoiceHandled = true
-                    viewModel.keepPreviousReading()
                 }
             },
-            containerColor = MaterialTheme.colorScheme.floatingSurface,
-            tonalElevation = 0.dp,
-            title = { Text(stringResource(R.string.reading_log_reader_reread_title)) },
-            text = {
-                Column {
-                    Text(stringResource(R.string.reading_log_reader_reread_message))
-                    if (rereadError) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(stringResource(R.string.reading_log_reader_reread_error), color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            },
-            confirmButton = {
-                Column(horizontalAlignment = Alignment.End) {
-                    TextButton(onClick = { viewModel.beginReadingAgain(true) }, enabled = !restartingReading) {
-                        Text(stringResource(R.string.reading_log_reader_reread_log))
-                    }
-                    TextButton(onClick = { viewModel.beginReadingAgain(false) }, enabled = !restartingReading) {
-                        Text(stringResource(R.string.reading_log_reader_reread_unlogged))
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    rereadChoiceHandled = true
-                    viewModel.keepPreviousReading()
-                }, enabled = !restartingReading) {
-                    Text(stringResource(R.string.reading_log_reader_reread_keep))
-                }
-            },
+            onReadAgain = viewModel::beginReadingAgain,
+            onResume = viewModel::resumeReading,
         )
     }
     if (readingSaveError) {
@@ -377,15 +383,21 @@ private fun ReaderContent(
     onToggleChrome: () -> Unit,
     onShowChrome: () -> Unit,
     onBack: () -> Unit,
-    onReview: () -> Unit,
+    onExitToLibrary: () -> Unit,
     opening: ReaderOpeningMotion,
+    contentMotion: Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val clipboardScope = rememberCoroutineScope()
+    val resources = LocalResources.current
 
     val chromeScheme = appColorSchemeFor(appSettings.theme, appSettings.dynamicColor)
     val colors = remember(appSettings.theme, chromeScheme) {
-        readerColors(theme = appSettings.theme, chromeScheme = chromeScheme)
+        readerColors(
+            theme = appSettings.theme,
+            chromeScheme = chromeScheme,
+        )
     }
     val liveBook by viewModel.book.collectAsStateWithLifecycle()
 
@@ -404,8 +416,30 @@ private fun ReaderContent(
     // Character-precise jump (item, char) — search results land on the exact
     // page even when the paragraph spans several pages.
     var seekPosition by remember { mutableStateOf<ReaderReturnLocation.Main?>(null) }
+    var animateChapterSeek by remember { mutableStateOf(false) }
+    val latestReadingMode by rememberUpdatedState(settings.readingMode)
     var initialQuoteOrBookmarkConsumed by rememberSaveable(ready.book.id, initialQuoteId, initialBookmarkId) {
         mutableStateOf(false)
+    }
+    fun consumePositionSeek(consumed: ReaderReturnLocation.Main) {
+        // A completed animation must not clear a newer tap awaiting its frame.
+        if (seekPosition != consumed) return
+        if (animateChapterSeek) displayedIndex.intValue = consumed.flatItemIndex
+        seekPosition = null
+        animateChapterSeek = false
+        initialQuoteOrBookmarkConsumed = true
+    }
+    fun interruptChapterSeek(
+        interrupted: ReaderReturnLocation.Main,
+        mode: ReadingMode,
+        layoutChanged: Boolean = false,
+    ) {
+        if (seekPosition != interrupted || !animateChapterSeek) return
+        // Layout/mode rebuilds must retry the anchor in the new reader. A
+        // gesture interrupting the same reader instead takes over immediately.
+        if (layoutChanged || latestReadingMode != mode) return
+        seekPosition = null
+        animateChapterSeek = false
     }
 
     // Parsing finishes before pagination and saved-anchor restoration. The
@@ -518,6 +552,7 @@ private fun ReaderContent(
     DisposableEffect(mainActivity) {
         val handler: (Boolean) -> Boolean = handler@{ forward ->
             if (!viewModel.appSettings.value.volumeKeyPaging) return@handler false
+            if (viewModel.completionVisible.value) return@handler false
             if (searchVisible) return@handler false // search overlay is up
             if (linkedDocumentId != null) return@handler false // never turn the hidden main book
             turnEvents.tryEmit(forward)
@@ -529,6 +564,8 @@ private fun ReaderContent(
     }
 
     val context = LocalContext.current
+    var diagnosticViewport by remember { mutableStateOf(IntSize.Zero) }
+    CaptureReaderDiagnostics(ready, viewModel, settings, appSettings, liveFontSize, diagnosticViewport)
 
     // Selection in book coordinates — see ui/reader/selection. It lives here,
     // above both reading modes, so a page turn or a scroll never disturbs it.
@@ -555,13 +592,24 @@ private fun ReaderContent(
     var resumed by remember(lifecycleOwner) {
         mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
     }
-    var reviewOpening by remember { mutableStateOf(false) }
+    var seekCompletion by remember { mutableStateOf(false) }
+    val reviewKeyboardVisible = completionVisible && WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    var topChromeHeight by remember { mutableIntStateOf(0) }
+    val completionPadding = WindowInsets.systemBarsIgnoringVisibility.only(
+        WindowInsetsSides.Horizontal + WindowInsetsSides.Top,
+    ).asPaddingValues()
+    val reviewKeyboard = LocalSoftwareKeyboardController.current
+    val reviewFocus = LocalFocusManager.current
+    fun saveReviewAndExit() {
+        reviewFocus.clearFocus()
+        reviewKeyboard?.hide()
+        viewModel.saveCompletionReview(onExitToLibrary)
+    }
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
                     resumed = true
-                    reviewOpening = false
                 }
                 Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
                     resumed = false
@@ -574,17 +622,28 @@ private fun ReaderContent(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.setReadingActive(false)
-            viewModel.cancelPendingReview()
         }
     }
-    val readingActive = opening.finished && resumed && !completionVisible && !offerReread && !reviewOpening && !readingSaveError &&
+    val readingActive = opening.finished && resumed && !completionVisible && !offerReread && !seekCompletion && !readingSaveError &&
         !searchVisible && noteToShow == null && panelFraction.floatValue <= 0.01f
     LaunchedEffect(readingActive) { viewModel.setReadingActive(readingActive) }
     fun openReview() {
-        reviewOpening = true
+        selection.clear()
+        seekCompletion = true
         viewModel.setReadingActive(false)
-        if (lastPageVisible || completionVisible) viewModel.finishReadingForReview(onReview)
-        else onReview()
+    }
+    LaunchedEffect(completionVisible) {
+        if (completionVisible) {
+            selection.clear()
+            searchVisible = false
+            noteToShow = null
+        }
+    }
+    BackHandler(enabled = completionVisible || seekCompletion) {
+        if (reviewKeyboardVisible) {
+            reviewFocus.clearFocus()
+            reviewKeyboard?.hide()
+        } else saveReviewAndExit()
     }
     val navigationReturnLocation by viewModel.navigationReturnLocation.collectAsStateWithLifecycle()
     val returnTimeout = LocalAccessibilityManager.current?.calculateRecommendedTimeoutMillis(
@@ -595,9 +654,11 @@ private fun ReaderContent(
     ) ?: ReaderNavigationSession.DEFAULT_TIMEOUT_MILLIS
     LaunchedEffect(returnTimeout) { viewModel.setReturnTimeoutMillis(returnTimeout) }
     val navigationBackAvailable = navigationReturnLocation != null
+    val snackbar = remember { SnackbarHostState() }
     val translateSelection = rememberTranslationAction(
         defaultTranslator = appSettings.defaultTranslator,
         saveDefault = viewModel::setDefaultTranslator,
+        snackbar = snackbar,
     )
     val pagination by viewModel.pagination.collectAsStateWithLifecycle()
     val returnPageNumber = if (settings.readingMode == ReadingMode.PAGES) {
@@ -661,6 +722,7 @@ private fun ReaderContent(
     } ?: currentBookSurfaceLocation()
 
     fun restoreReturnLocation(location: ReaderReturnLocation) {
+        animateChapterSeek = false
         noteToShow = null
         selection.clear()
         fun restoreBookSurface(surface: ReaderReturnLocation): Boolean = when (surface) {
@@ -728,7 +790,7 @@ private fun ReaderContent(
             val target = quoteOrBookmarkTarget(liveBook ?: ready.book, initialQuoteId, initialBookmarkId, ready.items.size)
             if (target == null) {
                 initialQuoteOrBookmarkConsumed = true
-                android.widget.Toast.makeText(context, R.string.quotes_bookmarks_target_unavailable, android.widget.Toast.LENGTH_LONG).show()
+                snackbar.showSnackbar(resources.getString(R.string.quotes_bookmarks_target_unavailable), duration = SnackbarDuration.Long)
             } else {
                 val origin = currentReturnLocation()
                 if (origin != target) viewModel.rememberNavigationOrigin(origin, expires = true)
@@ -759,7 +821,7 @@ private fun ReaderContent(
     // Saved quotes, resolved to book coordinates — painted by the same path
     // machinery as the live selection, so each one marks exactly its own text.
     val quoteRanges = remember(liveBook) {
-        liveBook?.quotes.orEmpty().mapNotNull { it.range() }
+        quoteHighlights(liveBook?.quotes.orEmpty())
     }
     // RenderPart keeps one stable handler for the current immutable item stream,
     // but every action must call the latest composition. In particular the
@@ -812,9 +874,13 @@ private fun ReaderContent(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            // Navigation fades the full page; only its foreground shrinks.
+            // Keeping paper outside the scale avoids a detached rectangular sheet.
+            .background(colors.background)
+            .then(contentMotion)
             .readerOpeningReveal(opening)
-            .then(if (opening.finished) Modifier else Modifier.clearAndSetSemantics { })
-            .background(colors.background),
+            .onSizeChanged { diagnosticViewport = it }
+            .then(if (opening.finished) Modifier else Modifier.clearAndSetSemantics { }),
     ) {
         // The selection's coordinate space: every anchor, handle and hit test
         // is expressed relative to this box, and its gesture detector is the
@@ -823,12 +889,14 @@ private fun ReaderContent(
             modifier = Modifier
                 .fillMaxSize()
                 .onPlaced { selection.space = it }
-                .pointerInput(selection) { bookSelectionGestures(selection, haptics) }
+                .pointerInput(selection, completionVisible) {
+                    if (!completionVisible) bookSelectionGestures(selection, haptics)
+                }
                 // The loupe over the character being chosen — a fingertip
                 // covers about three words at reading size. The platform
-                // magnifier is API 28+; this modifier is a no-op below that,
-                // which is the right behaviour on our minSdk 26.
-                .magnifier(sourceCenter = { selection.magnifierSource() }),
+                // magnifier is API 28+; Compose guards older devices and
+                // applies the stronger zoom only where supported (API 29+).
+                .magnifier(sourceCenter = { selection.magnifierSource() }, zoom = 1.6f),
         ) {
             when (settings.readingMode) {
                 ReadingMode.SCROLL -> ScrollReader(
@@ -845,7 +913,11 @@ private fun ReaderContent(
                     seekFraction = seekFraction,
                     onSeekFractionConsumed = { seekFraction = null },
                     seekPosition = seekPosition,
-                    onSeekPositionConsumed = { seekPosition = null; initialQuoteOrBookmarkConsumed = true },
+                    animateSeekPosition = animateChapterSeek,
+                    onSeekPositionConsumed = ::consumePositionSeek,
+                    onChapterSeekInterrupted = { interrupted ->
+                        interruptChapterSeek(interrupted, ReadingMode.SCROLL)
+                    },
                     onToggleChrome = {
                         onToggleChrome()
                         searchHighlight = null
@@ -857,7 +929,11 @@ private fun ReaderContent(
                     footnotes = footnotes,
                     quoteRanges = quoteRanges,
                     selection = selection,
-                    onReview = ::openReview,
+                    seekCompletion = seekCompletion,
+                    onSeekCompletionConsumed = { seekCompletion = false },
+                    completionPadding = completionPadding,
+                    onSaveReview = ::saveReviewAndExit,
+                    onExitReview = ::saveReviewAndExit,
                     onContentReady = { readingSurfaceReady = true },
                 )
 
@@ -875,7 +951,11 @@ private fun ReaderContent(
                     seekFraction = seekFraction,
                     onSeekFractionConsumed = { seekFraction = null },
                     seekPosition = seekPosition,
-                    onSeekPositionConsumed = { seekPosition = null; initialQuoteOrBookmarkConsumed = true },
+                    animateSeekPosition = animateChapterSeek,
+                    onSeekPositionConsumed = ::consumePositionSeek,
+                    onChapterSeekInterrupted = { interrupted, layoutChanged ->
+                        interruptChapterSeek(interrupted, ReadingMode.PAGES, layoutChanged)
+                    },
                     onToggleChrome = {
                         onToggleChrome()
                         searchHighlight = null
@@ -887,13 +967,19 @@ private fun ReaderContent(
                     footnotes = footnotes,
                     quoteRanges = quoteRanges,
                     selection = selection,
-                    onReview = ::openReview,
+                    seekCompletion = seekCompletion,
+                    onSeekCompletionConsumed = { seekCompletion = false },
+                    completionPadding = completionPadding,
+                    onSaveReview = ::saveReviewAndExit,
+                    onExitReview = ::saveReviewAndExit,
                     onContentReady = { readingSurfaceReady = true },
                 )
             }
 
             SelectionAutoAdvanceEffect(selection)
-            SelectionHandles(selection, colors.accent)
+            if (settings.readingMode == ReadingMode.SCROLL) {
+                SelectionHandles(selection, colors.accent)
+            }
         }
 
         // Outside the reading box on purpose: it carries the selection
@@ -903,7 +989,15 @@ private fun ReaderContent(
         SelectionToolbar(
             controller = selection,
             colors = colors,
-            onQuote = {
+            quotes = liveBook?.quotes.orEmpty(),
+            onRemoveQuotes = { quoteIds ->
+                if (quoteIds.isNotEmpty()) {
+                    viewModel.removeQuotes(quoteIds)
+                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                }
+                selection.clear()
+            },
+            onQuote = { color ->
                 val selected = selectedText()
                 val range = selection.selection
                 if (selected.isNotEmpty() && range != null) {
@@ -914,6 +1008,7 @@ private fun ReaderContent(
                         text = selected,
                         chapterIndex = ready.chapterAt(range.start.itemIndex),
                         range = range,
+                        color = color,
                     )
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                 }
@@ -929,7 +1024,9 @@ private fun ReaderContent(
             onCopy = {
                 val selected = selectedText()
                 if (selected.isNotEmpty()) {
-                    clipboard.setText(AnnotatedString(selected))
+                    clipboardScope.launch {
+                        clipboard.setClipEntry(ClipEntry(android.content.ClipData.newPlainText(ready.book.title, selected)))
+                    }
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                 }
                 selection.clear()
@@ -955,8 +1052,7 @@ private fun ReaderContent(
         LaunchedEffect(fullPages) { if (fullPages != null) lastFullPages = fullPages }
         val searchPages = fullPages ?: lastFullPages
 
-        var topBarHeightPx by remember { mutableIntStateOf(0) }
-        val topBarHeight = with(LocalDensity.current) { topBarHeightPx.toDp() }
+        val topBarHeight = with(LocalDensity.current) { topChromeHeight.toDp() }
 
         ReaderSearchOverlay(
             visible = searchVisible,
@@ -990,10 +1086,11 @@ private fun ReaderContent(
         )
 
         ReaderTopBar(
-            visible = chromeVisible,
+            visible = chromeVisible && !completionVisible && !seekCompletion,
             title = ready.book.title,
             author = ready.book.author,
             colors = colors,
+            chromeStyle = appSettings.readerChromeStyle,
             searchVisible = searchVisible,
             searchQuery = searchQuery,
             onQueryChange = { searchQuery = it },
@@ -1003,18 +1100,22 @@ private fun ReaderContent(
             panelFraction = { panelFraction.floatValue },
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .onSizeChanged { topBarHeightPx = it.height },
+                .onSizeChanged { if (it.height > 0) topChromeHeight = it.height },
         )
 
-        val currentChapter = ready.chapterAt(displayedIndex.intValue)
+        // The menu and heading acknowledge the chosen destination on the tap,
+        // while actual reading progress still follows the rendered page.
+        val pendingChapter = seekPosition?.takeIf { animateChapterSeek }
+        val chapterUiItem = pendingChapter?.flatItemIndex ?: displayedIndex.intValue
+        val currentChapter = ready.chapterAt(chapterUiItem)
         val chapterContexts = remember(ready) {
             ReaderChapterContexts(
                 ready.navigation, ready.chapterStarts, ready.chapterTitles,
                 ready.chapterDepths, ready.items.size,
             )
         }
-        val chapterContext = remember(chapterContexts, currentChapter, displayedIndex.intValue) {
-            chapterContexts.at(displayedIndex.intValue, currentChapter)
+        val chapterContext = remember(chapterContexts, currentChapter, chapterUiItem) {
+            chapterContexts.at(chapterUiItem, currentChapter)
         }
         // True page progress in paged mode; element progress when scrolling.
         val pageInfo = pagePosition.value
@@ -1046,10 +1147,18 @@ private fun ReaderContent(
         }
 
         val chapterAtFraction = remember(
-            ready, chapterContexts, usePages, pageInfo, fullPages, chapterStartPages, context
+            ready, chapterContexts, usePages, pageInfo, fullPages, chapterStartPages, resources,
+            pendingChapter, chapterContext,
         ) {
             { f: Float ->
-                resolveReaderChapterPreview(
+                if (pendingChapter != null) {
+                    ReaderChapterPreview(
+                        chapterId = chapterContext.navigationIndex?.let { "nav_$it" } ?: "chap_$currentChapter",
+                        label = chapterContext.title
+                            ?: resources.getString(R.string.reader_chapter_n, currentChapter + 1),
+                        parents = readerVisibleChapterParents(ready.book.title, chapterContext.parents),
+                    )
+                } else resolveReaderChapterPreview(
                     fraction = f,
                     usePages = usePages,
                     pageCount = if (usePages) pageInfo.second else null,
@@ -1060,7 +1169,7 @@ private fun ReaderContent(
                     chapterAtItem = ready::chapterAt,
                     chapterContexts = chapterContexts,
                     bookTitle = ready.book.title,
-                    defaultChapterName = { chap -> context.getString(R.string.reader_chapter_n, chap + 1) },
+                    defaultChapterName = { chap -> resources.getString(R.string.reader_chapter_n, chap + 1) },
                 )
             }
         }
@@ -1076,12 +1185,12 @@ private fun ReaderContent(
         }
 
         ReaderBottomBar(
-            visible = chromeVisible,
-            showReturnButton = (navigationBackAvailable || lastPageVisible || completionVisible) &&
+            visible = chromeVisible && !completionVisible && !seekCompletion,
+            showReturnButton = !completionVisible && (navigationBackAvailable || lastPageVisible) &&
                 linkedDocumentId == null && noteToShow == null && !searchVisible && !selection.active,
-            returnLabel = if (lastPageVisible || completionVisible) stringResource(R.string.reading_log_reader_review) else returnLabel,
-            returnIcon = if (lastPageVisible || completionVisible) Icons.Rounded.Star else Icons.AutoMirrored.Rounded.Undo,
-            onReturn = { if (lastPageVisible || completionVisible) openReview() else navigateBackInBook() },
+            returnLabel = if (lastPageVisible) stringResource(R.string.reading_log_reader_review) else returnLabel,
+            returnIcon = if (lastPageVisible) Icons.Rounded.Star else Icons.AutoMirrored.Rounded.Undo,
+            onReturn = { if (lastPageVisible) openReview() else navigateBackInBook() },
             // The pull-up panel is physically above the selection toolbar.
             // Its later-composed BackHandler must therefore close the panel
             // first; a second Back can clear the still-valid selection.
@@ -1135,6 +1244,7 @@ private fun ReaderContent(
                 when (target) {
                     is ReaderNavigationTarget.ReadingOrder -> {
                         navigateWithHistory(ReaderReturnLocation.Main(target.flatItemIndex))
+                        animateChapterSeek = true
                     }
 
                     is ReaderNavigationTarget.Linked -> {
@@ -1153,7 +1263,9 @@ private fun ReaderContent(
             },
             onRemoveBookmark = { viewModel.removeBookmark(it) },
             onCopyQuote = { text ->
-                clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
+                clipboardScope.launch {
+                    clipboard.setClipEntry(ClipEntry(android.content.ClipData.newPlainText(ready.book.title, text)))
+                }
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
             },
             onQuoteClick = { quote ->
@@ -1174,6 +1286,10 @@ private fun ReaderContent(
             },
             modifier = Modifier.align(Alignment.BottomCenter),
         )
+
+        FrogSnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter)
+            .navigationBarsPadding().imePadding()
+            .padding(bottom = if (chromeVisible) 112.dp else 16.dp))
 
     }
 
@@ -1269,6 +1385,7 @@ private fun ReaderReturnAffordance(
     label: String,
     modifier: Modifier = Modifier,
     icon: ImageVector = Icons.AutoMirrored.Rounded.Undo,
+    containerColor: Color = colors.chrome,
 ) {
     val transition = remember { MutableTransitionState(false) }
     transition.targetState = visible
@@ -1286,11 +1403,14 @@ private fun ReaderReturnAffordance(
         ) + fadeIn(tween(70)),
         exit = scaleOut(targetScale = 0.94f, animationSpec = tween(100)) + fadeOut(tween(100)),
     ) {
-        // The explicit blur extends 6dp plus a 2dp offset; 12dp of space keeps
-        // it entirely inside the animated layer instead of cutting off a
+        // 12dp of space keeps the explicit blur and its offset
+        // entirely inside the animated layer instead of cutting off a
         // platform elevation shadow whose extent depends on screen position.
         Box(Modifier.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.padding(12.dp)) {
-            ReaderReturnButton(colors = colors, onClick = onClick, label = label, enabled = visible, icon = icon)
+            ReaderReturnButton(
+                colors = colors, onClick = onClick, label = label, enabled = visible,
+                icon = icon, containerColor = containerColor,
+            )
         }
     }
 }
@@ -1302,17 +1422,23 @@ private fun ReaderReturnButton(
     label: String,
     enabled: Boolean,
     icon: ImageVector,
+    containerColor: Color,
 ) {
     val shape = RoundedCornerShape(24.dp)
+    val light = colors.background.luminance() > 0.5f
     // Even a non-clickable Material Surface installs a pointer-input barrier.
     // Use a drawing-only Box so the exit animation cannot intercept bar taps.
     Box(
         modifier = Modifier
             .dropShadow(
                 shape,
-                Shadow(radius = 6.dp, offset = DpOffset(0.dp, 2.dp), color = Color.Black.copy(alpha = 0.16f)),
+                Shadow(
+                    radius = if (light) 5.dp else 6.dp,
+                    offset = DpOffset(0.dp, if (light) 1.dp else 2.dp),
+                    color = colors.shadow.copy(alpha = if (light) 0.10f else 0.16f),
+                ),
             )
-            .background(colors.chrome, shape)
+            .background(containerColor, shape)
             .clip(shape)
             .then(
                 if (enabled) Modifier.clickable(role = Role.Button, onClick = onClick)
@@ -1560,6 +1686,8 @@ private fun LinkedDocumentOverlay(
                     colors = colors,
                     contentWidth = contentWidth,
                     bookFonts = bookFonts,
+                    viewportHeight = maxHeight - stableInsets.calculateTopPadding() -
+                        stableInsets.calculateBottomPadding(),
                     language = language,
                     footnotes = footnotes,
                     publisherBoxes = readerItem.publisherBoxes,
@@ -1743,21 +1871,29 @@ private fun ScrollReader(
     seekFraction: Float?,
     onSeekFractionConsumed: () -> Unit,
     seekPosition: ReaderReturnLocation.Main?,
-    onSeekPositionConsumed: () -> Unit,
+    animateSeekPosition: Boolean,
+    onSeekPositionConsumed: (ReaderReturnLocation.Main) -> Unit,
+    onChapterSeekInterrupted: (ReaderReturnLocation.Main) -> Unit,
     onToggleChrome: () -> Unit,
     pinchHandlers: PinchHandlers,
     brightnessHandlers: BrightnessHandlers,
     turnEvents: SharedFlow<Boolean>,
     footnotes: FootnoteHandler?,
-    quoteRanges: List<BookSelection>,
+    quoteRanges: List<QuoteHighlight>,
     searchHighlight: String?,
     selection: SelectionController,
-    onReview: () -> Unit,
+    seekCompletion: Boolean,
+    onSeekCompletionConsumed: () -> Unit,
+    completionPadding: PaddingValues,
+    onSaveReview: () -> Unit,
+    onExitReview: () -> Unit,
     onContentReady: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val readingGeneration = remember { viewModel.readingGeneration.value }
     val liveBook by viewModel.book.collectAsStateWithLifecycle()
+    val completionVisible by viewModel.completionVisible.collectAsStateWithLifecycle()
+    val reviewState by viewModel.completionReview.collectAsStateWithLifecycle()
     val rawInitialIndex = viewModel.currentFlatIndex.coerceIn(0, ready.items.size - 1)
     val initialIndex = resolvePublisherFloatTarget(ready.items, rawInitialIndex)
     val listState = rememberLazyListState(
@@ -1770,6 +1906,10 @@ private fun ScrollReader(
             0
         },
     )
+    LaunchedEffect(completionVisible) {
+        // The final item becomes a fixed viewport with its own form scroll.
+        if (completionVisible) listState.scrollToItem(ready.items.size)
+    }
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.any { it.size > 0 } }
             .first { it }
@@ -1879,6 +2019,15 @@ private fun ScrollReader(
         listState.scrollToItem(visibleItem)
         onSeekConsumed()
     }
+    LaunchedEffect(seekCompletion) {
+        if (seekCompletion) {
+            try {
+                listState.animateScrollToItem(ready.items.size)
+            } finally {
+                onSeekCompletionConsumed()
+            }
+        }
+    }
     LaunchedEffect(seekFraction) {
         val fraction = seekFraction ?: return@LaunchedEffect
         val item = (fraction * (ready.items.size - 1)).roundToInt()
@@ -1894,7 +2043,16 @@ private fun ScrollReader(
         livePosition.value = sourceTarget.toFloat()
         val charOffset = position.charOffset
         if (charOffset == null) {
-            listState.scrollToItem(visibleTarget, position.scrollOffset.coerceAtLeast(0))
+            if (animateSeekPosition) {
+                try {
+                    listState.animateScrollToItem(visibleTarget, position.scrollOffset.coerceAtLeast(0))
+                } catch (cancelled: CancellationException) {
+                    onChapterSeekInterrupted(position)
+                    throw cancelled
+                }
+            } else {
+                listState.scrollToItem(visibleTarget, position.scrollOffset.coerceAtLeast(0))
+            }
         } else {
             // Source characters survive font, width, orientation and mode
             // changes; a stored pixel offset does not. Compose the item first,
@@ -1918,7 +2076,7 @@ private fun ScrollReader(
                 )
             }
         }
-        onSeekPositionConsumed()
+        onSeekPositionConsumed(position)
     }
     LaunchedEffect(ready) {
         turnEvents.collect { forward ->
@@ -1940,7 +2098,7 @@ private fun ScrollReader(
     val highlights = rememberReaderHighlights(
         controller = selection,
         quotes = quoteRanges,
-        quoteColor = colors.quoteHighlight,
+        quoteColors = remember(colors) { QuoteColor.entries.associateWith(colors::quoteHighlight) },
         selectionColor = colors.selection,
     )
     // A selection drag held at the top or bottom edge scrolls the list along.
@@ -1961,13 +2119,17 @@ private fun ScrollReader(
         }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize().then(
+        if (completionVisible) Modifier.navigationBarsPadding().imePadding() else Modifier,
+    )) {
         val contentWidth = maxWidth - ReaderMetrics.horizontalPadding(settings.pageMargins) * 2
         LazyColumn(
             state = listState,
+            userScrollEnabled = !completionVisible,
             modifier = Modifier
                 .fillMaxSize()
                 .readerGestures(
+                    enabled = !completionVisible,
                     onTapLeft = {
                         scope.launch {
                             val delta = ReaderProgression.horizontalTapDelta(
@@ -1994,7 +2156,7 @@ private fun ScrollReader(
                     pinchHandlers = pinchHandlers,
                     brightnessHandlers = brightnessHandlers,
                 ),
-            contentPadding = PaddingValues(
+            contentPadding = if (completionVisible) PaddingValues() else PaddingValues(
                 top = stableInsets.calculateTopPadding() + 20.dp,
                 bottom = stableInsets.calculateBottomPadding() + 48.dp,
             ),
@@ -2015,6 +2177,8 @@ private fun ScrollReader(
                     colors = colors,
                     contentWidth = contentWidth,
                     bookFonts = ready.bookFonts,
+                    viewportHeight = maxHeight - stableInsets.calculateTopPadding() -
+                        stableInsets.calculateBottomPadding(),
                     language = ready.language,
                     footnotes = footnotes,
                     searchHighlight = searchHighlight,
@@ -2031,11 +2195,15 @@ private fun ScrollReader(
                     cover = liveBook?.let(viewModel::coverFileFor),
                     readingLogEntry = viewModel.readingLogEntry.collectAsStateWithLifecycle().value,
                     saved = viewModel.finishSaved.collectAsStateWithLifecycle().value,
-                    onReview = onReview,
+                    reviewState = reviewState,
+                    onRatingChange = viewModel::setCompletionRating,
+                    onReviewChange = viewModel::setCompletionReview,
+                    onSaveReview = onSaveReview,
+                    onExit = onExitReview,
+                    contentPadding = completionPadding,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = maxHeight)
-                        .padding(top = 24.dp, bottom = 24.dp),
+                        .height(maxHeight),
                 )
             }
         }
@@ -2060,20 +2228,34 @@ private fun PagedReader(
     seekFraction: Float?,
     onSeekFractionConsumed: () -> Unit,
     seekPosition: ReaderReturnLocation.Main?,
-    onSeekPositionConsumed: () -> Unit,
+    animateSeekPosition: Boolean,
+    onSeekPositionConsumed: (ReaderReturnLocation.Main) -> Unit,
+    onChapterSeekInterrupted: (ReaderReturnLocation.Main, Boolean) -> Unit,
     onToggleChrome: () -> Unit,
     pinchHandlers: PinchHandlers,
     brightnessHandlers: BrightnessHandlers,
     turnEvents: SharedFlow<Boolean>,
     footnotes: FootnoteHandler?,
-    quoteRanges: List<BookSelection>,
+    quoteRanges: List<QuoteHighlight>,
     searchHighlight: String?,
     selection: SelectionController,
-    onReview: () -> Unit,
+    seekCompletion: Boolean,
+    onSeekCompletionConsumed: () -> Unit,
+    completionPadding: PaddingValues,
+    onSaveReview: () -> Unit,
+    onExitReview: () -> Unit,
     onContentReady: () -> Unit,
 ) {
     val measurer = rememberTextMeasurer(cacheSize = 0)
     val liveBook by viewModel.book.collectAsStateWithLifecycle()
+    val completionVisible by viewModel.completionVisible.collectAsStateWithLifecycle()
+    val reviewState by viewModel.completionReview.collectAsStateWithLifecycle()
+    var pageFooterText by remember { mutableStateOf("") }
+    var pageFooterVisible by remember { mutableStateOf(false) }
+    val paperCurl = settings.pageTurnAnimation == PageTurnAnimation.PAGE_CURL
+    val cascade = settings.pageTurnAnimation == PageTurnAnimation.CASCADE
+    val noAnimation = settings.pageTurnAnimation == PageTurnAnimation.NONE
+    val sheetPages = paperCurl || cascade
 
     // Element-based progress takes over again when paged mode leaves.
     DisposableEffect(Unit) {
@@ -2142,6 +2324,11 @@ private fun PagedReader(
         val holder by viewModel.pagination.collectAsStateWithLifecycle()
         val current = holder
         if (current == null || current.pages.isEmpty()) {
+            SideEffect {
+                pagePosition.value = null
+                livePagePosition.value = null
+                pageFooterVisible = false
+            }
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 LoadingIndicator()
             }
@@ -2153,17 +2340,12 @@ private fun PagedReader(
         // new page layout lands (the corner spinner shows the wait).
         val recomputing = current.key != spec.key || current.partial
         val renderSettings = if (current.key != spec.key) current.settings else settings
+        val renderContentWidth = maxWidth - ReaderMetrics.horizontalPadding(renderSettings.pageMargins) * 2
 
         key(current.key, current.partial) {
             // A fresh layout generation per pager rebuild: a settings change
             // disposes this whole subtree and composes a new one, and for a
             // frame both are registered.
-            val highlights = rememberReaderHighlights(
-                controller = selection,
-                quotes = quoteRanges,
-                quoteColor = colors.quoteHighlight,
-                selectionColor = colors.selection,
-            )
             val pages = current.pages
             val realPageCount = pages.size
             // Land on the page holding the exact CHARACTER the reader was at:
@@ -2182,6 +2364,36 @@ private fun PagedReader(
             val extraPages = if (current.partial) 0 else 1
             val pagerState = rememberPagerState(initialPage = initialPage) {
                 realPageCount + extraPages
+            }
+            val curlTouch = remember(pagerState) { PageCurlTouch() }
+            LaunchedEffect(pagerState, curlTouch) {
+                snapshotFlow {
+                    Triple(
+                        pagerState.currentPage,
+                        pagerState.currentPageOffsetFraction,
+                        pagerState.isScrollInProgress || curlTouch.pressed,
+                    )
+                }.collect { (page, offset, moving) ->
+                    curlTouch.onPagerState(page, offset, moving)
+                }
+            }
+            val pageTurnSpec = remember(paperCurl, cascade, noAnimation) {
+                when {
+                    paperCurl -> paperPageTurnSpec()
+                    cascade -> cascadePageTurnSpec()
+                    noAnimation -> snap<Float>()
+                    else -> spring<Float>()
+                }
+            }
+            val cascadeSnapSpec = remember(pagerState) {
+                CascadePageSnapSpec { pagerState.layoutInfo.pageSize }
+            }
+            val selectionTurnSpec = remember { selectionPageTurnSpec() }
+            LaunchedEffect(pagerState, noAnimation) {
+                if (noAnimation) {
+                    curlTouch.reset(pagerState.currentPage)
+                    pagerState.scrollToPage(pagerState.currentPage)
+                }
             }
             LaunchedEffect(pagerState, recomputing) {
                 if (recomputing) return@LaunchedEffect
@@ -2205,11 +2417,11 @@ private fun PagedReader(
                 last
             }
 
-            LaunchedEffect(pagerState) {
+            LaunchedEffect(pagerState, recomputing) {
                 snapshotFlow {
-                    (pagerState.currentPage + pagerState.currentPageOffsetFraction)
+                    (curlTouch.visualPosition ?: (pagerState.currentPage + pagerState.currentPageOffsetFraction))
                         .coerceIn(0f, (realPageCount - 1).coerceAtLeast(0).toFloat())
-                }.collect { livePagePosition.value = it }
+                }.collect { livePagePosition.value = if (recomputing) null else it }
             }
             LaunchedEffect(pagerState) {
                 snapshotFlow { pagerState.settledPage }.collect { settled ->
@@ -2219,7 +2431,6 @@ private fun PagedReader(
                     )
                     if (settled >= realPageCount) {
                         // Reached the completion screen.
-                        pagePosition.value = (realPageCount - 1) to realPageCount
                         haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                         return@collect
                     }
@@ -2233,7 +2444,6 @@ private fun PagedReader(
                     }
                     val flatIndex = pages[settled].firstItemIndex
                     displayedIndex.intValue = flatIndex
-                    pagePosition.value = settled to realPageCount
                     viewModel.saveProgress(flatIndex, 0, pages[settled].firstCharOffset)
                 }
             }
@@ -2249,7 +2459,11 @@ private fun PagedReader(
                 var gestureTickedChapter = -1
                 var lastTargetPage = -1
                 snapshotFlow {
-                    Triple(pagerState.targetPage, pagerState.isScrollInProgress, pagerState.currentPage)
+                    Triple(
+                        curlTouch.releasePage ?: pagerState.targetPage,
+                        pagerState.isScrollInProgress || curlTouch.gesture != null,
+                        pagerState.currentPage,
+                    )
                 }.collect { (target, inProgress, current) ->
                     if (!inProgress) {
                         initialChapter = -1
@@ -2285,9 +2499,22 @@ private fun PagedReader(
             LaunchedEffect(seekTarget) {
                 val target = seekTarget ?: return@LaunchedEffect
                 val page = pages.indexOfLast { it.firstItemIndex <= target }.coerceAtLeast(0)
+                curlTouch.reset(pagerState.currentPage)
                 livePagePosition.value = page.toFloat()
                 pagerState.scrollToPage(page)
                 onSeekConsumed()
+            }
+            LaunchedEffect(seekCompletion, current.partial) {
+                if (seekCompletion && !current.partial) {
+                    try {
+                        curlTouch.reset(pagerState.currentPage)
+                        pagerState.turnReaderPage(realPageCount, settings.pageTurnAnimation, readerChapterSwitchSpec())
+                        onSeekCompletionConsumed()
+                    } catch (cancelled: CancellationException) {
+                        if (viewModel.pagination.value === current) onSeekCompletionConsumed()
+                        throw cancelled
+                    }
+                }
             }
             LaunchedEffect(seekFraction, current.partial) {
                 val fraction = seekFraction ?: return@LaunchedEffect
@@ -2296,6 +2523,7 @@ private fun PagedReader(
                 }
                 val page = (fraction * (realPageCount - 1)).roundToInt()
                     .coerceIn(0, realPageCount - 1)
+                curlTouch.reset(pagerState.currentPage)
                 livePagePosition.value = page.toFloat()
                 pagerState.scrollToPage(page)
                 onSeekFractionConsumed()
@@ -2320,16 +2548,29 @@ private fun PagedReader(
                 }
                 val page = ReaderNavigationPolicy.pageIndexForLocation(pages, position)
                     ?: return@LaunchedEffect
-                livePagePosition.value = page.toFloat()
-                pagerState.scrollToPage(page)
-                onSeekPositionConsumed()
+                curlTouch.reset(pagerState.currentPage)
+                if (animateSeekPosition) {
+                    try {
+                        pagerState.turnReaderPage(page, settings.pageTurnAnimation, readerChapterSwitchSpec())
+                    } catch (cancelled: CancellationException) {
+                        onChapterSeekInterrupted(position, viewModel.pagination.value !== current)
+                        throw cancelled
+                    }
+                } else {
+                    livePagePosition.value = page.toFloat()
+                    pagerState.scrollToPage(page)
+                }
+                onSeekPositionConsumed(position)
             }
-            LaunchedEffect(pagerState) {
+            LaunchedEffect(pagerState, pageTurnSpec) {
                 turnEvents.collect { forward ->
+                    curlTouch.reset(pagerState.currentPage)
                     val delta = if (forward) 1 else -1
-                    pagerState.animateScrollToPage(
+                    pagerState.turnReaderPage(
                         (pagerState.currentPage + delta)
                             .coerceIn(0, realPageCount + extraPages - 1),
+                        animation = settings.pageTurnAnimation,
+                        animationSpec = pageTurnSpec,
                     )
                 }
             }
@@ -2337,23 +2578,29 @@ private fun PagedReader(
             // A selection drag held at the left or right edge turns pages.
             // Clamped to the real pages: auto-turning onto the completion
             // screen would mark the book finished and buzz for it.
-            DisposableEffect(selection, pagerState, realPageCount) {
+            DisposableEffect(selection, pagerState, realPageCount, pageTurnSpec, selectionTurnSpec) {
                 val mine = SelectionAutoAdvance(
                     paged = true,
                     step = { direction, _ ->
+                        curlTouch.reset(pagerState.currentPage)
                         val logicalDirection = ReaderProgression.selectionPageDelta(
                             direction,
                             ready.pageProgression,
                         )
-                        pagerState.animateScrollToPage(
+                        pagerState.turnReaderPage(
                             (pagerState.currentPage + logicalDirection)
                                 .coerceIn(0, (realPageCount - 1).coerceAtLeast(0)),
+                            animation = settings.pageTurnAnimation,
+                            animationSpec = selectionTurnSpec,
                         )
                     },
-                    settle = { pagerState.animateScrollToPage(pagerState.currentPage) },
+                    settle = {
+                        curlTouch.reset(pagerState.currentPage)
+                        pagerState.turnReaderPage(pagerState.currentPage, settings.pageTurnAnimation, pageTurnSpec)
+                    },
                 )
                 selection.advance = mine
-                selection.surfaceMoving = { pagerState.isScrollInProgress }
+                selection.surfaceMoving = { pagerState.isScrollInProgress || curlTouch.gesture != null }
                 onDispose {
                     if (selection.advance === mine) {
                         selection.advance = null
@@ -2364,23 +2611,49 @@ private fun PagedReader(
 
             HorizontalPager(
                 state = pagerState,
+                userScrollEnabled = !paperCurl && !noAnimation,
                 beyondViewportPageCount = 1,
+                flingBehavior = when {
+                    paperCurl -> PagerDefaults.flingBehavior(
+                        pagerState,
+                        snapAnimationSpec = tween(280, easing = FastOutSlowInEasing),
+                    )
+                    cascade -> PagerDefaults.flingBehavior(
+                        pagerState,
+                        snapAnimationSpec = cascadeSnapSpec,
+                    )
+                    else -> PagerDefaults.flingBehavior(pagerState)
+                },
+                overscrollEffect = if (sheetPages || noAnimation) null else androidx.compose.foundation.rememberOverscrollEffect(),
                 reverseLayout = ReaderProgression.usesReversePagerLayout(
                     ready.pageProgression,
                     uiLayoutIsRtl = uiLayoutIsRtl,
                 ),
                 modifier = Modifier
                     .fillMaxSize()
+                    .then(if (paperCurl) {
+                        Modifier
+                            .pageCurlGestures(curlTouch, pagerState, ready.pageProgression == PageProgression.RTL)
+                            .paperPageSemantics(pagerState, curlTouch, ready.pageProgression == PageProgression.RTL, scope)
+                    } else if (noAnimation) {
+                        Modifier
+                            .instantPageGestures(pagerState, ready.pageProgression == PageProgression.RTL)
+                            .instantPageSemantics(pagerState, ready.pageProgression == PageProgression.RTL)
+                    } else Modifier)
                     .readerGestures(
+                        enabled = !completionVisible,
+                        tapGestureKey = pageTurnSpec,
                         onTapLeft = {
                             scope.launch {
                                 val delta = ReaderProgression.horizontalTapDelta(
                                     leftEdge = true,
                                     progression = ready.pageProgression,
                                 )
-                                pagerState.animateScrollToPage(
+                                pagerState.turnReaderPage(
                                     (pagerState.currentPage + delta)
                                         .coerceIn(0, realPageCount + extraPages - 1),
+                                    animation = settings.pageTurnAnimation,
+                                    animationSpec = pageTurnSpec,
                                 )
                             }
                         },
@@ -2390,9 +2663,11 @@ private fun PagedReader(
                                     leftEdge = false,
                                     progression = ready.pageProgression,
                                 )
-                                pagerState.animateScrollToPage(
+                                pagerState.turnReaderPage(
                                     (pagerState.currentPage + delta)
                                         .coerceIn(0, realPageCount + extraPages - 1),
+                                    animation = settings.pageTurnAnimation,
+                                    animationSpec = pageTurnSpec,
                                 )
                             }
                         },
@@ -2401,60 +2676,125 @@ private fun PagedReader(
                         brightnessHandlers = brightnessHandlers,
                     ),
             ) { pageIndex ->
-                if (pageIndex < realPageCount) {
-                    PageView(
-                        page = pages[pageIndex],
-                        settings = renderSettings,
-                        appSettings = appSettings,
+                val pageContent: @Composable () -> Unit = {
+                    if (pageIndex < realPageCount) {
+                        // Both the text and its handles are captured into the
+                        // same sheet, including Stack parallax and Curl folds.
+                        val highlights = rememberReaderHighlights(
+                            controller = selection,
+                            quotes = quoteRanges,
+                            quoteColors = remember(colors) { QuoteColor.entries.associateWith(colors::quoteHighlight) },
+                            selectionColor = colors.selection,
+                        )
+                        Box(Modifier.fillMaxSize()) {
+                            PageView(
+                                page = pages[pageIndex],
+                                settings = renderSettings,
+                                appSettings = appSettings,
+                                colors = colors,
+                                topPadding = topPadding,
+                                bottomPadding = bottomPadding,
+                                contentWidth = renderContentWidth,
+                                viewportHeight = with(density) { contentHeightPx.toDp() },
+                                bookFonts = ready.bookFonts,
+                                language = ready.language,
+                                bookId = ready.book.id,
+                                footnotes = footnotes,
+                                searchHighlight = searchHighlight,
+                                highlights = highlights,
+                            )
+                            SelectionHandles(selection, colors.accent, pageEpoch = highlights.epoch)
+                            if (sheetPages && !recomputing && settings.showPageCounter) {
+                                // The footer belongs to this particular sheet,
+                                // so it follows the turn together with the text.
+                                Text(
+                                    text = readerPageFooterText(
+                                        pageIndex, chapterLastPage,
+                                        settings.showChapterPagesLeft,
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colors.pageCounterText,
+                                    modifier = Modifier.align(Alignment.BottomCenter)
+                                        .padding(bottom = stableInsets.calculateBottomPadding() + 10.dp),
+                                )
+                            }
+                        }
+                    } else {
+                        CompletionPage(
+                            book = liveBook,
+                            colors = colors,
+                            cover = liveBook?.let(viewModel::coverFileFor),
+                            readingLogEntry = viewModel.readingLogEntry.collectAsStateWithLifecycle().value,
+                            saved = viewModel.finishSaved.collectAsStateWithLifecycle().value,
+                            reviewState = reviewState,
+                            onRatingChange = viewModel::setCompletionRating,
+                            onReviewChange = viewModel::setCompletionReview,
+                            onSaveReview = onSaveReview,
+                            onExit = onExitReview,
+                            contentPadding = completionPadding,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .navigationBarsPadding()
+                                .imePadding(),
+                        )
+                    }
+                }
+                if (paperCurl) {
+                    PaperPage(
+                        pager = pagerState,
+                        pageIndex = pageIndex,
+                        rtl = ready.pageProgression == PageProgression.RTL,
+                        touch = curlTouch,
                         colors = colors,
-                        topPadding = topPadding,
-                        bottomPadding = bottomPadding,
-                        contentWidth = maxWidth -
-                            ReaderMetrics.horizontalPadding(renderSettings.pageMargins) * 2,
-                        bookFonts = ready.bookFonts,
-                        language = ready.language,
-                        bookId = ready.book.id,
-                        footnotes = footnotes,
-                        searchHighlight = searchHighlight,
-                        highlights = highlights,
+                        content = pageContent,
+                    )
+                } else if (cascade) {
+                    CascadePage(
+                        pager = pagerState,
+                        pageIndex = pageIndex,
+                        rtl = ready.pageProgression == PageProgression.RTL,
+                        touch = curlTouch,
+                        colors = colors,
+                        content = pageContent,
                     )
                 } else {
-                    CompletionPage(
-                        book = liveBook,
-                        colors = colors,
-                        cover = liveBook?.let(viewModel::coverFileFor),
-                        readingLogEntry = viewModel.readingLogEntry.collectAsStateWithLifecycle().value,
-                        saved = viewModel.finishSaved.collectAsStateWithLifecycle().value,
-                        scrollable = true,
-                        onReview = onReview,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(top = topPadding, bottom = bottomPadding),
-                    )
+                    pageContent()
                 }
             }
 
             val shownPage = pagerState.currentPage
-            if (shownPage < realPageCount) {
-                val footerText = if (settings.showChapterPagesLeft) {
-                    val left = chapterLastPage[shownPage] - shownPage
-                    if (left == 0) {
-                        stringResource(R.string.reader_chapter_last_page)
-                    } else {
-                        stringResource(R.string.reader_chapter_pages_left, left)
-                    }
-                } else {
-                    stringResource(R.string.reader_page_of, shownPage + 1, realPageCount)
+            val settledPage = pagerState.settledPage
+            val footerText = if (settings.showPageCounter && !recomputing && shownPage < realPageCount) {
+                readerPageFooterText(shownPage, chapterLastPage, settings.showChapterPagesLeft)
+            } else null
+            SideEffect {
+                // Old complete pages and quick chapter pages remain renderable,
+                // but publish counts only for the complete requested layout.
+                pagePosition.value = if (recomputing) null else {
+                    settledPage.coerceAtMost(realPageCount - 1) to realPageCount
                 }
-                Text(
-                    text = footerText,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.secondaryText,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = stableInsets.calculateBottomPadding() + 10.dp),
-                )
+                pageFooterVisible = !sheetPages && footerText != null
+                if (footerText != null) pageFooterText = footerText
             }
+        }
+
+        // Keep this outside the pager's layout key so a quick/full holder swap
+        // cannot interrupt the counter's exit or flash a chapter-only total.
+        if (!sheetPages) AnimatedVisibility(
+            visible = pageFooterVisible,
+            modifier = Modifier.align(Alignment.BottomCenter)
+                .padding(bottom = stableInsets.calculateBottomPadding() + 10.dp),
+            enter = if (noAnimation) EnterTransition.None else fadeIn(tween(180)) + slideInVertically(tween(180)) { it / 3 },
+            exit = if (noAnimation) ExitTransition.None else fadeOut(tween(120)) + slideOutVertically(tween(120)) { it / 3 },
+        ) {
+            Text(
+                text = pageFooterText,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.pageCounterText,
+                modifier = if (pageFooterVisible) Modifier else Modifier.clearAndSetSemantics {},
+            )
         }
 
         // Subtle corner hint while pages are being recomputed for new settings.
@@ -2470,6 +2810,21 @@ private fun PagedReader(
 }
 
 @Composable
+private fun readerPageFooterText(
+    pageIndex: Int,
+    chapterLastPage: IntArray,
+    showChapterPagesLeft: Boolean,
+): String {
+    if (!showChapterPagesLeft) return stringResource(R.string.reader_page_number, pageIndex + 1)
+    val left = chapterLastPage[pageIndex] - pageIndex
+    return if (left == 0) {
+        stringResource(R.string.reader_chapter_last_page)
+    } else {
+        pluralStringResource(R.plurals.reader_chapter_pages_left, left, left)
+    }
+}
+
+@Composable
 private fun PageView(
     page: BookPage,
     settings: ReaderSettings,
@@ -2478,6 +2833,7 @@ private fun PageView(
     topPadding: androidx.compose.ui.unit.Dp,
     bottomPadding: androidx.compose.ui.unit.Dp,
     contentWidth: androidx.compose.ui.unit.Dp,
+    viewportHeight: androidx.compose.ui.unit.Dp,
     bookFonts: Map<String, androidx.compose.ui.text.font.FontFamily>,
     language: String?,
     bookId: String,
@@ -2515,6 +2871,7 @@ private fun PageView(
                 fontSize = settings.fontSizeSp,
                 colors = colors,
                 contentWidth = contentWidth,
+                viewportHeight = viewportHeight,
                 bookFonts = bookFonts,
                 language = language,
                 footnotes = footnotes,
@@ -2560,74 +2917,79 @@ private fun Modifier.readerGestures(
     onTapCenter: () -> Unit,
     pinchHandlers: PinchHandlers,
     brightnessHandlers: BrightnessHandlers,
-): Modifier = this
-    .pointerInput(Unit) {
-        detectTapGestures { offset ->
-            val width = size.width.toFloat()
-            when {
-                offset.x < width * 0.22f -> onTapLeft()
-                offset.x > width * 0.78f -> onTapRight()
-                else -> onTapCenter()
+    enabled: Boolean = true,
+    tapGestureKey: Any? = Unit,
+): Modifier {
+    if (!enabled) return this
+    return this
+        .pointerInput(tapGestureKey) {
+            detectTapGestures { offset ->
+                val width = size.width.toFloat()
+                when {
+                    offset.x < width * 0.22f -> onTapLeft()
+                    offset.x > width * 0.78f -> onTapRight()
+                    else -> onTapCenter()
+                }
             }
         }
-    }
-    .pointerInput(pinchHandlers) {
-        awaitEachGesture {
-            awaitFirstDown(requireUnconsumed = false)
-            var zoomed = false
-            while (true) {
-                val event = awaitPointerEvent()
-                if (event.changes.count { it.pressed } >= 2) {
-                    val zoom = event.calculateZoom()
-                    if (zoom != 1f) {
-                        pinchHandlers.onPinch(zoom)
-                        zoomed = true
-                        event.changes.forEach { it.consume() }
+        .pointerInput(pinchHandlers) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                var zoomed = false
+                while (true) {
+                    val event = awaitPointerEvent()
+                    if (event.changes.count { it.pressed } >= 2) {
+                        val zoom = event.calculateZoom()
+                        if (zoom != 1f) {
+                            pinchHandlers.onPinch(zoom)
+                            zoomed = true
+                            event.changes.forEach { it.consume() }
+                        }
+                    }
+                    if (event.changes.none { it.pressed }) break
+                }
+                if (zoomed) pinchHandlers.onPinchEnd()
+            }
+        }
+        .pointerInput(brightnessHandlers) {
+            // Runs in the Initial pass so the edge drag wins over list scrolling.
+            awaitEachGesture {
+                val down = awaitFirstDown(
+                    requireUnconsumed = false,
+                    pass = PointerEventPass.Initial,
+                )
+                if (down.position.x > size.width * 0.12f) return@awaitEachGesture
+
+                val slop = viewConfiguration.touchSlop
+                var dragging = false
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) break
+                    if (event.changes.count { it.pressed } > 1) break // pinch takes over
+                    // Text selection runs on Initial too, one level up, and the
+                    // page margin it starts in is inside this edge zone. Once it
+                    // claims the gesture, the brightness is not ours to change.
+                    if (change.isConsumed) break
+
+                    val totalDx = change.position.x - down.position.x
+                    val totalDy = change.position.y - down.position.y
+                    if (!dragging) {
+                        if (abs(totalDy) > slop && abs(totalDy) > abs(totalDx) * 1.5f) {
+                            dragging = true
+                        } else if (abs(totalDx) > slop) {
+                            break // horizontal → let the pager/scroll have it
+                        }
+                    }
+                    if (dragging) {
+                        val dy = change.position.y - change.previousPosition.y
+                        brightnessHandlers.onDelta(-dy / (size.height * 0.7f))
+                        change.consume()
                     }
                 }
-                if (event.changes.none { it.pressed }) break
-            }
-            if (zoomed) pinchHandlers.onPinchEnd()
-        }
-    }
-    .pointerInput(brightnessHandlers) {
-        // Runs in the Initial pass so the edge drag wins over list scrolling.
-        awaitEachGesture {
-            val down = awaitFirstDown(
-                requireUnconsumed = false,
-                pass = PointerEventPass.Initial,
-            )
-            if (down.position.x > size.width * 0.12f) return@awaitEachGesture
-
-            val slop = viewConfiguration.touchSlop
-            var dragging = false
-            while (true) {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                if (!change.pressed) break
-                if (event.changes.count { it.pressed } > 1) break // pinch takes over
-                // Text selection runs on Initial too, one level up, and the
-                // page margin it starts in is inside this edge zone. Once it
-                // claims the gesture, the brightness is not ours to change.
-                if (change.isConsumed) break
-
-                val totalDx = change.position.x - down.position.x
-                val totalDy = change.position.y - down.position.y
-                if (!dragging) {
-                    if (abs(totalDy) > slop && abs(totalDy) > abs(totalDx) * 1.5f) {
-                        dragging = true
-                    } else if (abs(totalDx) > slop) {
-                        break // horizontal → let the pager/scroll have it
-                    }
-                }
-                if (dragging) {
-                    val dy = change.position.y - change.previousPosition.y
-                    brightnessHandlers.onDelta(-dy / (size.height * 0.7f))
-                    change.consume()
-                }
             }
         }
-    }
+}
 
 /** Small sun pill shown near the left edge while brightness changes. */
 @Composable
@@ -2678,7 +3040,7 @@ private fun BrightnessOverlay(
 
 /** Renders one element (or a paginated fragment of it). */
 @Composable
-private fun RenderPart(
+internal fun RenderPart(
     element: ContentElement,
     textOverride: androidx.compose.ui.text.AnnotatedString?,
     isParagraphStart: Boolean,
@@ -2708,15 +3070,22 @@ private fun RenderPart(
     publisherFloat: ReaderPublisherFloat? = null,
     publisherStartsElement: Boolean = true,
     publisherEndsElement: Boolean = true,
+    /** Reading viewport for publisher vh image limits in scrolling mode. */
+    viewportHeight: androidx.compose.ui.unit.Dp? = null,
 ) {
-    val (vTop, vBottom) = ReaderMetrics.verticalPaddings(
-        element,
-        fontSize,
-        settings.bookStyles,
-    )
     val density = LocalDensity.current
+    val viewportHeightPx = with(density) { viewportHeight?.roundToPx() }
     val columnWidthPx = with(density) { contentWidth.roundToPx() }
+    val inlineMeasurer = rememberTextMeasurer()
+    val fittingWidths = remember(inlineMeasurer, density, settings, fontSize, bookFonts, language) {
+        PublisherInlineWidthResolver(inlineMeasurer, density, settings, fontSize, bookFonts, language)
+    }
+    val fontSize = remember(publisherBoxes, columnWidthPx, fittingWidths) {
+        fittingWidths.fittedFontSize(publisherBoxes, columnWidthPx)
+    }
+    val inlineWidths = remember(fittingWidths, fontSize) { fittingWidths.atFontSize(fontSize) }
     val fontSizePx = with(density) { fontSize.sp.toPx() }
+    val (vTop, vBottom) = ReaderMetrics.verticalPaddings(element, fontSize, settings.bookStyles)
     val boxGeometry = remember(
         publisherBoxes,
         columnWidthPx,
@@ -2724,6 +3093,8 @@ private fun RenderPart(
         publisherStartsElement,
         publisherEndsElement,
         settings.bookStyles,
+        inlineWidths,
+        viewportHeightPx,
     ) {
         publisherBoxGeometry(
             boxes = publisherBoxes,
@@ -2732,6 +3103,8 @@ private fun RenderPart(
             partStartsElement = publisherStartsElement,
             partEndsElement = publisherEndsElement,
             enabled = settings.bookStyles,
+            inlineWidths = inlineWidths,
+            viewportHeightPx = viewportHeightPx,
         )
     }
     val boxContentWidth = with(density) { boxGeometry.contentWidthPx.toDp() }
@@ -2755,6 +3128,18 @@ private fun RenderPart(
     }
 
     val actuallyInvert = appSettings.autoInvertImages && appSettings.theme == AppTheme.OLED
+    val publisherInk = publisherColorPair(
+        block = when (element) {
+            is ContentElement.Paragraph -> element.block
+            is ContentElement.Heading -> element.block
+            is ContentElement.Table -> element.block
+            else -> null
+        },
+        enabled = settings.bookStyles,
+        defaultForeground = colors.text,
+        surroundingBackground = surroundingBackground,
+        backgroundAlreadyApplied = publisherOwnsBackground,
+    ).foreground
 
     // The text gets the EXACT pixel width pagination measured with. Sizing
     // it with fillMaxWidth + paddings rounds every inset separately and can
@@ -2775,7 +3160,7 @@ private fun RenderPart(
         Box(
             Modifier
                 .fillMaxWidth()
-                .drawPublisherBoxes(boxGeometry, columnLeftPx, fontSizePx),
+                .drawPublisherBoxes(boxGeometry, columnLeftPx, fontSizePx, publisherInk),
         ) {
             when (element) {
         is ContentElement.Paragraph -> {
@@ -2865,6 +3250,7 @@ private fun RenderPart(
                     element,
                     publisherFloat,
                     widthPx,
+                    viewportHeightPx,
                     density.density,
                     density.fontScale,
                     settings,
@@ -2876,6 +3262,7 @@ private fun RenderPart(
                         element, scrollMeasurer, density, settings, fontSize,
                         bookFonts, language, widthPx,
                         publisherFloat = publisherFloat,
+                        viewportHeightPx = viewportHeightPx,
                     )
                 }
                 val floatBlock = element.block?.floatImage
@@ -2954,7 +3341,7 @@ private fun RenderPart(
                                     length = element.text.length - plan.besideEndChar,
                                     bidi = remainderBidi,
                                 )
-                                Text(
+                                ReaderText(
                                     text = remainderBidi.display,
                                     style = ReaderMetrics
                                         .textStyle(
@@ -2968,10 +3355,8 @@ private fun RenderPart(
                                     modifier = Modifier
                                         .width(exactTextWidth)
                                         .readerHighlights(tail, highlights),
-                                    inlineContent = inlineImageContent(
-                                        remainderBidi.display,
-                                        actuallyInvert,
-                                    ),
+                                    invertImages = actuallyInvert, bookFonts = bookFonts,
+                    publisherStyles = settings.bookStyles, maxWidthPx = with(density) { exactTextWidth.roundToPx() },
                                 )
                             }
                         } else {
@@ -2986,7 +3371,7 @@ private fun RenderPart(
                                 highlights, itemIndex, charStart = 0, length = element.text.length,
                                 bidi = wholeBidi,
                             )
-                            Text(
+                            ReaderText(
                                 text = wholeBidi.display,
                                 style = ReaderMetrics
                                     .textStyle(
@@ -2998,10 +3383,8 @@ private fun RenderPart(
                                 modifier = Modifier
                                     .width(exactTextWidth)
                                     .readerHighlights(fragment, highlights),
-                                inlineContent = inlineImageContent(
-                                    wholeBidi.display,
-                                    actuallyInvert,
-                                ),
+                                invertImages = actuallyInvert, bookFonts = bookFonts,
+                    publisherStyles = settings.bookStyles, maxWidthPx = with(density) { exactTextWidth.roundToPx() },
                             )
                         }
                     }
@@ -3022,10 +3405,11 @@ private fun RenderPart(
             val fragment = rememberTextFragment(
                 highlights, itemIndex, charStart, raw.length, bidiDisplay,
             )
-            Text(
+            ReaderText(
                 text = display,
                 style = ReaderMetrics
                     .textStyle(element, settings, fontSize, isParagraphStart, bookFonts, language)
+                    .withPublisherHangingIndent(boxGeometry, density, isParagraphStart)
                     .copy(color = colorPair.foreground),
                 onTextLayout = { fragment?.layout = it },
                 modifier = Modifier
@@ -3042,7 +3426,8 @@ private fun RenderPart(
                             ?: Modifier,
                     )
                     .readerHighlights(fragment, highlights),
-                inlineContent = inlineImageContent(display, actuallyInvert),
+                invertImages = actuallyInvert, bookFonts = bookFonts,
+                    publisherStyles = settings.bookStyles, maxWidthPx = with(density) { exactTextWidth.roundToPx() },
             )
         }
 
@@ -3070,10 +3455,11 @@ private fun RenderPart(
             val fragment = rememberTextFragment(
                 highlights, itemIndex, charStart, raw.length, bidiDisplay,
             )
-            Text(
+            ReaderText(
                 text = display,
                 style = ReaderMetrics
                     .textStyle(element, settings, fontSize, isParagraphStart, bookFonts, language)
+                    .withPublisherHangingIndent(boxGeometry, density, isParagraphStart)
                     .copy(color = colorPair.foreground),
                 onTextLayout = { fragment?.layout = it },
                 modifier = Modifier
@@ -3090,11 +3476,15 @@ private fun RenderPart(
                             ?: Modifier,
                     )
                     .readerHighlights(fragment, highlights),
-                inlineContent = inlineImageContent(display, actuallyInvert),
+                invertImages = actuallyInvert, bookFonts = bookFonts,
+                    publisherStyles = settings.bookStyles, maxWidthPx = with(density) { exactTextWidth.roundToPx() },
             )
         }
 
         is ContentElement.Image -> {
+            val imageAppearance = publisherImageAppearance(
+                element, settings.bookStyles, surroundingBackground, publisherInk, actuallyInvert,
+            )
             val availableImageWidthPx = with(density) { exactTextWidth.roundToPx() }
             val publisherOwnsImageWidth = publisherBoxesOwnImageWidth(
                 publisherBoxes,
@@ -3113,6 +3503,7 @@ private fun RenderPart(
                 fontSizePx = fontSizePx,
                 maxHeightPx = with(density) { ReaderMetrics.maxImageHeight.roundToPx() },
                 publisherOwnsWidth = publisherOwnsImageWidth,
+                viewportHeightPx = viewportHeightPx.takeIf { settings.bookStyles },
                 )
             // Percentage-width block images are centered in their containing
             // publisher box. Full-width artwork is unchanged.
@@ -3132,10 +3523,11 @@ private fun RenderPart(
                     model = File(element.path),
                     contentDescription = element.altText,
                     contentScale = ContentScale.Fit,
-                    colorFilter = imageColorFilter(actuallyInvert),
+                    colorFilter = imageColorFilter(imageAppearance.invert),
                     modifier = Modifier
                         .width(with(density) { displayImageWidthPx.toDp() })
-                        .height(with(density) { displayImageHeightPx.coerceAtLeast(1).toDp() }),
+                        .height(with(density) { displayImageHeightPx.coerceAtLeast(1).toDp() })
+                        .then(imageAppearance.background?.let { Modifier.background(it) } ?: Modifier),
                 )
             }
         }
@@ -3180,6 +3572,10 @@ private fun RenderPart(
                     fontSize, widthPx, language, bookFonts,
                 )
             }
+            val centeredTableInset = if (settings.bookStyles && publisherBoxes.lastOrNull()?.style?.horizontalAlign ==
+                com.example.frogreader.data.model.PublisherBoxAlign.CENTER) {
+                with(density) { ((widthPx - layout.tableWidthPx).coerceAtLeast(0) / 2f).toDp() }
+            } else 0.dp
             TableBlock(
                 table = element,
                 layout = layout,
@@ -3199,7 +3595,7 @@ private fun RenderPart(
                 highlights = highlights,
                 itemIndex = itemIndex,
                 modifier = Modifier.absolutePadding(
-                    left = basePadding + publisherLeftInset,
+                    left = basePadding + publisherLeftInset + centeredTableInset,
                     top = effectiveVTop,
                     bottom = effectiveVBottom,
                 ).then(
@@ -3231,6 +3627,7 @@ private fun SystemBarsEffect(theme: AppTheme, chromeVisible: Boolean) {
         val window = activity?.window ?: return@LaunchedEffect
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         controller.isAppearanceLightStatusBars = !theme.isDark()
+        controller.isAppearanceLightNavigationBars = !theme.isDark()
         // Transient-by-swipe, not BEHAVIOR_DEFAULT: under DEFAULT anything that
         // reveals the bars leaves them up for good, and immersion measurably
         // lasted about three seconds before some system event ended it.
@@ -3256,6 +3653,7 @@ private fun SystemBarsEffect(theme: AppTheme, chromeVisible: Boolean) {
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
             controller.show(WindowInsetsCompat.Type.systemBars())
             controller.isAppearanceLightStatusBars = !currentTheme.isDark()
+            controller.isAppearanceLightNavigationBars = !currentTheme.isDark()
         }
     }
 }
@@ -3269,6 +3667,7 @@ private fun ReaderTopBar(
     title: String,
     author: String?,
     colors: ReaderColors,
+    chromeStyle: ReaderChromeStyle,
     searchVisible: Boolean,
     searchQuery: String,
     onQueryChange: (String) -> Unit,
@@ -3278,55 +3677,68 @@ private fun ReaderTopBar(
     modifier: Modifier = Modifier,
     panelFraction: () -> Float = { 0f },
 ) {
+    val floating = chromeStyle == ReaderChromeStyle.FLOATING
+    val safeInsets = WindowInsets.systemBarsIgnoringVisibility.only(
+        WindowInsetsSides.Horizontal + WindowInsetsSides.Top,
+    ).asPaddingValues()
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
-    LaunchedEffect(searchVisible) {
-        if (searchVisible) focusRequester.requestFocus()
-    }
+    val headerAlpha by animateFloatAsState(
+        targetValue = if (searchVisible) 0f else 1f,
+        animationSpec = tween(120),
+        label = "readerHeaderAlpha",
+    )
 
     AnimatedVisibility(
         visible = visible || searchVisible,
         modifier = modifier,
-        enter = slideInVertically { -it } + fadeIn(),
-        exit = slideOutVertically { -it } + fadeOut(),
+        enter = slideInVertically { -it },
+        exit = slideOutVertically { -it },
     ) {
-        Surface(
-            color = colors.chrome,
-            contentColor = colors.onChrome,
-            shape = RoundedCornerShape(28.dp),
-            shadowElevation = 2.dp,
-            modifier = Modifier
+        ReaderBarSurface(
+            colors = colors,
+            chromeStyle = chromeStyle,
+            topBar = true,
+            modifier = readerBarFade()
                 .graphicsLayer {
                     // Ignore drawer pull when searching so the field stays put.
                     translationY = if (searchVisible) 0f else -panelFraction() * size.height * 1.25f
                 }
-                .padding(
-                    WindowInsets.systemBarsIgnoringVisibility.only(
-                        WindowInsetsSides.Horizontal + WindowInsetsSides.Top,
-                    ).asPaddingValues(),
+                .then(
+                    if (floating) Modifier.padding(safeInsets)
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                    else Modifier,
                 )
-                .padding(horizontal = 16.dp, vertical = 8.dp)
                 .fillMaxWidth(),
         ) {
-            AnimatedContent(
-                targetState = searchVisible,
-                transitionSpec = {
-                    (fadeIn() + slideInVertically { it / 2 }).togetherWith(
-                        fadeOut() + slideOutVertically { -it / 2 }
-                    ).using(SizeTransform(clip = false))
-                },
-                label = "topBarContent",
-            ) { searching ->
-                if (searching) {
+            // The book header always measures the bar. Search fills that exact
+            // space, including wrapped metadata, without changing its height.
+            Box(modifier = if (floating) Modifier else Modifier.padding(safeInsets)) {
+                ReaderBookHeader(
+                    title, author, colors, onBack, onSearch, chromeStyle,
+                    enabled = !searchVisible,
+                    modifier = Modifier
+                        .graphicsLayer { alpha = headerAlpha }
+                        .then(if (searchVisible) Modifier.clearAndSetSemantics {} else Modifier),
+                )
+                AnimatedVisibility(
+                    visible = searchVisible,
+                    modifier = Modifier.matchParentSize(),
+                    enter = fadeIn(tween(150)),
+                    exit = fadeOut(tween(100)),
+                ) {
+                    LaunchedEffect(Unit) { focusRequester.requestFocus() }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+                        modifier = Modifier.fillMaxSize()
+                            .padding(horizontal = if (floating) 6.dp else 12.dp, vertical = 6.dp),
                     ) {
                         ReaderChromeButton(
                             icon = Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = stringResource(R.string.reader_back),
                             colors = colors,
                             onClick = onCloseSearch,
+                            chromeStyle = chromeStyle,
                         )
                         Box(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                             if (searchQuery.isEmpty()) {
@@ -3334,6 +3746,8 @@ private fun ReaderTopBar(
                                     text = stringResource(R.string.reader_search_placeholder),
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = colors.onChromeVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                             BasicTextField(
@@ -3348,35 +3762,20 @@ private fun ReaderTopBar(
                                     .focusRequester(focusRequester),
                             )
                         }
-                        if (searchQuery.isNotEmpty()) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .clickable {
-                                        onQueryChange("")
-                                        focusRequester.requestFocus()
-                                        keyboard?.show()
-                                    },
-                            ) {
-                                Icon(
-                                    Icons.Rounded.Close,
-                                    contentDescription = stringResource(R.string.reader_search_clear),
-                                    tint = colors.onChromeVariant,
-                                )
-                            }
-                        } else {
-                            Icon(
-                                Icons.Rounded.Search,
-                                contentDescription = null,
-                                tint = colors.onChromeVariant,
-                                modifier = Modifier.padding(end = 8.dp),
-                            )
-                        }
+                        ReaderChromeButton(
+                            icon = if (searchQuery.isNotEmpty()) Icons.Rounded.Close else Icons.Rounded.Search,
+                            contentDescription = stringResource(
+                                if (searchQuery.isNotEmpty()) R.string.reader_search_clear else R.string.reader_search,
+                            ),
+                            colors = colors,
+                            onClick = {
+                                if (searchQuery.isNotEmpty()) onQueryChange("")
+                                focusRequester.requestFocus()
+                                keyboard?.show()
+                            },
+                            chromeStyle = chromeStyle,
+                        )
                     }
-                } else {
-                    ReaderBookHeader(title, author, colors, onBack, onSearch)
                 }
             }
         }
@@ -3412,6 +3811,7 @@ private fun ReaderBottomBar(
     chapterParents: List<String>,
     chapterLabel: String,
     bookFraction: Float,
+    modifier: Modifier = Modifier,
     chapterAtFraction: ((Float) -> ReaderChapterPreview)? = null,
     /** Returns true only when the committed value changes the discrete destination. */
     onSeekBook: (Float) -> Boolean,
@@ -3429,8 +3829,13 @@ private fun ReaderBottomBar(
     onRemoveQuote: (String) -> Unit,
     bookmarked: Boolean,
     onToggleBookmark: () -> Unit,
-    modifier: Modifier = Modifier,
 ) {
+    val chromeStyle = appSettings.readerChromeStyle
+    val floating = chromeStyle == ReaderChromeStyle.FLOATING
+    val panelScheme = appColorSchemeFor(appSettings.theme, appSettings.dynamicColor)
+    val safeInsets = WindowInsets.systemBarsIgnoringVisibility.only(
+        WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
+    ).asPaddingValues()
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -3440,14 +3845,14 @@ private fun ReaderBottomBar(
     // and fully open — the bar's top edge aligned with the top bar's pill.
     // The chrome around the panel is measured, not guessed, so the full
     // height is exact on any screen.
-    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val windowHeightPx = LocalWindowInfo.current.containerSize.height.toFloat()
+    val screenHeight = with(density) { windowHeightPx.toDp() }
     // Half-open height: starts as an estimate, then snaps to the measured
     // height of the settings content up to the margins/mode row, so exactly
     // that much is visible when the panel opens.
     var preferredPeekPx by remember {
         mutableFloatStateOf(with(density) { (screenHeight * 0.48f).toPx() })
     }
-    val windowHeightPx = LocalWindowInfo.current.containerSize.height.toFloat()
     val statusTopPx = with(density) {
         WindowInsets.systemBarsIgnoringVisibility.asPaddingValues().calculateTopPadding().toPx()
     }
@@ -3457,13 +3862,14 @@ private fun ReaderBottomBar(
     var barChromePx by remember { mutableFloatStateOf(with(density) { 110.dp.toPx() }) }
     val fullPx = (
         windowHeightPx - statusTopPx - navBottomPx -
-            with(density) { 16.dp.toPx() } - barChromePx
+            with(density) { if (floating) 16.dp.toPx() else 0f } - barChromePx
         ).coerceAtLeast(0f)
     val halfPx = preferredPeekPx.coerceAtMost(fullPx)
     val panelMotion = remember(scope) { ReaderPanelMotion(scope) }
     val panelHeight = panelMotion.height
     val panelOpen = panelMotion.isOpen
     var panelContent by remember { mutableStateOf(BarPanel.SETTINGS) }
+    var contentsOpenRequest by remember { mutableIntStateOf(0) }
 
     // Wrapped metadata and rotation can reduce the room available to the drawer.
     LaunchedEffect(fullPx) {
@@ -3475,10 +3881,15 @@ private fun ReaderBottomBar(
     // This panel is visually above the book, so Android Back must dismiss it
     // before leaving the reader. Its handler follows the reader-level
     // handler, which gives the topmost surface the expected priority.
-    BackHandler(enabled = allowBackDismiss && visible &&
-        (panelOpen || panelHeight.value > 0.5f)
-    ) {
-        settlePanel(0f)
+    PredictiveBackHandler(enabled = allowBackDismiss && visible && panelOpen) { progress ->
+        panelMotion.beginBack()
+        try {
+            progress.collect { event -> panelMotion.seekBack(event.progress) }
+            panelMotion.finishBack(committed = true)
+        } catch (cancelled: CancellationException) {
+            panelMotion.finishBack(committed = false)
+            throw cancelled
+        }
     }
 
     fun settleWithVelocity(velocity: Float) {
@@ -3496,7 +3907,7 @@ private fun ReaderBottomBar(
         settlePanel(target)
     }
 
-    // The handle and the expanded contents header drag the panel.
+    // The chapter heading and the expanded contents header drag the panel.
     val panelDrag = Modifier.draggable(
         orientation = Orientation.Vertical,
         onDragStarted = { panelMotion.startDrag() },
@@ -3542,11 +3953,15 @@ private fun ReaderBottomBar(
         haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
         when {
             !panelMotion.isOpen -> {
+                if (content == BarPanel.CONTENTS) contentsOpenRequest++
                 panelContent = content
                 settlePanel(halfPx)
             }
 
-            panelContent != content -> panelContent = content
+            panelContent != content -> {
+                if (content == BarPanel.CONTENTS) contentsOpenRequest++
+                panelContent = content
+            }
             else -> settlePanel(0f)
         }
     }
@@ -3567,17 +3982,15 @@ private fun ReaderBottomBar(
     AnimatedVisibility(
         visible = visible,
         modifier = modifier,
-        enter = slideInVertically { it } + fadeIn(),
-        exit = slideOutVertically { it } + fadeOut(),
+        enter = slideInVertically { it },
+        exit = slideOutVertically { it },
     ) {
         Column(
-            modifier = Modifier
-                .padding(
-                    WindowInsets.systemBarsIgnoringVisibility.only(
-                        WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom,
-                    ).asPaddingValues(),
-                )
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = readerBarFade().then(
+                if (floating) Modifier.padding(safeInsets)
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                else Modifier.fillMaxWidth(),
+            ),
         ) {
             // Share chrome motion, but cancel the panel's upward growth for
             // the exiting button. It fades at its original position while
@@ -3591,24 +4004,42 @@ private fun ReaderBottomBar(
                 onClick = onReturn,
                 label = returnLabel,
                 icon = returnIcon,
+                containerColor = if (appSettings.theme == AppTheme.SEPIA) colors.controlButton else colors.chrome,
                 modifier = Modifier
                     .align(AbsoluteAlignment.Right)
-                    // Align the button face with the bar; the extra drawing
-                    // space belongs to its shadow, not to its visible inset.
-                    .absoluteOffset(x = 12.dp)
+                    .then(
+                        if (floating) Modifier else Modifier.padding(
+                            WindowInsets.systemBarsIgnoringVisibility.only(
+                                WindowInsetsSides.Horizontal,
+                            ).asPaddingValues(),
+                        ).absolutePadding(right = 8.dp),
+                    )
+                    // Align the button face, excluding the shadow's invisible
+                    // horizontal gutter from the width used by the Column.
+                    .layout { measurable, constraints ->
+                        val placeable = measurable.measure(constraints)
+                        val gutter = 12.dp.roundToPx()
+                        layout((placeable.width - gutter * 2).coerceAtLeast(0), placeable.height) {
+                            placeable.place(-gutter, 0)
+                        }
+                    }
                     .zIndex(1f)
                     .graphicsLayer { translationY = panelHeight.value },
             )
-            Surface(
-                color = colors.chrome,
-                contentColor = colors.onChrome,
-                shape = RoundedCornerShape(28.dp),
-                shadowElevation = 2.dp,
+            ReaderBarSurface(
+                colors = colors,
+                chromeStyle = chromeStyle,
+                topBar = false,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .onSizeChanged { size -> barChromePx = size.height - panelHeight.value },
+                    .onSizeChanged { size ->
+                        barChromePx = size.height - panelHeight.value - if (floating) 0f else navBottomPx
+                    },
             ) {
-                Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)) {
+                Column(
+                    modifier = (if (floating) Modifier else Modifier.padding(safeInsets))
+                        .padding(start = 12.dp, end = 12.dp, top = if (floating) 8.dp else 6.dp, bottom = 8.dp),
+                ) {
                     ReaderChapterFooter(
                         chapterLabel = chapterLabel,
                         chapterParents = chapterParents,
@@ -3621,17 +4052,13 @@ private fun ReaderBottomBar(
                         chapterAtFraction = chapterAtFraction,
                         progressValuesReady = progressValuesReady,
                         colors = colors,
+                        chromeStyle = chromeStyle,
                         contentsSelected = panelOpen && panelContent == BarPanel.CONTENTS,
                         settingsSelected = panelOpen && panelContent == BarPanel.SETTINGS,
                         onContents = { togglePanel(BarPanel.CONTENTS) },
                         onSettings = { togglePanel(BarPanel.SETTINGS) },
                         onSeekBook = onSeekBook,
-                        headerDrag = panelDrag,
-                        panelExpanded = panelOpen,
-                        onTogglePanel = {
-                            haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                            settlePanel(if (panelMotion.isOpen) 0f else halfPx)
-                        },
+                        modifier = panelDrag,
                         panelContent = {
                             // Panel revealed by the pull: settings or contents/bookmarks/
                             // quotes, depending on which button summoned it.
@@ -3640,6 +4067,7 @@ private fun ReaderBottomBar(
                                 Box(
                                     Modifier
                                         .height(panelDp)
+                                        .background(colors.chrome)
                                         .nestedScroll(panelNestedScroll),
                                 ) {
                                     when (panelContent) {
@@ -3668,17 +4096,15 @@ private fun ReaderBottomBar(
                                         }
 
                                         BarPanel.CONTENTS -> ReaderPanelsContent(
-                                            colorScheme = appColorSchemeFor(appSettings.theme, appSettings.dynamicColor),
+                                            colorScheme = panelScheme,
                                             ready = ready,
                                             book = book,
                                             currentChapter = currentChapter,
                                             currentNavigationIndex = currentNavigationIndex,
+                                            openRequest = contentsOpenRequest,
                                             chapterStartPages = chapterStartPages,
-                                            dragModifier = panelDrag,
-                                            onChapterClick = { index ->
-                                                settlePanel(0f)
-                                                onChapterClick(index)
-                                            },
+                                            modifier = panelDrag,
+                                            onChapterClick = onChapterClick,
                                             onBookmarkClick = { flatIndex ->
                                                 settlePanel(0f)
                                                 onBookmarkClick(flatIndex)

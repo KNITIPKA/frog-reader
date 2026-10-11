@@ -30,6 +30,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -51,6 +52,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
@@ -186,7 +188,7 @@ private fun ActivityHeading(activity: ReadingActivity) {
 private fun TodayProgress(activity: ReadingActivity, goalMinutes: Int) {
     val scheme = MaterialTheme.colorScheme
     val fraction by animateFloatAsState(activity.fraction, label = "todayReadingProgress")
-    val description = stringResource(R.string.profile_today_reading, activity.minutes, goalMinutes)
+    val description = pluralStringResource(R.plurals.profile_today_reading, (activity.minutes).toInt(), activity.minutes, goalMinutes)
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(scheme.surfaceContainer)
             .clearAndSetSemantics {
@@ -223,9 +225,13 @@ private fun WeekReadingDays(days: List<ReadingDay>, compact: Boolean) {
     val scheme = MaterialTheme.colorScheme
     Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         days.forEach { day ->
-            val description = stringResource(R.string.profile_day_reading,
+            val description = pluralStringResource(
+                R.plurals.profile_day_reading,
+                (day.seconds / 60).toInt(),
                 day.date.format(DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.MEDIUM).withLocale(locale)),
-                day.seconds / 60, (day.fraction * 100).toInt())
+                day.seconds / 60,
+                (day.fraction * 100).toInt(),
+            )
             Column(
                 Modifier.weight(1f).clearAndSetSemantics { contentDescription = description },
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -274,13 +280,13 @@ private fun GoalRuler(minutes: Int, enabled: Boolean, onChange: (Int) -> Unit, o
     val label = stringResource(R.string.stats_goal_label)
     val valueLabel = stringResource(R.string.stats_goal_minutes, minutes)
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val sliderState = remember { SliderState(steps = 34, trackRange = 5f..180f) }
+    sliderState.value = minutes.toFloat()
     Column {
         Slider(
-            value = minutes.toFloat(),
+            state = sliderState,
             onValueChange = { onChange(readingGoalMinutes(it)) },
             onValueChangeFinished = onFinished,
-            valueRange = 5f..180f,
-            steps = 34,
             enabled = enabled,
             modifier = Modifier.fillMaxWidth().semantics { contentDescription = label; stateDescription = valueLabel },
             thumb = {

@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 import com.example.frogreader.data.LibraryViewMode
 import com.example.frogreader.data.SettingsRepository
@@ -145,7 +146,7 @@ class LibraryViewModel(
      * Only resolved entries are stored. A name that does not resolve yet — an
      * import whose index write beat its cover write — must stay retryable.
      */
-    private val coverCache = HashMap<String, Pair<String, File?>>()
+    private val coverCache = ConcurrentHashMap<String, Pair<String, File?>>()
 
     fun coverFileFor(book: Book): File? {
         val name = book.coverFileName ?: return null
@@ -155,6 +156,16 @@ class LibraryViewModel(
         val file = repository.coverFileFor(book)
         if (file != null) coverCache[book.id] = name to file
         return file
+    }
+
+    /** Prepare a bounded first viewport while Welcome is still covering the library. */
+    suspend fun prepareWelcomeExit() {
+        val context = application ?: return
+        withContext(Dispatchers.IO) {
+            val currentBooks = repository.books.value
+            val currentEntries = buildEntries(currentBooks, repository.shelves.value)
+            prepareLibraryCovers(context, welcomeCoverBooks(currentBooks, currentEntries).mapNotNull(::coverFileFor))
+        }
     }
 
     /** Questions this import needs answered before it can finish. */

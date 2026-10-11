@@ -95,6 +95,8 @@ data class Quote(
     /** Set by the repository when the quote is stored; empty in transit. */
     val bookId: String = "",
     override val updatedAtMillis: Long = 0L,
+    /** Saved independently for overlapping quotes; older records keep their default color. */
+    val color: QuoteColor = QuoteColor.DEFAULT,
 ) : Timestamped<Quote> {
     override fun withUpdatedAt(millis: Long) = copy(updatedAtMillis = millis)
 }
@@ -177,7 +179,7 @@ data class Book(
     val readingQueueNote: String? = null,
     /**
      * This book's own reading settings (font, size, margins, mode…).
-     * Null = the book still follows the app-wide "last used" settings.
+     * Null = use the application's code defaults until the first open pins them.
      * The app theme is global and intentionally not part of this.
      */
     val readerSettings: com.example.frogreader.data.ReaderSettings? = null,
@@ -192,6 +194,9 @@ data class Book(
     val description: String? = null,
     val language: String? = null,
 ) {
+    /** Completion is explicit; a saved page position alone is not a finished reading. */
+    val hasFinishedReading: Boolean get() = status == ReadingStatus.FINISHED || finishedAtMillis != null
+
     val effectiveRatingHalfStars: Int? get() = ratingHalfStars ?: rating?.times(2)
 }
 
@@ -205,8 +210,8 @@ data class Shelf(
     /** Blank = never named; the UI renders a localized placeholder. */
     val name: String = "",
     /**
-     * Members, in display order. `bookIds[0]` is the ANCHOR — the book that was
-     * dropped onto when the shelf was created.
+     * Members, in display order. Initially the drop target comes first;
+     * opening a member moves it to the front without reordering the others.
      */
     val bookIds: List<String> = emptyList(),
     val createdAtMillis: Long,
@@ -216,6 +221,7 @@ data class Shelf(
      * new shelf lands exactly in that book's grid slot. `createdAtMillis`
      * cannot be used for this: it is by construction the largest timestamp in
      * the library, so the shelf would always jump to the top-left.
+     * Opening a member updates this to the opening timestamp.
      * 0 = written by an older build, fall back to [createdAtMillis].
      */
     val sortKey: Long = 0L,

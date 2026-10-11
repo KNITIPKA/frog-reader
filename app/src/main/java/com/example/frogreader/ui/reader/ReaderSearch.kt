@@ -1,7 +1,8 @@
 package com.example.frogreader.ui.reader
 
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -34,12 +35,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -50,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import com.example.frogreader.R
 import com.example.frogreader.data.model.ContentElement
 import kotlinx.coroutines.yield
+import kotlinx.coroutines.CancellationException
 
 // ------------------------------------------------------------------- engine
 
@@ -169,16 +177,26 @@ fun ReaderSearchOverlay(
     topPadding: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
-    BackHandler(enabled = visible) {
-        keyboard?.hide()
-        onClose()
+    var backProgress by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(visible) {
+        if (visible) backProgress = 0f
+    }
+    PredictiveBackHandler(enabled = visible) { progress ->
+        try {
+            progress.collect { event -> backProgress = event.progress.coerceIn(0f, 1f) }
+            keyboard?.hide()
+            onClose()
+        } catch (cancelled: CancellationException) {
+            backProgress = 0f
+            throw cancelled
+        }
     }
 
     AnimatedVisibility(
         visible = visible,
-        modifier = modifier,
-        enter = fadeIn(),
-        exit = fadeOut(),
+        modifier = modifier.graphicsLayer { alpha = 1f - backProgress },
+        enter = fadeIn(tween(150)),
+        exit = fadeOut(tween(100)),
     ) {
         Column(
             modifier = Modifier
@@ -260,7 +278,7 @@ fun ReaderSearchOverlay(
                             val count = if (current.totalCount == 1) {
                                 stringResource(R.string.reader_search_one_match)
                             } else {
-                                stringResource(R.string.reader_search_matches, current.totalCount)
+                                pluralStringResource(R.plurals.reader_search_matches, current.totalCount, current.totalCount)
                             }
                             val label = if (current.truncated) {
                                 "$count · " + stringResource(
@@ -355,7 +373,7 @@ private fun GoToPageCard(
                     )
                 } else {
                     Text(
-                        text = stringResource(R.string.reader_search_pages_range, totalPages),
+                        text = pluralStringResource(R.plurals.reader_search_pages_range, totalPages, totalPages),
                         style = MaterialTheme.typography.titleSmall,
                         color = colors.secondaryText,
                     )

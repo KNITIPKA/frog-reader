@@ -37,4 +37,26 @@ class ReaderContentsTreeTest {
         assertEquals(listOf(0), deep.visibleIndices { evaluatedGroups++; true })
         assertEquals(1, evaluatedGroups)
     }
+
+    @Test
+    fun `current chapter maps to the visible row after collapsed earlier sections`() {
+        val visible = tree.visibleIndices { it == 1 }
+        assertEquals(4, tree.visiblePositionOf(6, visible))
+        assertEquals(6, tree.visiblePositionOf(6, tree.visibleIndices { false }))
+    }
+
+    @Test
+    fun `hidden current chapter falls back to its nearest visible section`() {
+        assertEquals(5, tree.visiblePositionOf(6, tree.visibleIndices { it == 5 }))
+        assertEquals(4, tree.visiblePositionOf(6, tree.visibleIndices { it == 4 }))
+    }
+
+    @Test
+    fun `missing or invalid current entry safely opens at the start`() {
+        val visible = tree.visibleIndices { false }
+        assertEquals(0, tree.visiblePositionOf(null, visible))
+        assertEquals(0, tree.visiblePositionOf(-1, visible))
+        assertEquals(0, tree.visiblePositionOf(100, visible))
+        assertEquals(0, ReaderContentsTree(emptyList()).visiblePositionOf(0, emptyList()))
+    }
 }

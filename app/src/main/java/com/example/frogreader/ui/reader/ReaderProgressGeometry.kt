@@ -66,8 +66,12 @@ private fun readerProgressFallbackTicks(chapters: ReaderProgressChapters, widthD
     }
 }
 
-private fun readerProgressSegmentPlan(chapters: ReaderProgressChapters, widthDp: Float): ReaderProgressSegmentPlan {
-    val detail = readerProgressSegmentDetail(chapters.size, widthDp)
+private fun readerProgressSegmentPlan(
+    chapters: ReaderProgressChapters,
+    widthDp: Float,
+    forceContinuous: Boolean = false,
+): ReaderProgressSegmentPlan {
+    val detail = if (forceContinuous) 0f else readerProgressSegmentDetail(chapters.size, widthDp)
     fun continuous() = ReaderProgressSegmentPlan(0f, List(chapters.size) { chapters[it].start } + 1f, 1f,
         readerProgressFallbackTicks(chapters, widthDp))
     if (detail == 0f) return continuous()
@@ -125,10 +129,15 @@ internal class ReaderProgressLayout private constructor(
     val focusedIndex: Int? = null,
     private val animatedInsets: List<Float>? = null,
     private val seekAnchor: ReaderProgressAnchor? = null,
-    val segmentPlan: ReaderProgressSegmentPlan = readerProgressSegmentPlan(chapters, trackWidthDp),
+    forceContinuous: Boolean = false,
+    val segmentPlan: ReaderProgressSegmentPlan = readerProgressSegmentPlan(chapters, trackWidthDp, forceContinuous),
 ) {
-    constructor(stops: List<Float>, trackWidthDp: Float, positionCount: Int? = null) :
-        this(ReaderProgressChapters(stops), trackWidthDp, positionCount)
+    constructor(
+        stops: List<Float>,
+        trackWidthDp: Float,
+        positionCount: Int? = null,
+        forceContinuous: Boolean = false,
+    ) : this(ReaderProgressChapters(stops), trackWidthDp, positionCount, forceContinuous = forceContinuous)
 
     val detail = segmentPlan.detail
     val segmented: Boolean get() = detail > 0f
@@ -194,7 +203,7 @@ internal class ReaderProgressLayout private constructor(
     }
 
     fun withGeometry(bounds: List<Float>, padding: List<Float>) =
-        if (segmented) ReaderProgressLayout(chapters, trackWidthDp, positionCount, bounds, focusedIndex, padding, seekAnchor, segmentPlan)
+        if (segmented) ReaderProgressLayout(chapters, trackWidthDp, positionCount, bounds, focusedIndex, padding, seekAnchor, segmentPlan = segmentPlan)
         else this
 
     private fun chapterLocal(index: Int, fraction: Float): Float {
@@ -298,13 +307,9 @@ internal class ReaderProgressTransition(from: ReaderProgressLayout, private val 
     }
 }
 
-/** The capsule, page counter and chapter preview address the same page during a page turn. */
-internal fun readerProgressPageFraction(fraction: Float, pageCount: Int?): Float {
-    val safe = if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 0f
-    if (pageCount == null || pageCount <= 1) return safe
-    val lastPage = pageCount - 1
-    return ReaderNavigationPolicy.progressTargetIndex(safe, 0, lastPage).toFloat() / lastPage
-}
+/** Keep the pager's fractional position throughout a drag, settle or cancelled turn. */
+internal fun readerProgressVisualFraction(fraction: Float): Float =
+    if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 0f
 
 /** A short chapter jump still waits for navigation to reach the selected page/item. */
 internal fun readerProgressSeekReached(actual: Float, target: Float, positionCount: Int?): Boolean {

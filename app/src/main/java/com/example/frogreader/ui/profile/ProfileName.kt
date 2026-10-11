@@ -1,7 +1,11 @@
 package com.example.frogreader.ui.profile
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.text.BasicTextField
@@ -10,6 +14,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,8 +27,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
@@ -51,6 +60,7 @@ internal const val ProfileNameLimit = 64
 internal fun limitProfileName(value: String): String =
     value.substring(0, value.offsetByCodePoints(0, value.codePointCount(0, value.length).coerceAtMost(ProfileNameLimit)))
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ProfileName(
     name: String,
@@ -58,14 +68,21 @@ internal fun ProfileName(
     modifier: Modifier = Modifier,
     initiallyEditing: Boolean = false,
     maxHeight: Dp = 76.dp,
+    editRequested: Boolean = false,
+    onEditRequestHandled: () -> Unit = {},
+    onEditorBoundsChanged: (Rect?) -> Unit = {},
+    isActive: Boolean = true,
 ) {
     var editing by rememberSaveable { mutableStateOf(initiallyEditing) }
     var hadFocus by remember { mutableStateOf(false) }
+    var keyboardWasVisible by remember { mutableStateOf(false) }
     var draft by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         val initial = limitProfileName(name)
         mutableStateOf(TextFieldValue(initial, TextRange(initial.length)))
     }
     val focus = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val keyboardVisible = WindowInsets.isImeVisible
     val keyboard = LocalSoftwareKeyboardController.current
     val preview = LocalInspectionMode.current
     val density = LocalDensity.current
@@ -75,14 +92,59 @@ internal fun ProfileName(
     val nameLabel = stringResource(R.string.profile_name_label)
     val defaultName = stringResource(R.string.profile_default_name)
     val save by rememberUpdatedState(onSave)
+    val updateEditorBounds by rememberUpdatedState(onEditorBoundsChanged)
     val measurer = rememberTextMeasurer()
     val baseStyle = MaterialTheme.typography.headlineSmall.copy(
         color = foreground, fontWeight = FontWeight.SemiBold, lineHeight = 1.08.em,
     )
     val displayed = if (editing) draft.text else name.ifBlank { defaultName }
 
-    LaunchedEffect(editing) {
-        if (editing && !preview) {
+    fun startEditing() {
+        if (!isActive) return
+        val initial = limitProfileName(name)
+        draft = TextFieldValue(initial, TextRange(initial.length))
+        hadFocus = false
+        keyboardWasVisible = false
+        editing = true
+    }
+
+    fun finishEditing(clearFocus: Boolean = true) {
+        editing = false
+        hadFocus = false
+        keyboardWasVisible = false
+        if (clearFocus) {
+            focusManager.clearFocus()
+            keyboard?.hide()
+        }
+    }
+
+    if (!preview) BackHandler(enabled = editing && isActive) { finishEditing() }
+    LaunchedEffect(isActive) {
+        // Top-level pages stay composed in the pager. An inactive profile must
+        // end its own editor without clearing a different screen's focus.
+        if (!isActive && editing) finishEditing(clearFocus = hadFocus)
+    }
+    LaunchedEffect(editing, keyboardVisible, isActive) {
+        if (editing && isActive) {
+            if (keyboardVisible) keyboardWasVisible = true
+            // Hiding the IME does not clear text-field focus on Android. Wait
+            // until it has opened, so initial layout / hardware keyboards do
+            // not immediately dismiss a newly opened editor.
+            else if (keyboardWasVisible) finishEditing()
+        }
+    }
+    DisposableEffect(editing) {
+        if (!editing) updateEditorBounds(null)
+        onDispose { updateEditorBounds(null) }
+    }
+    LaunchedEffect(editRequested, isActive) {
+        if (editRequested) {
+            startEditing()
+            onEditRequestHandled()
+        }
+    }
+    LaunchedEffect(editing, isActive) {
+        if (editing && isActive && !preview) {
             focus.requestFocus()
             keyboard?.show()
         }
@@ -135,15 +197,13 @@ internal fun ProfileName(
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done,
                 ),
-                keyboardActions = KeyboardActions(onDone = {
-                    editing = false
-                    keyboard?.hide()
-                }),
+                keyboardActions = KeyboardActions(onDone = { finishEditing() }),
                 modifier = Modifier.fillMaxWidth().focusRequester(focus)
                     .onFocusChanged {
                         if (it.isFocused) hadFocus = true
-                        else if (hadFocus) { hadFocus = false; editing = false }
+                        else if (hadFocus) finishEditing(clearFocus = false)
                     }
+                    .onGloballyPositioned { updateEditorBounds(it.boundsInRoot()) }
                     .semantics { contentDescription = nameLabel },
             )
         } else {
@@ -152,10 +212,8 @@ internal fun ProfileName(
                 style = textStyle,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = editLabel) {
-                    val initial = limitProfileName(name)
-                    draft = TextFieldValue(initial, TextRange(initial.length))
-                    editing = true
+                modifier = Modifier.fillMaxWidth().clickable(enabled = isActive, role = Role.Button, onClickLabel = editLabel) {
+                    startEditing()
                 },
             )
         }

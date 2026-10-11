@@ -60,7 +60,7 @@ class HtmlMapperListsRubyTest {
         assertEquals("• outer", paragraphs[0].text.text)
         val inner = paragraphs.single { it.text.text == "◦ inner" }
         assertEquals(1.2f, inner.block!!.indentStartEm, 0.01f)
-        assertEquals(false, inner.block!!.firstLineIndent)
+        assertEquals(false, inner.block.firstLineIndent)
         assertEquals(0f, paragraphs[0].block!!.indentStartEm, 0.01f)
     }
 

@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -17,6 +18,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.text.TextLayoutResult
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.data.model.QuoteColor
 import com.example.frogreader.ui.reader.BidiLayoutText
 
 /**
@@ -67,7 +69,7 @@ class TextFragment(
             paths.clear()
         }
         return paths.getOrPut(span) {
-            layout.getPathForRange(
+            layout.readerSelectionPath(
                 bidi?.layoutStart(span.start) ?: span.start,
                 bidi?.layoutEnd(span.end) ?: span.end,
             )
@@ -79,6 +81,13 @@ class TextFragment(
         anchor.itemIndex == itemIndex &&
             anchor.charOffset >= charStart &&
             anchor.charOffset <= charStart + length
+
+    /** The start follows its next character; the end follows its preceding character. */
+    internal fun holdsCaret(anchor: BookAnchor, edge: SelectionEdge): Boolean =
+        holds(anchor) && length > 0 && when (edge) {
+            SelectionEdge.START -> anchor.charOffset < charStart + length
+            SelectionEdge.END -> anchor.charOffset > charStart
+        }
 }
 
 /**
@@ -107,6 +116,10 @@ class SelectionController {
     var dragging by mutableStateOf(false)
         internal set
 
+    /** Hold book anchors steady while an automatic page turn changes layouts. */
+    internal var autoAdvancing by mutableStateOf(false)
+        private set
+
     /**
      * The element texts, for word boundaries. Set by `ReaderContent` whenever
      * the book changes.
@@ -122,6 +135,9 @@ class SelectionController {
      * but the text beneath it has.
      */
     internal var lastPoint: Offset? = null
+
+    /** Origin of this drag, before an edge hold has had a chance to turn a page. */
+    internal var dragStartPoint: Offset? = null
 
     /** How the current drag extends the selection (by word, or by character). */
     internal var extend: ((Offset) -> Unit)? = null
@@ -139,6 +155,25 @@ class SelectionController {
     internal val spaceSize: androidx.compose.ui.unit.IntSize?
         get() = liveSpace()?.size
 
+    internal fun updateDragPoint(point: Offset) {
+        lastPoint = point
+        if (!autoAdvancing) extend?.invoke(point)
+    }
+
+    internal suspend fun advancePage(advance: SelectionAutoAdvance, direction: Int) {
+        autoAdvancing = true
+        try {
+            advance.step(direction, 0f)
+            // Pager's coroutine can finish before the destination text has
+            // been placed. The second frame sees the previous frame's layout,
+            // including an instant turn and the cached curl/stack surfaces.
+            repeat(2) { withFrameNanos { } }
+        } finally {
+            autoAdvancing = false
+        }
+        reExtend()
+    }
+
     /** Re-reads the character under a finger that has not moved. */
     internal fun reExtend() {
         val point = lastPoint ?: return
@@ -153,7 +188,7 @@ class SelectionController {
      * landed on, which is under the fingertip and never visible.
      */
     fun magnifierSource(): Offset {
-        if (!dragging) return Offset.Unspecified
+        if (!dragging || autoAdvancing) return Offset.Unspecified
         val point = lastPoint ?: return Offset.Unspecified
         val carets = listOfNotNull(
             caretOf(SelectionEdge.START),
@@ -267,8 +302,14 @@ class SelectionController {
      * the action pill is placed off its top.
      */
     fun caretOf(edge: SelectionEdge): Rect? {
-        val current = selection ?: return null
         val space = liveSpace() ?: return null
+        return caretOf(edge, space)
+    }
+
+    /** A page draws only its own handles, in the coordinates captured by its renderer. */
+    internal fun caretOf(edge: SelectionEdge, space: LayoutCoordinates, epoch: Int? = null): Rect? {
+        if (!space.isAttached) return null
+        val current = selection ?: return null
         val anchor = if (edge == SelectionEdge.START) current.start else current.end
         // An anchor sits at the boundary between two fragments as often as
         // not; prefer the one that really draws the character.
@@ -279,7 +320,8 @@ class SelectionController {
         var fragment: TextFragment? = null
         var best = Int.MAX_VALUE
         for (candidate in fragments) {
-            if (candidate.layout == null || !candidate.holds(anchor)) continue
+            if (epoch != null && candidate.epoch != epoch) continue
+            if (candidate.layout == null || !candidate.holdsCaret(anchor, edge)) continue
             if (rectOf(space, candidate).isEmpty) continue // on another page
             val score = if (edge == SelectionEdge.END) {
                 anchor.charOffset - candidate.charStart
@@ -422,8 +464,8 @@ class ReaderHighlights(
     val controller: SelectionController,
     val epoch: Int,
     /** Saved quotes, already resolved to book coordinates. */
-    val quotes: List<BookSelection>,
-    val quoteColor: Color,
+    val quotes: List<QuoteHighlight>,
+    val quoteColors: Map<QuoteColor, Color>,
     val selectionColor: Color,
 )
 
@@ -439,13 +481,13 @@ class ReaderHighlights(
 @Composable
 fun rememberReaderHighlights(
     controller: SelectionController,
-    quotes: List<BookSelection>,
-    quoteColor: Color,
+    quotes: List<QuoteHighlight>,
+    quoteColors: Map<QuoteColor, Color>,
     selectionColor: Color,
 ): ReaderHighlights {
     val epoch = remember { controller.newEpoch() }
-    return remember(epoch, quotes, quoteColor, selectionColor) {
-        ReaderHighlights(controller, epoch, quotes, quoteColor, selectionColor)
+    return remember(epoch, quotes, quoteColors, selectionColor) {
+        ReaderHighlights(controller, epoch, quotes, quoteColors, selectionColor)
     }
 }
 
@@ -492,15 +534,15 @@ fun Modifier.readerHighlights(
     highlights: ReaderHighlights?,
 ): Modifier {
     if (fragment == null || highlights == null) return this
+    val quoteSpans = quoteHighlightSpans(
+        highlights.quotes, fragment.itemIndex, fragment.charStart, fragment.length,
+    )
     return this
         .onPlaced { fragment.coords = it }
         .drawBehind {
             val layout = fragment.layout ?: return@drawBehind
-            for (quote in highlights.quotes) {
-                val span = quote.intersect(
-                    fragment.itemIndex, fragment.charStart, fragment.length,
-                ) ?: continue
-                drawPath(fragment.pathFor(layout, span), highlights.quoteColor)
+            for (quote in quoteSpans) {
+                drawPath(fragment.pathFor(layout, quote.span), highlights.quoteColors.getValue(quote.color))
             }
             val selected = highlights.controller.selection?.intersect(
                 fragment.itemIndex, fragment.charStart, fragment.length,

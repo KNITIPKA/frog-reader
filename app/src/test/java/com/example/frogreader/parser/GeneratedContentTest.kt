@@ -184,7 +184,7 @@ class GeneratedContentTest {
         val image = elements.filterIsInstance<ContentElement.Image>().single()
         assertEquals("/fake/path.svg", image.path)
         assertTrue(captured!!.contains("xmlns=\"http://www.w3.org/2000/svg\""))
-        assertTrue(captured!!.contains("path"))
+        assertTrue(captured.contains("path"))
     }
 
     @Test
@@ -205,8 +205,8 @@ class GeneratedContentTest {
         val image = elements.filterIsInstance<ContentElement.Image>().single()
         assertEquals("/rendered/wrapper.svg", image.path)
         assertTrue(captured!!.contains("viewBox=\"0 0 10 10\""))
-        assertTrue(captured!!.contains("<image"))
-        assertTrue(captured!!.contains("cover.jpg"))
+        assertTrue(captured.contains("<image"))
+        assertTrue(captured.contains("cover.jpg"))
     }
 
     @Test

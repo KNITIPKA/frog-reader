@@ -1,8 +1,7 @@
 package com.example.frogreader.ui.settings
 
-import android.content.Intent
+import com.example.frogreader.ui.components.FrogSnackbarHost
 import androidx.activity.compose.BackHandler
-import androidx.core.net.toUri
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
@@ -26,22 +25,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
-import androidx.compose.material.icons.automirrored.rounded.OpenInNew
-import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.CloudUpload
-import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.NewReleases
 import androidx.compose.material.icons.rounded.Palette
-import androidx.compose.material.icons.rounded.ReportProblem
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,10 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.frogreader.R
@@ -143,12 +130,12 @@ fun SettingsScreen(
             }
         }
 
-        SnackbarHost(
+        FrogSnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
-                .padding(16.dp),
+                .padding(bottom = 16.dp),
         )
     }
 
@@ -322,131 +309,4 @@ private fun installedVersionName(): String {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
         }.getOrNull() ?: "?"
     }
-}
-
-private data class AboutLink(
-    val icon: androidx.compose.ui.graphics.vector.ImageVector,
-    val title: Int,
-    val subtitle: Int,
-    val uri: String,
-)
-
-@Composable
-private fun AboutDialog(
-    onDismiss: () -> Unit,
-    onOpenFailed: (String) -> Unit,
-) {
-    val context = LocalContext.current
-    val versionName = installedVersionName()
-    val failedMessage = stringResource(R.string.settings_link_failed)
-    val links = listOf(
-        AboutLink(
-            icon = Icons.AutoMirrored.Rounded.Send,
-            title = R.string.settings_about_telegram,
-            subtitle = R.string.settings_about_telegram_subtitle,
-            uri = "https://t.me/frogreader",
-        ),
-        AboutLink(
-            icon = Icons.Rounded.Code,
-            title = R.string.settings_about_github,
-            subtitle = R.string.settings_about_github_subtitle,
-            uri = "https://github.com/KNITIPKA/frog-reader",
-        ),
-        AboutLink(
-            icon = Icons.Rounded.NewReleases,
-            title = R.string.settings_about_releases,
-            subtitle = R.string.settings_about_releases_subtitle,
-            uri = "https://github.com/KNITIPKA/frog-reader/releases",
-        ),
-        AboutLink(
-            icon = Icons.Rounded.ReportProblem,
-            title = R.string.settings_about_issues,
-            subtitle = R.string.settings_about_issues_subtitle,
-            uri = "https://github.com/KNITIPKA/frog-reader/issues",
-        ),
-    )
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = SettingsCardShape,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-        icon = {
-            Box(
-                modifier = Modifier
-                    .size(64.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.MenuBook,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(32.dp),
-                )
-            }
-        },
-        title = {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Medium),
-                    textAlign = TextAlign.Center,
-                )
-                Text(
-                    text = stringResource(R.string.settings_about_version, versionName),
-                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
-            }
-        },
-        text = {
-            Column {
-                links.forEachIndexed { index, link ->
-                    AboutLinkRow(
-                        link = link,
-                        onClick = {
-                            runCatching {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, link.uri.toUri()))
-                            }.onFailure { onOpenFailed(failedMessage) }
-                        },
-                    )
-                    if (index != links.lastIndex) SettingsDivider(start = 38.dp)
-                }
-                Spacer(Modifier.height(14.dp))
-                Text(
-                    text = stringResource(R.string.settings_about_footnote),
-                    style = MaterialTheme.typography.bodySmall.copy(lineHeight = 16.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.settings_close))
-            }
-        },
-    )
-}
-
-@Composable
-private fun AboutLinkRow(link: AboutLink, onClick: () -> Unit) {
-    SettingsNavigationRow(
-        icon = link.icon,
-        title = stringResource(link.title),
-        subtitle = stringResource(link.subtitle),
-        onClick = onClick,
-        iconContainer = Color.Transparent,
-        modifier = Modifier.padding(horizontal = 0.dp),
-        showChevron = false,
-        trailing = {
-            Icon(
-                imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(22.dp),
-            )
-        },
-    )
 }

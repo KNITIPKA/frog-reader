@@ -3,7 +3,10 @@ package com.example.frogreader.data
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.LibraryIndex
+import com.example.frogreader.data.model.ReadingProgress
 import com.example.frogreader.data.model.Shelf
+import com.example.frogreader.ui.library.LibraryEntry
+import com.example.frogreader.ui.library.buildEntries
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -139,6 +142,67 @@ class BookRepositoryShelvesTest {
         assertEquals(1, reopened.shelves.value.size)
         assertEquals(listOf("target", "dragged"), reopened.shelves.value[0].bookIds)
         assertEquals(2, reopened.books.value.size)
+    }
+
+    @Test
+    fun testOpeningMemberPromotesShelfAndBookAndPersistsBothOrders() = runTest {
+        val books = listOf(book("a"), book("b"), book("c"), book("loose", 3_000L))
+        val folder = Shelf(id = "folder", bookIds = listOf("a", "b", "c"), createdAtMillis = 1L, sortKey = 1_000L)
+        val other = Shelf(id = "other", bookIds = emptyList(), createdAtMillis = 2_000L)
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(books, listOf(other, folder))))
+        val repository = BookRepository(context = null)
+        assertEquals(listOf("b:loose", "s:other", "s:folder"),
+            buildEntries(repository.books.value, repository.shelves.value).map { it.id })
+
+        repository.markStarted("c")
+
+        val promoted = repository.shelves.value.first()
+        assertEquals("folder", promoted.id)
+        assertEquals(listOf("c", "a", "b"), promoted.bookIds)
+        assertEquals(repository.bookById("c")!!.lastOpenedAtMillis, promoted.sortKey)
+        assertEquals(listOf("s:folder", "b:loose", "s:other"),
+            buildEntries(repository.books.value, repository.shelves.value).map { it.id })
+
+        val reopened = BookRepository(context = null)
+        val entries = buildEntries(reopened.books.value, reopened.shelves.value)
+        assertEquals("s:folder", entries.first().id)
+        assertEquals(listOf("c", "a", "b"), (entries.first() as LibraryEntry.ShelfEntry).books.map { it.id })
+        assertEquals(promoted, reopened.shelves.value.first())
+
+        reopened.markStarted("b")
+        assertEquals(listOf("b", "c", "a"), reopened.shelves.value.first().bookIds)
+    }
+
+    @Test
+    fun testOpeningLooseBookDoesNotPromoteAnyShelf() = runTest {
+        val books = listOf(book("a"), book("b"), book("loose"))
+        val folder = Shelf(id = "folder", bookIds = listOf("a", "b"), createdAtMillis = 1L, sortKey = 1_000L)
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(books, listOf(folder))))
+        val repository = BookRepository(context = null)
+        val before = repository.shelves.value
+
+        repository.markStarted("loose")
+
+        assertEquals(before, repository.shelves.value)
+        assertEquals("b:loose", buildEntries(repository.books.value, repository.shelves.value).first().id)
+    }
+
+    @Test
+    fun testPageTurnsKeepPromotedShelfOrderWithoutRewritingLibrary() = runTest {
+        val books = listOf(book("a"), book("b"))
+        val folder = Shelf(id = "folder", bookIds = listOf("a", "b"), createdAtMillis = 1L, sortKey = 1_000L)
+        indexFile.writeText(json.encodeToString(StoreFixture.indexOf(books, listOf(folder))))
+        val repository = BookRepository(context = null)
+        repository.markStarted("b")
+        val before = indexFile.readText()
+        val promoted = repository.shelves.value
+
+        repository.saveProgressForReading("b", ReadingProgress(chapterIndex = 1, fraction = 0.2f),
+            repository.bookById("b")!!.activeReadingLogId)
+
+        assertEquals(before, indexFile.readText())
+        assertEquals(promoted, repository.shelves.value)
+        assertEquals(0.2f, repository.bookById("b")!!.progress.fraction, 0.0001f)
     }
 
     /**

@@ -43,6 +43,19 @@ class SelectionTextTest {
     }
 
     @Test
+    fun `the hyphenated Alice passages copy every original letter across paragraphs`() {
+        val first = "The Mouse did not notice this question, but hurriedly went on."
+        val second = "As wet as ever, said Alice in a melancholy tone."
+        val elements = listOf(paragraph(first), paragraph(second))
+        val selected = BookSelection.of(BookAnchor(0, 0), BookAnchor(1, second.length))
+        assertEquals("$first\n\n$second", extract(elements, selected))
+        val question = SelectionText.wordAt(first, first.indexOf("question") + 4)
+        assertEquals("question", first.substring(question))
+        val melancholy = SelectionText.wordAt(second, second.indexOf("melancholy") + 6)
+        assertEquals("melancholy", second.substring(melancholy))
+    }
+
+    @Test
     fun `paragraphs are joined by a blank line`() {
         val elements = listOf(
             paragraph("Первый абзац."),

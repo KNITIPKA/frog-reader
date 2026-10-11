@@ -1,5 +1,7 @@
 package com.example.frogreader.parser
 
+import com.example.frogreader.testfixtures.LocalBookFixtures
+
 import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.INLINE_IMAGE_CHAR
@@ -28,23 +30,7 @@ class RealBooksTest {
     @get:Rule
     val tempFolder = TemporaryFolder()
 
-    /**
-     * Fixture locations: the project's untracked `.testbooks` first (always
-     * readable), the user's Downloads as a fallback (may be blocked by macOS
-     * permissions — tests then skip instead of failing).
-     */
-    private val bookDirs = listOf(
-        File("/Users/frog/AndroidStudioProjects/FrogReader/.testbooks"),
-        File("/Users/frog/Downloads"),
-    )
-
-    private fun book(name: String): File {
-        for (dir in bookDirs) {
-            val file = File(dir, name)
-            if (runCatching { file.inputStream().use { it.read() } }.isSuccess) return file
-        }
-        return File(bookDirs.first(), name)
-    }
+    private fun book(name: String): File = LocalBookFixtures.find(name)
 
     private fun assumeReadable(file: File) {
         assumeTrue(
@@ -79,7 +65,7 @@ class RealBooksTest {
         }
         val heading = chapter.elements.filterIsInstance<ContentElement.Heading>()
             .first { it.text.contains("Дементоры") }
-        assertEquals("Глава 1. Дементоры – фантомы и кошмары", heading.text)
+        assertEquals("Глава 1. Дементоры\u00a0– фантомы и кошмары", heading.text)
         val headingBlock = heading.block
         assertNotNull("heading carries CSS block style", headingBlock)
         assertEquals(BlockAlign.CENTER, headingBlock?.align)

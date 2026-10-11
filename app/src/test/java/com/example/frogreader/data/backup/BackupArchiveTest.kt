@@ -4,7 +4,10 @@ import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.AppLockDelay
 import com.example.frogreader.data.AppTheme
 import com.example.frogreader.data.LightThemeDefault
+import com.example.frogreader.data.PageMargins
+import com.example.frogreader.data.PageTurnAnimation
 import com.example.frogreader.data.ReaderSettings
+import com.example.frogreader.data.ReadingMode
 import com.example.frogreader.data.ReadingStats
 import com.example.frogreader.data.StartupDestination
 import com.example.frogreader.data.model.BackupDocument
@@ -15,6 +18,7 @@ import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.Bookmark
 import com.example.frogreader.data.model.Quote
+import com.example.frogreader.data.model.QuoteColor
 import com.example.frogreader.data.model.ReadingProgress
 import com.example.frogreader.data.model.ReadingStatus
 import com.example.frogreader.data.model.Shelf
@@ -29,6 +33,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 /**
@@ -61,7 +66,8 @@ class BackupArchiveTest {
         addedAtMillis = 1_000L,
         progress = ReadingProgress(chapterIndex = 3, fraction = 0.42f),
         quotes = listOf(
-            Quote("q-$id", "a line worth keeping", 1, 2_000L, note = "why it matters", bookId = id),
+            Quote("q-$id", "a line worth keeping", 1, 2_000L, note = "why it matters", bookId = id,
+                color = QuoteColor.ROSE),
         ),
         bookmarks = listOf(Bookmark("m-$id", 10, 1, "preview", 3_000L, bookId = id)),
         status = ReadingStatus.FINISHED,
@@ -80,7 +86,7 @@ class BackupArchiveTest {
         reader = ReaderSettings(fontSizeSp = 21f),
         app = AppSettings(
             theme = AppTheme.OLED, dailyGoalMinutes = 45,
-            centerHeadings = true, autoHideReturnButton = false,
+            autoHideReturnButton = false,
             defaultTranslator = "translator.app/translator.app.ProcessText",
         ),
     )
@@ -126,6 +132,28 @@ class BackupArchiveTest {
     // ------------------------------------------------------------ round trip
 
     @Test
+    fun `fresh installation defaults survive a fully encoded settings backup`() {
+        val freshSettings = BackupSettings()
+        val out = ByteArrayOutputStream()
+        BackupArchive.write(
+            out = out,
+            document = document(),
+            stats = stats,
+            settings = freshSettings,
+            mode = BackupMode.DATA,
+            appVersion = "1.56",
+            createdAtMillis = 1_700_000_000_000L,
+        )
+
+        val restored = BackupArchive.read(
+            ByteArrayInputStream(out.toByteArray()), booksDir, coversDir,
+        )
+
+        assertEquals(BackupManifest.FORMAT_VERSION, restored.manifest.formatVersion)
+        assertEquals(freshSettings, restored.settings)
+    }
+
+    @Test
     fun `everything the user made survives a data-only round trip`() {
         val bytes = writeArchive(document(book("a"), book("b")))
 
@@ -142,15 +170,39 @@ class BackupArchiveTest {
         assertEquals(0.42f, a.progress.fraction, 0.0001f)
         assertEquals("a line worth keeping", a.quotes.single().text)
         assertEquals("why it matters", a.quotes.single().note)
+        assertEquals(QuoteColor.ROSE, a.quotes.single().color)
         assertEquals("preview", a.bookmarks.single().preview)
         assertEquals(listOf("a", "b"), contents.document.shelves.single().bookIds)
         assertEquals(3_600L, contents.stats?.dailySeconds?.get("2026-08-09"))
         assertEquals(21f, contents.settings?.reader?.fontSizeSp)
         assertEquals(AppTheme.OLED, contents.settings?.app?.theme)
         assertEquals(45, contents.settings?.app?.dailyGoalMinutes)
-        assertEquals(true, contents.settings?.app?.centerHeadings)
         assertEquals(false, contents.settings?.app?.autoHideReturnButton)
         assertEquals(settings.app.defaultTranslator, contents.settings?.app?.defaultTranslator)
+    }
+
+    @Test
+    fun `legacy heading override does not prevent restoring settings and annotations`() {
+        val original = writeArchive(document(book("a")))
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { zip ->
+            ZipInputStream(ByteArrayInputStream(original)).use { input ->
+                while (true) {
+                    val entry = input.nextEntry ?: break
+                    val bytes = input.readBytes()
+                    zip.putNextEntry(ZipEntry(entry.name))
+                    zip.write(if (entry.name == "settings.json") {
+                        """{"reader":{"fontSizeSp":24},"app":{"centerHeadings":true,"dailyGoalMinutes":45}}""".toByteArray()
+                    } else bytes)
+                    zip.closeEntry()
+                }
+            }
+        }
+        val restored = BackupArchive.read(ByteArrayInputStream(out.toByteArray()), booksDir, coversDir)
+        assertEquals(24f, restored.settings?.reader?.fontSizeSp)
+        assertEquals(45, restored.settings?.app?.dailyGoalMinutes)
+        assertEquals("a line worth keeping", restored.document.books.single().quotes.single().text)
+        assertEquals("Worth every page.", restored.document.books.single().review)
     }
 
     @Test
@@ -331,7 +383,7 @@ class BackupArchiveTest {
     }
 
     @Test
-    fun `settings from before the redesign decode with new defaults`() {
+    fun `sparse older settings retain their previous defaults`() {
         val out = ByteArrayOutputStream()
         ZipOutputStream(out).use { zip ->
             zip.putNextEntry(ZipEntry("manifest.json"))
@@ -353,12 +405,23 @@ class BackupArchiveTest {
             booksDir,
             coversDir,
         ).settings
-        val app = requireNotNull(restored) { "Expected old settings to decode" }.app
+        val saved = requireNotNull(restored) { "Expected old settings to decode" }
+        val app = saved.app
+
+        assertEquals(20f, saved.reader.fontSizeSp)
+        assertTrue(saved.reader.justify)
+        assertTrue(saved.reader.hyphenation)
+        assertFalse(saved.reader.bookStyles)
+        assertEquals(PageMargins.NORMAL, saved.reader.pageMargins)
+        assertEquals(ReadingMode.SCROLL, saved.reader.readingMode)
+        assertFalse(saved.reader.dropCaps)
+        assertEquals(PageTurnAnimation.SLIDE, saved.reader.pageTurnAnimation)
 
         assertEquals(AppTheme.OLED, app.theme)
         assertFalse(app.haptics)
         assertTrue(app.followSystemTheme)
         assertEquals(LightThemeDefault.LIGHT, app.lightThemeDefault)
+        assertTrue(app.autoInvertImages)
         assertFalse(app.dynamicColor)
         assertEquals(StartupDestination.LIBRARY, app.startupDestination)
         assertEquals(AppLockDelay.ONE_MINUTE, app.appLockDelay)

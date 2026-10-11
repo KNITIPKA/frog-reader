@@ -8,7 +8,8 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
-import android.media.ExifInterface
+import androidx.exifinterface.media.ExifInterface
+import androidx.core.graphics.createBitmap
 import android.net.Uri
 import android.util.Base64
 import java.io.ByteArrayOutputStream
@@ -57,7 +58,7 @@ internal fun readAvatarPhoto(resolver: ContentResolver, uri: Uri): Bitmap {
 
 internal fun encodeAvatar(bitmap: Bitmap, crop: AvatarCrop): String {
     val rect = crop.pixels(bitmap.width, bitmap.height)
-    val result = Bitmap.createBitmap(512, 512, Bitmap.Config.ARGB_8888)
+    val result = createBitmap(512, 512, Bitmap.Config.ARGB_8888)
     try {
         Canvas(result).apply {
             drawColor(Color.WHITE)

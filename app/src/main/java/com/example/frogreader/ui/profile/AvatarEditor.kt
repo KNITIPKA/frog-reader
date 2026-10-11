@@ -26,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -133,10 +134,11 @@ internal fun AvatarEditor(
                             )
                         }
                         Text(stringResource(R.string.profile_photo_zoom), style = MaterialTheme.typography.labelLarge)
+                        val zoomSliderState = remember { SliderState(trackRange = 1f..5f) }
+                        zoomSliderState.value = zoom
                         Slider(
-                            value = zoom,
+                            state = zoomSliderState,
                             onValueChange = { updateCrop(crop.copy(zoom = it).constrained(photo.width, photo.height)) },
-                            valueRange = 1f..5f,
                             enabled = !state.saving,
                             modifier = Modifier.semantics { contentDescription = scaleDescription },
                         )

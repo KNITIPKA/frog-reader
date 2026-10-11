@@ -51,6 +51,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -164,13 +165,9 @@ fun ScanFolderScreen(
                         )
                         Text(
                             text = if (state.scanning) {
-                                stringResource(R.string.scan_looking, state.rows.size)
+                                pluralStringResource(R.plurals.scan_looking, state.rows.size, state.rows.size)
                             } else {
-                                stringResource(
-                                    R.string.scan_found,
-                                    state.rows.size,
-                                    state.alreadyInLibraryCount,
-                                )
+                                pluralStringResource(R.plurals.scan_found, state.rows.size, state.rows.size, state.alreadyInLibraryCount)
                             },
                             fontSize = 12.sp,
                             lineHeight = 16.sp,
@@ -245,7 +242,7 @@ fun ScanFolderScreen(
                     ) {
                         SectionLabel(
                             text = if (selected > 0) {
-                                stringResource(R.string.scan_selected_count, selected)
+                                pluralStringResource(R.plurals.scan_selected_count, selected, selected)
                             } else {
                                 stringResource(R.string.scan_section_found)
                             },
@@ -368,7 +365,7 @@ fun ScanFolderScreen(
                     ) {
                         Text(
                             text = if (selected > 0) {
-                                stringResource(R.string.scan_add_n, selected).uppercase()
+                                pluralStringResource(R.plurals.scan_add_n, selected, selected).uppercase()
                             } else {
                                 stringResource(R.string.scan_add_none).uppercase()
                             },

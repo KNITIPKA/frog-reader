@@ -31,8 +31,14 @@ object SelectionHitRules {
     /** How far from a handle's center a touch may land and still grab it. */
     val HANDLE_GRAB_RADIUS = 28.dp
 
-    /** Width of the screen-edge band that turns pages / scrolls while dragging. */
-    val EDGE_BAND = 56.dp
+    /** Page turns require reaching the outer margin, clear of ordinary words. */
+    val PAGE_EDGE_BAND = 24.dp
+
+    /** Minimum deliberate movement towards a page edge before a turn can start. */
+    val PAGE_ADVANCE_MIN_TRAVEL = 6.dp
+
+    /** Width of the top/bottom band that scrolls while dragging. */
+    val SCROLL_EDGE_BAND = 56.dp
 
     /** Fastest auto-scroll in scroll mode, per frame at 60 Hz. */
     val AUTO_SCROLL_MAX_PER_FRAME = 14.dp

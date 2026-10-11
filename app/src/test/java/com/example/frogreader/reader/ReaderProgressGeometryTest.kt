@@ -54,6 +54,25 @@ class ReaderProgressGeometryTest {
     }
 
     @Test
+    fun `regular style uses fallback even for a small chapter list on a wide screen`() {
+        val stops = listOf(0f, 0.2f, 0.5f, 0.9f, 1f)
+        for (width in listOf(232f, 305f, 720f)) {
+            assertTrue(ReaderProgressLayout(stops, width, positionCount = 101).segmented)
+            val layout = ReaderProgressLayout(stops, width, positionCount = 101, forceContinuous = true)
+            assertFalse(layout.segmented)
+            assertEquals(listOf(0.2f, 0.5f, 0.9f), layout.segmentPlan.fallbackTicks)
+            assertEquals(5, layout.chapters.size)
+            for (fraction in listOf(0f, 0.17f, 0.6f, 0.93f, 1f)) {
+                assertEquals(fraction, layout.trackFraction(fraction), 0f)
+                assertEquals(fraction, layout.bookFraction(fraction), 0.00001f)
+                assertSame(layout, layout.focused(fraction, expanded = true))
+            }
+            assertEquals(0.34f, layout.bookFraction(0.337f), 0.00001f)
+            assertEquals(4, layout.chapters.indexAt(1f))
+        }
+    }
+
+    @Test
     fun `fallback begins when the available width cannot support readable segments`() {
         for (count in listOf(38, 100, 200, 1000)) {
             val stops = List(count) { it / count.toFloat() }

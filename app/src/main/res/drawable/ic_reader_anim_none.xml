@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The same page silhouette, at rest. Text is transparent in every theme. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="36dp" android:height="36dp"
+    android:viewportWidth="40" android:viewportHeight="40">
+    <path android:fillColor="@android:color/black"
+        android:fillType="evenOdd"
+        android:pathData="M11.8,3 H28.2 Q32,3 32,6.8 V31.2 Q32,35 28.2,35 H11.8 Q8,35 8,31.2 V6.8 Q8,3 11.8,3 Z M14.2,10.8 H25.8 A1.2,1.2 0,0 1,25.8 13.2 H14.2 A1.2,1.2 0,0 1,14.2 10.8 Z M14.2,15.6 H25.8 A1.2,1.2 0,0 1,25.8 18 H14.2 A1.2,1.2 0,0 1,14.2 15.6 Z M14.2,20.4 H25.8 A1.2,1.2 0,0 1,25.8 22.8 H14.2 A1.2,1.2 0,0 1,14.2 20.4 Z" />
+</vector>

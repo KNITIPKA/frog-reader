@@ -39,4 +39,15 @@ internal class ReaderContentsTree(depths: List<Int>) {
             if (isGroup[index] && isCollapsed(index)) hiddenBelow = depth[index]
         }
     }
+
+    /** Map a navigation entry to a lazy row, falling back to its visible parent. */
+    fun visiblePositionOf(index: Int?, visibleIndices: List<Int>): Int {
+        var entry = index?.takeIf { it in depth.indices } ?: return 0
+        while (entry >= 0) {
+            val position = visibleIndices.binarySearch(entry)
+            if (position >= 0) return position
+            entry = parent[entry]
+        }
+        return 0
+    }
 }

@@ -1,6 +1,9 @@
 package com.example.frogreader.data
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.content.res.Configuration
+import androidx.datastore.core.DataMigration
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
@@ -8,10 +11,15 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.frogreader.data.model.BackupMode
+import com.example.frogreader.data.model.ReaderChromeStyle
+import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
+private const val BOOT_PREFS = "boot_hints"
+
+/** SANS is the stable stored identifier for the bundled IBM Plex Sans family. */
 @kotlinx.serialization.Serializable
 enum class ReaderFont { LITERATA, SERIF, SANS, CUSTOM }
 @kotlinx.serialization.Serializable
@@ -21,9 +29,9 @@ enum class ReadingMode { SCROLL, PAGES }
 @kotlinx.serialization.Serializable
 enum class PageMargins { NARROW, NORMAL, WIDE }
 
-/** Page-turn animation style (visual stubs for now — only SLIDE is wired). */
+/** Page-turn animation style. CASCADE slides a rounded sheet over parallax content. */
 @kotlinx.serialization.Serializable
-enum class PageTurnAnimation { SLIDE, CASCADE, PAGE_CURL }
+enum class PageTurnAnimation { SLIDE, CASCADE, PAGE_CURL, NONE }
 
 /** One theme for the whole app (every screen and the reading surface). */
 @kotlinx.serialization.Serializable
@@ -61,20 +69,22 @@ data class ReaderSettings(
     val font: ReaderFont = ReaderFont.LITERATA,
     /** Path of the user's own font file (ReaderFont.CUSTOM). */
     val customFontPath: String? = null,
-    val justify: Boolean = true,
-    val hyphenation: Boolean = true,
+    val justify: Boolean = false,
+    val hyphenation: Boolean = false,
     /**
      * Render the book the way its publisher designed it: embedded fonts,
      * the book's own alignment, indents, line spacing and hyphenation
      * (where the file actually specifies them) win over the user settings.
      */
-    val bookStyles: Boolean = false,
-    val pageMargins: PageMargins = PageMargins.NORMAL,
-    val readingMode: ReadingMode = ReadingMode.SCROLL,
+    val bookStyles: Boolean = true,
+    val pageMargins: PageMargins = PageMargins.WIDE,
+    val readingMode: ReadingMode = ReadingMode.PAGES,
     /** Every chapter begins on a fresh page (paged mode). */
     val startChaptersOnNewPage: Boolean = true,
-    /** Page footer counts pages left in the chapter instead of the book. */
+    /** Page footer counts pages left in the chapter instead of showing the page number. */
     val showChapterPagesLeft: Boolean = false,
+    /** Show a counter at the bottom of each reading page. */
+    val showPageCounter: Boolean = true,
     /** Strip [53]-style footnote markers from the text entirely. */
     val hideFootnotes: Boolean = false,
     /**
@@ -87,12 +97,9 @@ data class ReaderSettings(
      * Draw the decorated initials the book's CSS asks for. Publisher's
      * formatting switches these on too — the toggle shows that.
      */
-    val dropCaps: Boolean = false,
-    /** Chosen page-turn animation (UI stub until animations are built). */
-    val pageTurnAnimation: PageTurnAnimation = PageTurnAnimation.SLIDE,
-    /** Runtime projection of the app preference; never saved as a book override. */
-    @kotlinx.serialization.Transient
-    val centerHeadings: Boolean = false,
+    val dropCaps: Boolean = true,
+    /** Chosen page-turn animation in paged mode. */
+    val pageTurnAnimation: PageTurnAnimation = PageTurnAnimation.CASCADE,
 )
 
 /** App-wide settings (theme, feedback, behavior, privacy). */
@@ -100,13 +107,13 @@ data class ReaderSettings(
 data class AppSettings(
     val theme: AppTheme = AppTheme.WHITE,
     val followSystemTheme: Boolean = true,
-    val lightThemeDefault: LightThemeDefault = LightThemeDefault.LIGHT,
+    val lightThemeDefault: LightThemeDefault = LightThemeDefault.BEIGE,
     val dynamicColor: Boolean = false,
     val startupDestination: StartupDestination = StartupDestination.LIBRARY,
     val haptics: Boolean = true,
     val keepScreenOn: Boolean = true,
     val volumeKeyPaging: Boolean = true,
-    val centerHeadings: Boolean = false,
+    val readerChromeStyle: ReaderChromeStyle = ReaderChromeStyle.FLOATING,
     val autoHideReturnButton: Boolean = true,
     /** Flattened PROCESS_TEXT activity component; null means choose on first use. */
     val defaultTranslator: String? = null,
@@ -114,7 +121,7 @@ data class AppSettings(
     val appLockDelay: AppLockDelay = AppLockDelay.ONE_MINUTE,
     val backupMode: BackupMode = BackupMode.DATA,
     /** Automatically invert images when OLED theme is active. */
-    val autoInvertImages: Boolean = true,
+    val autoInvertImages: Boolean = false,
     /** Daily reading goal in minutes (for the stats screen). */
     val dailyGoalMinutes: Int = 30,
     val viewMode: LibraryViewMode = LibraryViewMode.GRID,
@@ -135,9 +142,74 @@ fun AppSettings.effectiveTheme(systemDark: Boolean): AppTheme {
     }
 }
 
-private val Context.settingsDataStore by preferencesDataStore(name = "reader_settings")
+/** Discard the retired override once, without changing any other saved preferences. */
+internal object LegacyHeadingPreferenceMigration : DataMigration<Preferences> {
+    private val key = booleanPreferencesKey("center_headings")
+
+    override suspend fun shouldMigrate(currentData: Preferences): Boolean = currentData.contains(key)
+
+    override suspend fun migrate(currentData: Preferences): Preferences =
+        currentData.toMutablePreferences().apply { remove(key) }.toPreferences()
+
+    override suspend fun cleanUp() = Unit
+}
+
+/** Package update history also identifies existing readers who never changed a preference. */
+private fun Context.installHistory(hasSavedPreferences: Boolean = false): FirstLaunchHistory {
+    @Suppress("DEPRECATION")
+    val packageInfo = runCatching {
+        packageManager.getPackageInfo(packageName, 0)
+    }.getOrNull()
+    return FirstLaunchHistory(
+        hasSavedPreferences = hasSavedPreferences,
+        hasSavedAppearance = getSharedPreferences(BOOT_PREFS, Context.MODE_PRIVATE).all.isNotEmpty(),
+        hasReaderData = existingReaderFiles(filesDir),
+        wasUpdatedInstall = packageInfo != null &&
+            packageInfo.lastUpdateTime > packageInfo.firstInstallTime,
+    )
+}
+
+private val Context.settingsDataStore by preferencesDataStore(
+    name = "reader_settings",
+    produceMigrations = { context ->
+        listOf(
+            NewReaderDefaultsMigration { context.installHistory().isExistingReader },
+            LegacyHeadingPreferenceMigration,
+        )
+    },
+)
 
 class SettingsRepository(private val context: Context) {
+
+    private val firstLaunch by lazy {
+        FirstLaunchRepository(
+            stateFile = File(context.noBackupFilesDir, "welcome_state.json"),
+            showOnEveryLaunch = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0,
+            hasExistingData = {
+                context.installHistory(
+                    hasSavedPreferences = context.settingsDataStore.data.first().hasSavedUserPreferences(),
+                ).isExistingReader
+            },
+        )
+    }
+
+    suspend fun shouldShowWelcome(completedForLaunch: Boolean = false): Boolean =
+        firstLaunch.shouldShowWelcome(completedForLaunch)
+
+    /** Commit only the welcome's choices before recording device-local completion. */
+    suspend fun completeWelcome(draft: AppSettings) {
+        firstLaunch.finish(draft) { selectedDraft ->
+            context.settingsDataStore.edit { prefs ->
+                val selected = prefs.readAppSettings().withWelcomeChoices(selectedDraft)
+                prefs[Keys.readerChromeStyle] = selected.readerChromeStyle.name
+                prefs[Keys.startupDestination] = selected.startupDestination.name
+                prefs[Keys.appTheme] = selected.theme.name
+                prefs[Keys.followSystemTheme] = selected.followSystemTheme
+                prefs[Keys.lightThemeDefault] = selected.lightThemeDefault.name
+                prefs[Keys.dynamicColor] = selected.dynamicColor
+            }
+        }
+    }
 
     private object Keys {
         val fontSize = floatPreferencesKey("font_size_sp")
@@ -151,6 +223,7 @@ class SettingsRepository(private val context: Context) {
         val readingMode = stringPreferencesKey("reading_mode")
         val chapterNewPage = booleanPreferencesKey("chapter_new_page")
         val chapterPagesLeft = booleanPreferencesKey("chapter_pages_left")
+        val showPageCounter = booleanPreferencesKey("show_page_counter")
         val hideFootnotes = booleanPreferencesKey("hide_footnotes")
         val invertImages = booleanPreferencesKey("invert_images")
         val dropCaps = booleanPreferencesKey("drop_caps")
@@ -166,7 +239,7 @@ class SettingsRepository(private val context: Context) {
         val haptics = booleanPreferencesKey("haptics")
         val keepScreenOn = booleanPreferencesKey("keep_screen_on")
         val volumeKeyPaging = booleanPreferencesKey("volume_key_paging")
-        val centerHeadings = booleanPreferencesKey("center_headings")
+        val readerChromeStyle = stringPreferencesKey("reader_chrome_style")
         val autoHideReturnButton = booleanPreferencesKey("auto_hide_return_button")
         val defaultTranslator = stringPreferencesKey("default_translator")
         val appLock = booleanPreferencesKey("app_lock")
@@ -230,6 +303,7 @@ class SettingsRepository(private val context: Context) {
         return result
     }
 
+    /** Legacy global reader payload for backup compatibility; live settings belong to each Book. */
     val settings: Flow<ReaderSettings> =
         context.settingsDataStore.data.map { it.readReaderSettings() }
 
@@ -261,6 +335,7 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.readingMode] = updated.readingMode.name
             prefs[Keys.chapterNewPage] = updated.startChaptersOnNewPage
             prefs[Keys.chapterPagesLeft] = updated.showChapterPagesLeft
+            prefs[Keys.showPageCounter] = updated.showPageCounter
             prefs[Keys.hideFootnotes] = updated.hideFootnotes
             prefs[Keys.invertImages] = updated.invertImages
             prefs[Keys.dropCaps] = updated.dropCaps
@@ -279,7 +354,7 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.haptics] = updated.haptics
             prefs[Keys.keepScreenOn] = updated.keepScreenOn
             prefs[Keys.volumeKeyPaging] = updated.volumeKeyPaging
-            prefs[Keys.centerHeadings] = updated.centerHeadings
+            prefs[Keys.readerChromeStyle] = updated.readerChromeStyle.name
             prefs[Keys.autoHideReturnButton] = updated.autoHideReturnButton
             updated.defaultTranslator?.let { prefs[Keys.defaultTranslator] = it }
                 ?: prefs.remove(Keys.defaultTranslator)
@@ -310,6 +385,7 @@ class SettingsRepository(private val context: Context) {
             readingMode = enumOrDefault(this[Keys.readingMode], defaults.readingMode),
             startChaptersOnNewPage = this[Keys.chapterNewPage] ?: defaults.startChaptersOnNewPage,
             showChapterPagesLeft = this[Keys.chapterPagesLeft] ?: defaults.showChapterPagesLeft,
+            showPageCounter = this[Keys.showPageCounter] ?: defaults.showPageCounter,
             hideFootnotes = this[Keys.hideFootnotes] ?: defaults.hideFootnotes,
             invertImages = this[Keys.invertImages] ?: defaults.invertImages,
             dropCaps = this[Keys.dropCaps] ?: defaults.dropCaps,
@@ -337,7 +413,7 @@ class SettingsRepository(private val context: Context) {
             haptics = this[Keys.haptics] ?: defaults.haptics,
             keepScreenOn = this[Keys.keepScreenOn] ?: defaults.keepScreenOn,
             volumeKeyPaging = this[Keys.volumeKeyPaging] ?: defaults.volumeKeyPaging,
-            centerHeadings = this[Keys.centerHeadings] ?: defaults.centerHeadings,
+            readerChromeStyle = enumOrDefault(this[Keys.readerChromeStyle], defaults.readerChromeStyle),
             autoHideReturnButton = this[Keys.autoHideReturnButton] ?: defaults.autoHideReturnButton,
             defaultTranslator = this[Keys.defaultTranslator],
             appLock = this[Keys.appLock] ?: defaults.appLock,
@@ -356,7 +432,6 @@ class SettingsRepository(private val context: Context) {
         name?.let { runCatching { enumValueOf<T>(it) }.getOrNull() } ?: default
 
     companion object {
-        private const val BOOT_PREFS = "boot_hints"
         private const val KEY_THEME = "app_theme"
         private const val KEY_DYNAMIC_COLOR = "dynamic_color"
 
@@ -373,7 +448,11 @@ class SettingsRepository(private val context: Context) {
         fun bootTheme(context: Context): AppTheme {
             val name = context.getSharedPreferences(BOOT_PREFS, Context.MODE_PRIVATE)
                 .getString(KEY_THEME, null)
-            return name?.let { runCatching { AppTheme.valueOf(it) }.getOrNull() } ?: AppTheme.WHITE
+            return name?.let { runCatching { AppTheme.valueOf(it) }.getOrNull() }
+                ?: AppSettings().effectiveTheme(
+                    systemDark = context.resources.configuration.uiMode and
+                        Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES,
+                )
         }
 
         fun bootDynamicColor(context: Context): Boolean =

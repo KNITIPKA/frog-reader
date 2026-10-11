@@ -2,23 +2,29 @@ package com.example.frogreader.ui.reader
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.union
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.FormatQuote
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -35,15 +41,20 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.frogreader.R
+import com.example.frogreader.data.model.Quote
+import com.example.frogreader.data.model.QuoteColor
 import com.example.frogreader.ui.reader.selection.PillSide
 import com.example.frogreader.ui.reader.selection.SelectionController
 import com.example.frogreader.ui.reader.selection.SelectionHitRules
 import com.example.frogreader.ui.reader.selection.rememberFrameTicker
 import com.example.frogreader.ui.reader.selection.rememberSelectionOnScreen
+import com.example.frogreader.ui.reader.selection.selectedQuoteIds
+import com.example.frogreader.ui.reader.selection.availableQuoteColors
 
 /** Gap between the selection and the pill. */
 private val TOOLBAR_GAP = 12.dp
@@ -55,7 +66,7 @@ private val TOOLBAR_INSET = 8.dp
 private const val APPEAR_FROM = 0.86f
 
 /**
- * Floating Quote / Translate / Copy pill above the selection.
+ * Floating quote, delete, translate and copy actions above the selection.
  *
  * It rides on the reader's own selection, not on `LocalTextToolbar`: the
  * platform's toolbar callback only exists while Compose owns the selection,
@@ -83,12 +94,22 @@ private const val APPEAR_FROM = 0.86f
 fun SelectionToolbar(
     controller: SelectionController,
     colors: ReaderColors,
-    onQuote: () -> Unit,
+    quotes: List<Quote>,
+    onRemoveQuotes: (Set<String>) -> Unit,
+    onQuote: (QuoteColor) -> Unit,
     onTranslate: () -> Unit,
     onCopy: () -> Unit,
 ) {
     if (!controller.active || controller.dragging) return
 
+    // Read the range only in this small subtree, after the drag has ended.
+    // Character-by-character changes must not recompose the reading surface.
+    val selectedQuotes = remember(controller.selection, quotes) {
+        selectedQuoteIds(controller.selection, quotes)
+    }
+    val availableColors = remember(controller.selection, quotes) {
+        availableQuoteColors(controller.selection, quotes)
+    }
     val onScreen = rememberSelectionOnScreen(controller)
     val frame = rememberFrameTicker()
     val density = LocalDensity.current
@@ -114,6 +135,9 @@ fun SelectionToolbar(
         val insetLeft = safeArea.getLeft(density, layoutDirection) + marginPx
         val insetRight = safeArea.getRight(density, layoutDirection) + marginPx
         val screen = IntSize(constraints.maxWidth, constraints.maxHeight)
+        val availableWidth = with(density) {
+            (screen.width - insetLeft - insetRight).coerceAtLeast(0f).toDp()
+        }
 
         if (!visible) return@BoxWithConstraints
 
@@ -131,6 +155,7 @@ fun SelectionToolbar(
             shape = RoundedCornerShape(24.dp),
             shadowElevation = 6.dp,
             modifier = Modifier
+                .widthIn(max = availableWidth)
                 .onSizeChanged { pill = it }
                 .graphicsLayer {
                     // Read the tick and the selection bounds INSIDE the layer
@@ -187,38 +212,108 @@ fun SelectionToolbar(
                     )
                 },
         ) {
-            Row(
-                modifier = Modifier
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 4.dp),
-            ) {
-                ToolbarAction(
-                    label = stringResource(R.string.selection_quote),
-                    icon = { Icon(Icons.Rounded.FormatQuote, contentDescription = null) },
-                    onClick = onQuote,
-                )
-                ToolbarAction(
-                    label = stringResource(R.string.selection_translate),
-                    icon = { Icon(Icons.Rounded.Translate, contentDescription = null) },
-                    onClick = onTranslate,
-                )
-                ToolbarAction(
-                    label = stringResource(R.string.selection_copy),
-                    icon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
-                    onClick = onCopy,
-                )
-            }
+            SelectionToolbarActions(colors, selectedQuotes, availableColors, onRemoveQuotes, onQuote, onTranslate, onCopy)
         }
     }
 }
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+internal fun SelectionToolbarActions(
+    colors: ReaderColors,
+    selectedQuotes: Set<String>,
+    availableColors: List<QuoteColor>,
+    onRemoveQuotes: (Set<String>) -> Unit,
+    onQuote: (QuoteColor) -> Unit,
+    onTranslate: () -> Unit,
+    onCopy: () -> Unit,
+) {
+    // Keep every action visible, including when deletion adds a fourth one.
+    // A wide scrolling pill used to clip Copy and, with large text, even Quote.
+    FlowRow(
+        modifier = Modifier.padding(horizontal = 4.dp),
+        maxItemsInEachRow = if (selectedQuotes.isNotEmpty()) 2 else 3,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        if (selectedQuotes.isNotEmpty()) {
+            ToolbarAction(
+                label = pluralStringResource(R.plurals.selection_delete_quotes, selectedQuotes.size, selectedQuotes.size),
+                icon = { Icon(Icons.Rounded.DeleteOutline, contentDescription = null) },
+                onClick = { onRemoveQuotes(selectedQuotes) },
+            )
+            var choosingColor by remember { mutableStateOf(false) }
+            Box {
+                ToolbarAction(
+                    label = stringResource(R.string.selection_quote),
+                    icon = { Icon(Icons.Rounded.FormatQuote, contentDescription = null) },
+                    enabled = availableColors.isNotEmpty(),
+                    onClick = { choosingColor = true },
+                )
+                DropdownMenu(
+                    expanded = choosingColor,
+                    onDismissRequest = { choosingColor = false },
+                    containerColor = colors.chrome,
+                ) {
+                    QuoteColorChoices(colors, availableColors) { color ->
+                        choosingColor = false
+                        onQuote(color)
+                    }
+                }
+            }
+        } else {
+            ToolbarAction(
+                label = stringResource(R.string.selection_quote),
+                icon = { Icon(Icons.Rounded.FormatQuote, contentDescription = null) },
+                onClick = { onQuote(QuoteColor.DEFAULT) },
+            )
+        }
+        ToolbarAction(
+            label = stringResource(R.string.selection_translate),
+            icon = { Icon(Icons.Rounded.Translate, contentDescription = null) },
+            onClick = onTranslate,
+        )
+        ToolbarAction(
+            label = stringResource(R.string.selection_copy),
+            icon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
+            onClick = onCopy,
+        )
+    }
+}
+
+@Composable
+internal fun QuoteColorChoices(colors: ReaderColors, availableColors: List<QuoteColor>, onQuote: (QuoteColor) -> Unit) {
+    Text(
+        stringResource(R.string.selection_quote_another_color),
+        style = MaterialTheme.typography.labelMedium,
+        color = colors.onChromeVariant,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+    )
+    availableColors.forEach { color ->
+        DropdownMenuItem(
+            text = { Text(stringResource(color.labelRes), color = colors.onChrome) },
+            leadingIcon = { Canvas(Modifier.size(20.dp)) { drawCircle(colors.quoteInk(color)) } },
+            onClick = { onQuote(color) },
+        )
+    }
+}
+
+private val QuoteColor.labelRes: Int
+    get() = when (this) {
+        QuoteColor.DEFAULT -> R.string.quote_color_default
+        QuoteColor.BLUE -> R.string.quote_color_blue
+        QuoteColor.ROSE -> R.string.quote_color_rose
+        QuoteColor.AMBER -> R.string.quote_color_amber
+        QuoteColor.VIOLET -> R.string.quote_color_violet
+    }
 
 @Composable
 private fun ToolbarAction(
     label: String,
     icon: @Composable () -> Unit,
     onClick: () -> Unit,
+    enabled: Boolean = true,
 ) {
-    TextButton(onClick = onClick) {
+    TextButton(onClick = onClick, enabled = enabled) {
         icon()
         Text(
             text = label,

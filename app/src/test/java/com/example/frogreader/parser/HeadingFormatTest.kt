@@ -13,7 +13,6 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -36,8 +35,8 @@ class HeadingFormatTest {
     }
 
     private fun checkFormat(format: String) {
-        // 01: H1-H6 have neutral defaults, never body-shrinking small headings.
-        assertDefaultHierarchy(parse(format, styled = false))
+        // Native FB2 titles are centered; HTML headings use logical start.
+        assertDefaultHierarchy(parse(format, styled = false), if (format == "fb2") TextAlign.Center else TextAlign.Start)
         // 02: Authored centering, size, line spacing and zero margins survive.
         val headings = parse(format, styled = true).chapters.flatMap { it.elements }
             .filterIsInstance<ContentElement.Heading>()
@@ -54,12 +53,12 @@ class HeadingFormatTest {
         }
     }
 
-    private fun assertDefaultHierarchy(content: BookContent) {
+    private fun assertDefaultHierarchy(content: BookContent, alignment: TextAlign = TextAlign.Start) {
         val headings = content.chapters.flatMap { it.elements }.filterIsInstance<ContentElement.Heading>()
         assertEquals((1..6).toList(), headings.map { it.level })
         val sizes = headings.map { heading ->
             val style = ReaderMetrics.textStyle(heading, settings, 20f)
-            assertEquals(TextAlign.Start, style.textAlign)
+            assertEquals(alignment, style.textAlign)
             assertTrue(style.fontSize.value >= 20f)
             style.fontSize.value
         }
@@ -81,8 +80,12 @@ class HeadingFormatTest {
         }
         val css = if (styled) "h1,h2,h3,h4,h5,h6 { $authorCss }" else ""
         val body = (1..6).joinToString("") { "<h$it>Case $it</h$it><p>Body $it.</p>" }
+        return parseHtml(format, body, css)
+    }
+
+    private fun parseHtml(format: String, body: String, css: String = ""): BookContent {
         val html = "<html><head><style>$css</style></head><body>$body</body></html>"
-        val source = File(temp.root, "$styled.$format")
+        val source = temp.newFile("${temp.root.listFiles()!!.size}.$format")
         when (format) {
             "epub" -> ZipOutputStream(source.outputStream()).use { zip ->
                 fun entry(name: String, text: String) {
@@ -103,5 +106,81 @@ class HeadingFormatTest {
             ))
         }
         return BookParsers.parseContent(source, if (format == "epub") BookFormat.EPUB else BookFormat.MOBI, temp.root)
+    }
+
+    @Test
+    fun `EPUB MOBI6 and KF8 preserve inherited and explicit heading alignments`() {
+        val alignments = listOf(
+            "center" to TextAlign.Center, "left" to TextAlign.Left, "right" to TextAlign.Right,
+            "start" to TextAlign.Start, "end" to TextAlign.End, "justify" to TextAlign.Justify,
+        )
+        for (format in listOf("epub", "mobi", "azw3")) for ((cssAlign, expected) in alignments) {
+            val body = (1..6).joinToString("") { "<h$it>Inherited $it</h$it>" }
+            val headings = parseHtml(format, body, "body { text-align:$cssAlign }")
+                .chapters.flatMap { it.elements }.filterIsInstance<ContentElement.Heading>()
+            assertEquals(6, headings.size)
+            for (heading in headings) for (publisher in listOf(false, true)) {
+                assertEquals("$format ${heading.text} $cssAlign", expected,
+                    ReaderMetrics.textStyle(heading, settings.copy(bookStyles = publisher), 20f).textAlign)
+            }
+        }
+    }
+
+    @Test
+    fun `legacy heading hints override inherited CSS and yield to their own CSS`() {
+        val body = """
+            <h1 align="center">Own hint</h1>
+            <div align="right"><h2>Wrapper hint</h2></div>
+            <center><h3>Center element</h3><h4 style="text-align:left">CSS wins</h4></center>
+            <div align="center" style="text-align:right"><h5>Wrapper CSS wins</h5></div>
+            <h6 align="center" style="text-align:inherit">Explicit inheritance</h6>
+        """.trimIndent()
+        val expected = listOf(TextAlign.Center, TextAlign.Right, TextAlign.Center, TextAlign.Left, TextAlign.Right, TextAlign.Justify)
+        for (format in listOf("epub", "mobi", "azw3")) {
+            val headings = parseHtml(format, body, "body { text-align:justify }")
+                .chapters.flatMap { it.elements }.filterIsInstance<ContentElement.Heading>()
+            assertEquals(6, headings.size)
+            for (publisher in listOf(false, true)) {
+                assertEquals(format, expected, headings.map {
+                    ReaderMetrics.textStyle(it, settings.copy(bookStyles = publisher), 20f).textAlign
+                })
+            }
+        }
+    }
+
+    @Test
+    fun `FB2 subtitles and poem titles retain their native centering`() {
+        val xml = """<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
+            <description><title-info><book-title>Titles</book-title></title-info></description>
+            <body><section><title><p>Chapter</p></title><subtitle>Subtitle</subtitle>
+            <poem><title><p>Poem</p></title><stanza><title><p>Stanza</p></title><v>Verse</v></stanza></poem>
+            </section></body></FictionBook>"""
+        val headings = Fb2Parser.parseContent({ xml.byteInputStream() }, temp.root)
+            .chapters.flatMap { it.elements }.filterIsInstance<ContentElement.Heading>()
+        assertEquals(listOf("Chapter", "Subtitle", "Poem", "Stanza"), headings.map { it.text })
+        for (heading in headings) for (publisher in listOf(false, true)) {
+            assertEquals(TextAlign.Center, ReaderMetrics.textStyle(heading, settings.copy(bookStyles = publisher), 20f).textAlign)
+        }
+    }
+
+    @Test
+    fun `FB2 preserves each authored title paragraph alignment and styled words`() {
+        val xml = """<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
+            <stylesheet type="text/css">title { text-align:right } subtitle { text-align:initial }</stylesheet>
+            <description><title-info><book-title>Titles</book-title></title-info></description>
+            <body><section><title><p style="text-align:left">Left <emphasis>word</emphasis></p>
+            <p>Inherited right</p><p style="text-align:center">Centered</p></title><subtitle>Start</subtitle>
+            </section></body></FictionBook>"""
+        val headings = Fb2Parser.parseContent({ xml.byteInputStream() }, temp.root)
+            .chapters.flatMap { it.elements }.filterIsInstance<ContentElement.Heading>()
+        val title = headings.first()
+        assertEquals("Left word\nInherited right\nCentered", title.text)
+        assertEquals(listOf(TextAlign.Left, TextAlign.Right, TextAlign.Center), title.styledText.paragraphStyles.map { it.item.textAlign })
+        assertEquals(listOf("Left word", "Inherited right", "Centered"), title.styledText.paragraphStyles.map {
+            title.text.substring(it.start, it.end)
+        })
+        assertTrue(title.styledText.spanStyles.any { it.item.fontStyle == androidx.compose.ui.text.font.FontStyle.Italic })
+        assertEquals(TextAlign.Right, ReaderMetrics.textStyle(title, settings, 20f).textAlign)
+        assertEquals(TextAlign.Start, ReaderMetrics.textStyle(headings.last(), settings, 20f).textAlign)
     }
 }

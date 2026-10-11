@@ -347,8 +347,8 @@ internal val SelectionCheckDiameter = 26.dp
 @Composable
 internal fun SelectionCheck(
     selected: Boolean,
-    enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     val frog = LocalFrogColors.current
     val scheme = MaterialTheme.colorScheme

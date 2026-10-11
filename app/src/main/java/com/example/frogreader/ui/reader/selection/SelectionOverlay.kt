@@ -16,6 +16,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 
@@ -38,21 +40,27 @@ private val HANDLE_RADIUS = SelectionHitRules.HANDLE_RADIUS
  * rest of the time (the whole composable is absent when nothing is selected).
  */
 @Composable
-fun SelectionHandles(controller: SelectionController, color: Color) {
+fun SelectionHandles(controller: SelectionController, color: Color, pageEpoch: Int? = null) {
     if (!controller.active) return
     val radius = with(LocalDensity.current) { HANDLE_RADIUS.toPx() }
     val frame = rememberFrameTicker()
+    var pageSpace by remember { mutableStateOf<LayoutCoordinates?>(null) }
 
-    Canvas(Modifier.fillMaxSize()) {
+    Canvas(Modifier.fillMaxSize().onPlaced { pageSpace = it }) {
         // Read the tick, then the positions, INSIDE the draw block. Caching
         // them in state a frame earlier is what made the handles wobble as
         // the page moved: the text was placed in this frame and the handles
         // still carried the previous frame's coordinates.
         frame.longValue
-        controller.caretOf(SelectionEdge.START)?.let {
+        fun caret(edge: SelectionEdge): Rect? = if (pageEpoch == null) {
+            controller.caretOf(edge)
+        } else {
+            pageSpace?.let { controller.caretOf(edge, it, pageEpoch) }
+        }
+        caret(SelectionEdge.START)?.let {
             drawHandle(it, SelectionEdge.START, radius, color)
         }
-        controller.caretOf(SelectionEdge.END)?.let {
+        caret(SelectionEdge.END)?.let {
             drawHandle(it, SelectionEdge.END, radius, color)
         }
     }

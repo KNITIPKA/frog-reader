@@ -156,7 +156,7 @@ object ReaderMetrics {
     ): Pair<Dp, Dp> {
         val base = when (element) {
             is ContentElement.Paragraph -> when (element.style) {
-                ParagraphStyle.NORMAL -> 3.dp
+                ParagraphStyle.NORMAL -> if (element.block?.isCssTextLine == true) 0.dp else 3.dp
                 else -> 6.dp
             }
 
@@ -188,7 +188,10 @@ object ReaderMetrics {
 
     /** Height of a deliberate blank line ([ContentElement.Spacer]). */
     fun spacerHeight(element: ContentElement.Spacer, fontSize: Float): Dp =
-        (fontSize * element.heightEm.coerceIn(0.3f, 3f)).dp
+        if (element.heightEm == 0f) 0.dp else {
+            (fontSize * (element.heightEm.takeIf { it.isFinite() } ?: 1f)
+                .coerceIn(0.3f, 100f)).dp
+        }
 
     /**
      * Color-less text style for an element; colors are applied at render time.
@@ -228,6 +231,7 @@ object ReaderMetrics {
             } else null,
             fontFamily = bookFamilyFor(block, settings, bookFonts)
                 ?: fontFamilyFor(settings.font, settings.customFontPath),
+            fontFeatureSettings = block?.fontFeatureSettings.takeIf { settings.bookStyles },
             hyphens = if (hyphenate) Hyphens.Auto else Hyphens.None,
             lineBreak = LineBreak.Paragraph,
             // The book's language picks the hyphenation patterns; without it
@@ -318,8 +322,11 @@ object ReaderMetrics {
             else -> kind == ParagraphStyle.NORMAL
         }
         // Publisher mode uses the exact indent width the book asked for.
-        val indentEm = if (settings.bookStyles && block?.firstLineIndentEm != null) {
-            block.firstLineIndentEm.coerceIn(0.4f, 4f)
+        val authoredIndentEm = block?.firstLineIndentEm.takeIf {
+            settings.bookStyles || block?.isCssTextLine == true
+        }
+        val indentEm = if (authoredIndentEm != null) {
+            authoredIndentEm.coerceIn(-8f, 8f)
         } else {
             1.4f
         }
@@ -330,7 +337,10 @@ object ReaderMetrics {
             fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
             fontWeight = if (bold) FontWeight.Bold else null,
             textAlign = align,
-            textIndent = if (wantsIndent && isParagraphStart) {
+            textIndent = if (isParagraphStart &&
+                (wantsIndent || authoredIndentEm != null && authoredIndentEm <= 0f &&
+                    align != TextAlign.Center && align != TextAlign.End)
+            ) {
                 TextIndent(firstLine = (fontSize * indentEm).sp)
             } else {
                 TextIndent.None
@@ -351,8 +361,8 @@ object ReaderMetrics {
         val defaultAlign = if (HeadingDefaults.isOrnament(element.text)) {
             TextAlign.Center
         } else TextAlign.Start
-        // An explicit app-wide user preference overrides publication alignment.
-        val align = if (settings.centerHeadings) TextAlign.Center else when (block?.align) {
+        // Heading alignment belongs to the publication in both reading modes.
+        val align = when (block?.align) {
             BlockAlign.CENTER -> TextAlign.Center
             BlockAlign.END -> TextAlign.End
             BlockAlign.START -> TextAlign.Start
@@ -453,6 +463,8 @@ object ReaderMetrics {
         tableBlock: BlockStyle? = null,
         cellBlock: BlockStyle? = null,
         bookFonts: Map<String, FontFamily> = emptyMap(),
+        /** CSS horizontal text rows retain the body size rather than table defaults. */
+        semanticFontScale: Float = 0.92f,
     ): TextStyle {
         // Table CSS belongs to the grid as a whole; cell AnnotatedString
         // spans then carry only their relative overrides (for example a td
@@ -461,7 +473,7 @@ object ReaderMetrics {
         // function.  Previously Table.block affected only outer margins, so
         // publisher font-size/family/line-height silently vanished.
         val blockScale = cellBlock?.fontScale ?: tableBlock?.fontScale ?: 1f
-        val resolvedSize = fontSize * 0.92f * scale * blockScale
+        val resolvedSize = fontSize * semanticFontScale * scale * blockScale
         val publisherLineHeight = cellBlock?.lineHeightMult ?: tableBlock?.lineHeightMult
         val resolvedLineHeight = if (settings.bookStyles && publisherLineHeight != null) {
             publisherLineHeight
@@ -481,6 +493,8 @@ object ReaderMetrics {
             lineHeight = (resolvedSize * resolvedLineHeight).sp,
             fontFamily = bookFamilyFor(fontBlock, settings, bookFonts)
                 ?: fontFamilyFor(settings.font, settings.customFontPath),
+            fontFeatureSettings = (cellBlock?.fontFeatureSettings ?: tableBlock?.fontFeatureSettings)
+                .takeIf { settings.bookStyles },
             fontWeight = when {
                 resolvedBold == true -> FontWeight.Bold
                 resolvedBold == false -> FontWeight.Normal

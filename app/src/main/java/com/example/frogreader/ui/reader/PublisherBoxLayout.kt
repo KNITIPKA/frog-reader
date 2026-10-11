@@ -8,9 +8,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextIndent
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.sp
 import com.example.frogreader.data.model.PublisherBorderSide
 import com.example.frogreader.data.model.PublisherBorderStyle
 import com.example.frogreader.data.model.PublisherBoxAlign
+import com.example.frogreader.data.model.PublisherBoxStyle
 import kotlin.math.roundToInt
 
 /** Pixel-exact geometry shared by pagination and Compose drawing. */
@@ -20,6 +25,7 @@ internal data class PublisherBoxGeometry(
     val topInsetPx: Int,
     val bottomInsetPx: Int,
     val boxes: List<PublisherDrawBox>,
+    val hangingIndentPx: Int = 0,
 ) {
     val contentWidthPx: Int get() = (contentRightPx - contentLeftPx).coerceAtLeast(1)
 
@@ -57,9 +63,29 @@ internal fun publisherBoxGeometry(
     partStartsElement: Boolean,
     partEndsElement: Boolean,
     enabled: Boolean,
+    inlineWidths: PublisherInlineWidthResolver? = null,
+    viewportHeightPx: Int? = null,
 ): PublisherBoxGeometry {
     val safeWidth = columnWidthPx.coerceAtLeast(1)
-    if (!enabled || boxes.isEmpty()) return PublisherBoxGeometry.empty(safeWidth)
+    if (boxes.isEmpty()) return PublisherBoxGeometry.empty(safeWidth)
+    // Verse indentation and an inline-block stanza's position are content
+    // structure, like <br>, even when the reader supplies the typography.
+    // Decoration and surrounding publication margins still follow the toggle.
+    val activeBoxes = if (enabled) boxes else boxes.mapNotNull { box ->
+        box.takeIf { it.style.hangingIndentEm > 0f || it.style.shrinkToFit || it.style.fitTextFlow }?.copy(
+            style = box.style.copy(
+                marginTopEm = 0f, marginBottomEm = 0f,
+                paddingTopEm = 0f, paddingBottomEm = 0f,
+                backgroundColorArgb = null,
+                borderTop = null, borderRight = null, borderBottom = null, borderLeft = null,
+                marginLeftEm = if (box.style.hangingIndentEm > 0f) box.style.marginLeftEm else 0f,
+                marginRightEm = if (box.style.hangingIndentEm > 0f) box.style.marginRightEm else 0f,
+                marginLeftFrac = if (box.style.hangingIndentEm > 0f) box.style.marginLeftFrac else 0f,
+                marginRightFrac = if (box.style.hangingIndentEm > 0f) box.style.marginRightFrac else 0f,
+            ),
+        )
+    }
+    if (activeBoxes.isEmpty()) return PublisherBoxGeometry.empty(safeWidth)
     val em = fontSizePx.coerceAtLeast(1f)
 
     var contentLeft = 0f
@@ -68,28 +94,45 @@ internal fun publisherBoxGeometry(
     var bottomCursor = 0f
     val drawBoxes = ArrayList<PublisherDrawBox>(boxes.size)
 
-    for (box in boxes) {
+    for (box in activeBoxes) {
         val style = box.style
         val containingWidth = (contentRight - contentLeft).coerceAtLeast(1f)
-        val marginLeft = edgePx(style.marginLeftEm, style.marginLeftFrac, containingWidth, em)
-        val marginRight = edgePx(style.marginRightEm, style.marginRightFrac, containingWidth, em)
+        // A hanging verse line starts before its content padding. Applying
+        // the prose 45% cap to that padding flattens all the larger steps,
+        // especially after the enclosing stanza has shrunk to fit its text.
+        val edgeLimit = if (style.hangingIndentEm > 0f) 1f else MAX_HORIZONTAL_EDGE_FRACTION
+        val marginLeft = edgePx(style.marginLeftEm, style.marginLeftFrac, containingWidth, em, edgeLimit)
+        val marginRight = edgePx(style.marginRightEm, style.marginRightFrac, containingWidth, em, edgeLimit)
         val borderLeft = style.borderLeft.layoutWidthPx(em)
         val borderRight = style.borderRight.layoutWidthPx(em)
-        val paddingLeft = edgePx(style.paddingLeftEm, style.paddingLeftFrac, containingWidth, em)
-        val paddingRight = edgePx(style.paddingRightEm, style.paddingRightFrac, containingWidth, em)
+        val paddingLeft = edgePx(style.paddingLeftEm, style.paddingLeftFrac, containingWidth, em, edgeLimit)
+        val paddingRight = edgePx(style.paddingRightEm, style.paddingRightFrac, containingWidth, em, edgeLimit)
 
         val availableLeft = contentLeft + marginLeft
         val availableRight = contentRight - marginRight
         val availableWidth = (availableRight - availableLeft).coerceAtLeast(1f)
+        val horizontalFrame = borderLeft + paddingLeft + paddingRight + borderRight
+        val maximumContentWidth = listOfNotNull(
+            style.maxWidthFrac?.takeIf { it.isFinite() && it > 0f }
+                ?.let { containingWidth * it },
+            style.maxWidthEm?.takeIf { it.isFinite() && it > 0f }?.let { it * em },
+        ).minOrNull()
+        val availableContentWidth = (availableWidth - horizontalFrame).coerceAtLeast(1f)
+            .let { if (maximumContentWidth != null) minOf(it, maximumContentWidth) else it }
         val requestedContentWidth = when {
             style.widthFrac != null -> containingWidth * style.widthFrac.coerceIn(0.01f, 1f)
             style.widthEm != null -> style.widthEm.coerceAtLeast(0.05f) * em
+            style.shrinkToFit -> inlineWidths?.contentWidth(
+                box,
+                availableContentWidth.roundToInt().coerceAtLeast(1),
+            )
             else -> null
         }
-        val requestedOuterWidth = requestedContentWidth?.let {
-            it + borderLeft + paddingLeft + paddingRight + borderRight
-        }
-        val outerWidth = requestedOuterWidth?.coerceAtMost(availableWidth) ?: availableWidth
+        val constrainedContentWidth = minOf(
+            requestedContentWidth ?: availableContentWidth,
+            maximumContentWidth ?: Float.MAX_VALUE,
+        )
+        val outerWidth = (constrainedContentWidth + horizontalFrame).coerceAtMost(availableWidth)
         val spare = (availableWidth - outerWidth).coerceAtLeast(0f)
         val alignOffset = when (style.horizontalAlign) {
             PublisherBoxAlign.START -> 0f
@@ -109,6 +152,14 @@ internal fun publisherBoxGeometry(
         }
         val top = topCursor + marginTop
         val bottomInset = bottomCursor + marginBottom
+        val verticalFrame = style.borderTop.layoutWidthPx(em) + style.borderBottom.layoutWidthPx(em) +
+            (style.paddingTopEm.coerceAtLeast(0f) + style.paddingBottomEm.coerceAtLeast(0f)) * em
+        val centerInset = if (style.centerContentVertically && enabled) {
+            inlineWidths?.contentHeight(box,
+                (rectRight - rectLeft - horizontalFrame).roundToInt().coerceAtLeast(1))?.let { height ->
+                publisherVerticalCenterInset(style, viewportHeightPx, em, height, verticalFrame)
+            } ?: 0f
+        } else 0f
         drawBoxes += PublisherDrawBox(
             source = box,
             leftPx = rectLeft,
@@ -125,27 +176,71 @@ internal fun publisherBoxGeometry(
 
         if (drawTop) {
             topCursor = top + style.borderTop.layoutWidthPx(em) +
-                style.paddingTopEm.coerceAtLeast(0f) * em
+                style.paddingTopEm.coerceAtLeast(0f) * em + centerInset
         }
         if (drawBottom) {
             bottomCursor = bottomInset + style.borderBottom.layoutWidthPx(em) +
-                style.paddingBottomEm.coerceAtLeast(0f) * em
+                style.paddingBottomEm.coerceAtLeast(0f) * em + centerInset
         }
     }
 
+    val textLeft = contentLeft.roundToInt().coerceIn(0, safeWidth - 1)
+    val hangingIndent = ((activeBoxes.lastOrNull()?.style?.hangingIndentEm ?: 0f) * em)
+        .roundToInt().coerceIn(0, textLeft)
     return PublisherBoxGeometry(
-        contentLeftPx = contentLeft.roundToInt().coerceIn(0, safeWidth - 1),
+        contentLeftPx = textLeft - hangingIndent,
         contentRightPx = contentRight.roundToInt().coerceIn(1, safeWidth),
         topInsetPx = topCursor.roundToInt().coerceAtLeast(0),
         bottomInsetPx = bottomCursor.roundToInt().coerceAtLeast(0),
         boxes = drawBoxes,
+        hangingIndentPx = hangingIndent,
     )
 }
 
-private fun edgePx(emValue: Float, fraction: Float, containingWidthPx: Float, emPx: Float): Float =
+/** Extra space on each edge of a short authored vertical flex page. */
+internal fun publisherVerticalCenterInset(
+    style: PublisherBoxStyle,
+    viewportHeightPx: Int?,
+    emPx: Float,
+    contentHeightPx: Int,
+    verticalFramePx: Float,
+): Float {
+    if (!style.centerContentVertically) return 0f
+    val minimumHeight = style.minHeightViewportFrac?.takeIf { it.isFinite() && it > 0f }?.let { fraction ->
+        viewportHeightPx?.takeIf { it > 0 }?.let { viewport ->
+            (fraction * viewport + style.minHeightOffsetEm * emPx).coerceAtLeast(0f)
+        }
+    } ?: style.minHeightEm?.takeIf { it.isFinite() && it > 0f }?.let { it * emPx }
+        ?: return 0f
+    return ((minimumHeight - contentHeightPx - if (style.borderBox) verticalFramePx else 0f) / 2f)
+        .coerceAtLeast(0f)
+}
+
+/**
+ * Android's negative first-line margin moves glyphs but does not reliably
+ * enlarge their wrapping width. Move the text frame left instead, then give
+ * continuation lines a positive inset to reproduce the same CSS hanging box.
+ */
+internal fun TextStyle.withPublisherHangingIndent(
+    geometry: PublisherBoxGeometry,
+    density: Density,
+    isParagraphStart: Boolean = true,
+): TextStyle {
+    if (geometry.hangingIndentPx == 0) return this
+    val rest = with(density) { geometry.hangingIndentPx.toSp() }
+    return copy(textIndent = TextIndent(firstLine = if (isParagraphStart) 0.sp else rest, restLine = rest))
+}
+
+private fun edgePx(
+    emValue: Float,
+    fraction: Float,
+    containingWidthPx: Float,
+    emPx: Float,
+    limit: Float = MAX_HORIZONTAL_EDGE_FRACTION,
+): Float =
     (emValue.coerceAtLeast(0f) * emPx +
         fraction.coerceIn(0f, MAX_HORIZONTAL_EDGE_FRACTION) * containingWidthPx)
-        .coerceAtMost(containingWidthPx * MAX_HORIZONTAL_EDGE_FRACTION)
+        .coerceAtMost(containingWidthPx * limit)
 
 private fun PublisherBorderSide?.layoutWidthPx(emPx: Float): Float = when {
     this == null || style == PublisherBorderStyle.NONE -> 0f
@@ -157,6 +252,7 @@ internal fun Modifier.drawPublisherBoxes(
     geometry: PublisherBoxGeometry,
     columnLeftPx: Float,
     fontSizePx: Float,
+    currentColor: Color? = null,
 ): Modifier {
     if (geometry.boxes.isEmpty()) return this
     return drawBehind {
@@ -171,10 +267,10 @@ internal fun Modifier.drawPublisherBoxes(
                 ?.takeIf { (it ushr 24) != 0 }
                 ?.let { drawRect(Color(it), Offset(left, top), Size(right - left, bottom - top)) }
 
-            drawPublisherBorder(style.borderLeft, left, top, left, bottom, fontSizePx)
-            drawPublisherBorder(style.borderRight, right, top, right, bottom, fontSizePx)
+            drawPublisherBorder(style.borderLeft, left, top, left, bottom, fontSizePx, currentColor)
+            drawPublisherBorder(style.borderRight, right, top, right, bottom, fontSizePx, currentColor)
             if (box.drawTop) {
-                drawPublisherBorder(style.borderTop, left, top, right, top, fontSizePx)
+                drawPublisherBorder(style.borderTop, left, top, right, top, fontSizePx, currentColor)
             }
             if (box.drawBottom) drawPublisherBorder(
                 style.borderBottom,
@@ -183,6 +279,7 @@ internal fun Modifier.drawPublisherBoxes(
                 right,
                 bottom,
                 fontSizePx,
+                currentColor,
             )
         }
     }
@@ -195,10 +292,11 @@ internal fun DrawScope.drawPublisherBorder(
     x2: Float,
     y2: Float,
     fontSizePx: Float,
+    currentColor: Color? = null,
 ) {
     if (side == null || side.style == PublisherBorderStyle.NONE) return
     val width = side.layoutWidthPx(fontSizePx.coerceAtLeast(1f)).coerceAtLeast(HAIRLINE_PX)
-    val color = Color(side.colorArgb)
+    val color = publisherBorderColor(side, currentColor)
     when (side.style) {
         PublisherBorderStyle.NONE -> Unit
         PublisherBorderStyle.SOLID -> drawLine(
@@ -246,6 +344,9 @@ internal fun DrawScope.drawPublisherBorder(
         }
     }
 }
+
+internal fun publisherBorderColor(side: PublisherBorderSide, currentColor: Color?): Color =
+    if (side.usesCurrentColor && currentColor != null) currentColor else Color(side.colorArgb)
 
 /** True when a retained box already owns the leaf's painted background. */
 internal fun hasPublisherBoxBackground(boxes: List<ReaderPublisherBox>): Boolean =

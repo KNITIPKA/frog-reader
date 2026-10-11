@@ -10,6 +10,8 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
 import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.BlockStyle
+import com.example.frogreader.data.model.PublisherBoxStyle
+import org.jsoup.nodes.Element
 import kotlin.math.abs
 
 /**
@@ -84,9 +86,32 @@ internal class Fb2Stylesheet private constructor(
                 cascadeOrder = rules.size,
             )
         }
-        return Computed.from(
+        val computed = Computed.from(
             winners.mapValues { it.value.value },
             inherited ?: bodyStyle,
+        )
+        if (element !in TABLE_ELEMENTS) return computed
+        val borders = winners.filterKeys { it in BORDER_PROPERTIES }
+        if (borders.isEmpty()) return computed
+        // Reuse the HTML border parser/cascade for the bounded FB2 subset.
+        // Sorting winners retains selector precedence when they become inline
+        // declarations; importance remains attached to each declaration.
+        val declarations = borders.entries.sortedWith(
+            compareBy<Map.Entry<String, Winner>> { it.value.specificity }
+                .thenBy { it.value.cascadeOrder }.thenBy { it.value.declarationOrder },
+        ).joinToString(";") { (property, winner) ->
+            "$property:${winner.value}" + if (winner.important) " !important" else ""
+        }
+        val node = Element(element).attr("style",
+            "font-size:${computed.fontScale ?: 1f}em;$declarations")
+        val resolver = CssResolver(emptyList())
+        val resolved = resolver.computed(node)
+        return computed.copy(
+            publisherBox = resolver.publisherBoxStyle(node),
+            borderSpecified = resolved.borderSpecified,
+            borderless = resolved.borderSpecified && listOf(
+                resolved.borderTop, resolved.borderRight, resolved.borderBottom, resolved.borderLeft,
+            ).none { it != null && (it.usesCurrentColor || (it.colorArgb ushr 24) != 0) },
         )
     }
 
@@ -173,6 +198,11 @@ internal class Fb2Stylesheet private constructor(
         val backgroundColorArgb: Int? = null,
         /** Ancestor/self layers flattened for native block painting. */
         internal val visualBackgroundColorArgb: Int? = null,
+        /** Only table/cell physical borders use the shared native box subset. */
+        val publisherBox: PublisherBoxStyle? = null,
+        val borderSpecified: Boolean = false,
+        /** Row frames are not retained; only an explicitly invisible row opts out of a grid. */
+        val borderless: Boolean = false,
         /** Absolute used line-height for inherited percentage/length forms. */
         internal val absoluteLineHeightEm: Float? = null,
         /** Unitless line-height inherits as the number, not an absolute size. */
@@ -500,6 +530,16 @@ internal class Fb2Stylesheet private constructor(
             "p", "title", "subtitle", "v", "text-author", "table", "tr", "td", "th",
         )
 
+        private val TABLE_ELEMENTS = setOf("table", "tr", "td", "th")
+        private val BORDER_PROPERTIES = setOf(
+            "border", "border-width", "border-style", "border-color",
+            "border-top", "border-right", "border-bottom", "border-left",
+            "border-top-width", "border-top-style", "border-top-color",
+            "border-right-width", "border-right-style", "border-right-color",
+            "border-bottom-width", "border-bottom-style", "border-bottom-color",
+            "border-left-width", "border-left-style", "border-left-color",
+        )
+
         private val SUPPORTED_PROPERTIES = setOf(
             "font-style", "font-weight", "font-size", "font-family",
             "text-align", "text-indent", "line-height", "text-decoration",
@@ -507,7 +547,7 @@ internal class Fb2Stylesheet private constructor(
             "margin-inline-start", "margin-inline-end",
             "page-break-before", "break-before",
             "color", "background-color",
-        )
+        ) + BORDER_PROPERTIES
 
         private val INHERITED_PROPERTIES = setOf(
             "font-style", "font-weight", "font-size", "font-family",
@@ -986,7 +1026,7 @@ internal class Fb2Stylesheet private constructor(
         private fun alignment(value: String?): BlockAlign? = when (value?.trim()?.lowercase()) {
             "left" -> BlockAlign.LEFT
             "right" -> BlockAlign.RIGHT
-            "start" -> BlockAlign.START
+            "start", "initial" -> BlockAlign.START
             "end" -> BlockAlign.END
             "center" -> BlockAlign.CENTER
             "justify" -> BlockAlign.JUSTIFY

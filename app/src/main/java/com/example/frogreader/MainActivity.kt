@@ -4,6 +4,7 @@ import com.example.frogreader.ui.theme.floatingSurface
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -94,6 +95,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -106,6 +108,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -147,11 +150,15 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.example.frogreader.data.AppLockDelay
 import com.example.frogreader.data.AppTheme
+import com.example.frogreader.data.AppSettings
+import com.example.frogreader.data.LightThemeDefault
+import com.example.frogreader.data.model.ReaderChromeStyle
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.StartupDestination
 import com.example.frogreader.data.effectiveTheme
 import com.example.frogreader.data.parser.BookParsers
+import com.example.frogreader.ui.onboarding.WelcomeScreen
 import com.example.frogreader.ui.library.DuplicateBookDialog
 import com.example.frogreader.ui.library.ImportPreviewScreen
 import com.example.frogreader.ui.library.BookMetadataScreen
@@ -171,6 +178,8 @@ import com.example.frogreader.ui.nav.SettingsRoute
 import com.example.frogreader.ui.nav.ProfileRoute
 import com.example.frogreader.ui.nav.QuotesAndBookmarksRoute
 import com.example.frogreader.ui.nav.FrogAddFab
+import com.example.frogreader.ui.nav.FrogDockContentPadding
+import com.example.frogreader.ui.nav.FrogDockMinHeight
 import com.example.frogreader.ui.nav.ReadingQueueFabState
 import com.example.frogreader.ui.profile.ReadingQueueScreen
 import com.example.frogreader.ui.nav.ReadingQueueRoute
@@ -178,6 +187,10 @@ import com.example.frogreader.ui.nav.ReadingLogRoute
 import com.example.frogreader.ui.nav.ReadingLogInfoRoute
 import com.example.frogreader.ui.nav.ReadingLogCameraRoute
 import com.example.frogreader.ui.profile.ReadingLogScreen
+import com.example.frogreader.ui.profile.readingLogPageEnter
+import com.example.frogreader.ui.profile.readingLogPageExit
+import com.example.frogreader.ui.profile.ReadingLogPageEnterMillis
+import com.example.frogreader.ui.profile.ReadingLogPageExitMillis
 import com.example.frogreader.ui.profile.ReadingLogCameraScreen
 import com.example.frogreader.ui.nav.StatsRoute
 import com.example.frogreader.ui.nav.TrackerRoute
@@ -191,7 +204,13 @@ import com.example.frogreader.ui.theme.colorSchemeFor
 import com.example.frogreader.ui.theme.isDark
 import com.example.frogreader.ui.tracker.TrackerScreen
 import com.example.frogreader.widget.ContinueReadingWidget
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.rounded.CreateNewFolder
@@ -254,6 +273,8 @@ private object NoOpHapticFeedback : HapticFeedback {
 class MainActivity : ComponentActivity() {
 
     private val pendingIntents = MutableStateFlow<Intent?>(null)
+    // Launcher taps can reopen the singleTask Activity instead of creating another one.
+    private val welcomeLaunchRequests = MutableStateFlow(0L)
 
     /** Set by the reader while it is on screen; returns true when consumed. */
     @Volatile
@@ -269,6 +290,7 @@ class MainActivity : ComponentActivity() {
         // removes the blank frames the app used to boot through.
         val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
+        welcomeLaunchRequests.value = savedInstanceState?.getLong(WelcomeLaunchStateKey) ?: 0L
 
         // The window BEHIND the splash, painted in the theme the app was last
         // running in. Without it the hand-off exposes Theme.Material.Light's
@@ -286,7 +308,15 @@ class MainActivity : ComponentActivity() {
         window.setBackgroundDrawable(bootScheme.surface.toArgb().toDrawable())
 
         enableEdgeToEdge()
-        pendingIntents.value = intent
+        // A file/widget intent remains queued while welcome or app lock is on screen.
+        // An explicit saved null also prevents replaying an already consumed launch intent.
+        @Suppress("DEPRECATION")
+        val restoredPendingIntent = savedInstanceState?.getParcelable<Intent>(PendingIntentStateKey)
+        pendingIntents.value = if (savedInstanceState?.containsKey(PendingIntentStateKey) == true) {
+            restoredPendingIntent
+        } else {
+            intent
+        }
 
         splash.setKeepOnScreenCondition { !contentReady }
         splash.setOnExitAnimationListener { splashView ->
@@ -306,47 +336,178 @@ class MainActivity : ComponentActivity() {
             val app = application as FrogReaderApp
             val appSettings by app.settingsRepository.appSettings.collectAsState(initial = null)
             val settings = appSettings
+            val requestedWelcomeLaunch by welcomeLaunchRequests.collectAsState()
+            var welcomeLaunch by rememberSaveable { mutableStateOf(requestedWelcomeLaunch) }
+            var savingWelcome by remember { mutableStateOf(false) }
+            // A launcher tap during Continue waits for its persistence coroutine. Welcome's
+            // draft reset must not cancel the save or overwrite a queued file/widget intent.
+            LaunchedEffect(requestedWelcomeLaunch, savingWelcome) {
+                if (!savingWelcome) welcomeLaunch = requestedWelcomeLaunch
+            }
 
-            // `bootTheme`, not a hard-coded default: on a Midnight install the
-            // old fallback meant the first composition was beige.
-            val systemDark = isSystemInDarkTheme()
-            val theme = settings?.effectiveTheme(systemDark) ?: bootTheme
-            val dynamicColor = settings?.dynamicColor == true
-            // Resolve this once when DataStore becomes available. Changing the
-            // preference later affects the next app start, never yanks the user
-            // out of the screen they are currently using.
-            val startupReaderBookId: String? = remember(settings != null) {
-                if (settings?.startupDestination == StartupDestination.LAST_BOOK) {
-                    runCatching {
-                        app.bookRepository.books.value
-                            .asSequence()
-                            .filter { it.fileName != null && it.lastOpenedAtMillis != null }
-                            .maxByOrNull { it.lastOpenedAtMillis ?: Long.MIN_VALUE }
-                            ?.id
-                    }.getOrNull()
-                } else {
-                    null
+            // Completion belongs to this launch: configuration changes and restoring an
+            // existing task keep navigation, while a fresh debug launch replays Welcome.
+            var welcomeCompletedForLaunch by rememberSaveable(welcomeLaunch) { mutableStateOf(false) }
+            var welcomeRequired by remember(welcomeLaunch) {
+                mutableStateOf<Boolean?>(when {
+                    welcomeCompletedForLaunch -> false
+                    welcomeLaunch > 0L -> true
+                    else -> null
+                })
+            }
+            var welcomeError by rememberSaveable(welcomeLaunch) { mutableStateOf<String?>(null) }
+            val welcomeScope = rememberCoroutineScope()
+            // Only welcome-owned fields are saved as a draft; unrelated preferences remain live.
+            var draftChrome by rememberSaveable(welcomeLaunch) { mutableStateOf<String?>(null) }
+            var draftDestination by rememberSaveable(welcomeLaunch) { mutableStateOf<String?>(null) }
+            var draftTheme by rememberSaveable(welcomeLaunch) { mutableStateOf<String?>(null) }
+            var draftFollowSystem by rememberSaveable(welcomeLaunch) { mutableStateOf<Boolean?>(null) }
+            var draftLightDefault by rememberSaveable(welcomeLaunch) { mutableStateOf<String?>(null) }
+            var draftDynamicColor by rememberSaveable(welcomeLaunch) { mutableStateOf<Boolean?>(null) }
+            val welcomeDraft = settings?.copy(
+                readerChromeStyle = draftChrome?.let(ReaderChromeStyle::valueOf)
+                    ?: settings.readerChromeStyle,
+                startupDestination = draftDestination?.let(StartupDestination::valueOf)
+                    ?: settings.startupDestination,
+                theme = draftTheme?.let(AppTheme::valueOf) ?: settings.theme,
+                followSystemTheme = draftFollowSystem ?: settings.followSystemTheme,
+                lightThemeDefault = draftLightDefault?.let(LightThemeDefault::valueOf)
+                    ?: settings.lightThemeDefault,
+                dynamicColor = draftDynamicColor ?: settings.dynamicColor,
+            )
+            LaunchedEffect(settings != null, welcomeLaunch) {
+                if (settings == null) return@LaunchedEffect
+                try {
+                    welcomeRequired = app.settingsRepository.shouldShowWelcome(
+                        completedForLaunch = welcomeCompletedForLaunch,
+                    )
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Keep a usable, retryable screen if local persistence is unavailable.
+                    welcomeError = getString(R.string.welcome_save_error)
+                    welcomeRequired = true
                 }
             }
+            // Preview the theme immediately without persisting unfinished choices.
+            val appearance = if (welcomeRequired == true) welcomeDraft else settings
+            val systemDark = isSystemInDarkTheme()
+            val theme = appearance?.effectiveTheme(systemDark) ?: bootTheme
+            val dynamicColor = appearance?.dynamicColor == true
+
+            // Resolve LAST_BOOK after welcome saves, once per activity launch. Saveable state
+            // preserves the original start across recreation and subsequent preference changes.
+            var startupResolved by rememberSaveable { mutableStateOf(false) }
+            var startupReaderBookId by rememberSaveable { mutableStateOf<String?>(null) }
+            LaunchedEffect(settings != null, welcomeRequired) {
+                if (settings == null || welcomeRequired != false || startupResolved) {
+                    return@LaunchedEffect
+                }
+                startupReaderBookId = withContext(Dispatchers.IO) {
+                    val savedSettings = app.settingsRepository.appSettings.first()
+                    if (savedSettings.startupDestination == StartupDestination.LAST_BOOK) {
+                        runCatching {
+                            app.bookRepository.books.value
+                                .asSequence()
+                                .filter { it.fileName != null && it.lastOpenedAtMillis != null }
+                                .maxByOrNull { it.lastOpenedAtMillis ?: Long.MIN_VALUE }
+                                ?.id
+                        }.getOrNull()
+                    } else {
+                        null
+                    }
+                }
+                startupResolved = true
+            }
+            val appReady = settings != null && welcomeRequired != null &&
+                (welcomeRequired == true || startupResolved)
             // Kept above the lock gate so a background re-lock does not throw
             // away the navigation stack and replay the startup destination.
             val navController = rememberNavController()
+            val libraryViewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory)
+            val coverPreparation = remember(welcomeLaunch, libraryViewModel) {
+                welcomeScope.async(start = CoroutineStart.LAZY) {
+                    libraryViewModel.prepareWelcomeExit()
+                }
+            }
+            DisposableEffect(coverPreparation) {
+                onDispose { coverPreparation.cancel() }
+            }
+            LaunchedEffect(welcomeRequired, coverPreparation) {
+                if (welcomeRequired == true) coverPreparation.start()
+            }
+            var preparingNavigation by remember(welcomeLaunch) { mutableStateOf(false) }
+            val navigationLaidOut = remember(welcomeLaunch) { CompletableDeferred<Unit>() }
+            val completeWelcome: (AppSettings) -> Unit = { selected ->
+                if (!savingWelcome) {
+                    savingWelcome = true
+                    welcomeError = null
+                    welcomeScope.launch {
+                        try {
+                            app.settingsRepository.completeWelcome(selected)
+                            if (!startupResolved) {
+                                startupReaderBookId = withContext(Dispatchers.IO) {
+                                    if (selected.startupDestination == StartupDestination.LAST_BOOK) {
+                                        app.bookRepository.books.value.asSequence()
+                                            .filter { it.fileName != null && it.lastOpenedAtMillis != null }
+                                            .maxByOrNull { it.lastOpenedAtMillis ?: Long.MIN_VALUE }?.id
+                                    } else null
+                                }
+                                startupResolved = true
+                            }
+                            if (startupReaderBookId == null) {
+                                try {
+                                    coverPreparation.await()
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (_: Exception) {
+                                    // Image preparation is best effort; saving preferences
+                                    // must still allow entry if a local cover cannot be read.
+                                }
+                                // Mount navigation under the opaque welcome surface. Keep
+                                // the same composition alive when that surface is removed.
+                                preparingNavigation = true
+                                navigationLaidOut.await()
+                                // Layout precedes drawing; allow the prepared image painters
+                                // and navigation's initial back stack to reach a drawn frame.
+                                withFrameNanos { }
+                                withFrameNanos { }
+                            }
+                            welcomeCompletedForLaunch = true
+                            welcomeRequired = false
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            preparingNavigation = false
+                            welcomeError = getString(R.string.welcome_save_error)
+                        } finally {
+                            savingWelcome = false
+                        }
+                    }
+                }
+            }
             // Status-bar icon contrast follows the app theme, not the system
             // dark mode (OLED on a light-mode phone still needs light icons).
-            LaunchedEffect(theme, dynamicColor) {
+            LaunchedEffect(theme, dynamicColor, welcomeRequired) {
                 WindowCompat.getInsetsController(window, window.decorView).apply {
                     isAppearanceLightStatusBars = !theme.isDark()
                     isAppearanceLightNavigationBars = !theme.isDark()
                 }
-                SettingsRepository.rememberBootAppearance(
-                    context = this@MainActivity,
-                    theme = theme,
-                    dynamicColor = dynamicColor,
-                )
+                // Only committed preferences update the boot hint. An unfinished preview
+                // must not become legacy-install evidence if the pending marker write failed.
+                if (welcomeRequired == false) {
+                    SettingsRepository.rememberBootAppearance(
+                        context = this@MainActivity,
+                        theme = theme,
+                        dynamicColor = dynamicColor,
+                    )
+                }
             }
 
-            LaunchedEffect(settings != null) {
-                if (settings == null) return@LaunchedEffect
+            var initialContentReady by remember { mutableStateOf(false) }
+            LaunchedEffect(appReady) {
+                if (!appReady) return@LaunchedEffect
+                initialContentReady = true
                 contentReady = true
                 // Tells the platform when the app is actually usable rather
                 // than merely on screen — it is what Play vitals and `am start`
@@ -365,7 +526,7 @@ class MainActivity : ComponentActivity() {
                 )
 
                 val entering by animateFloatAsState(
-                    targetValue = if (settings != null) 1f else 0f,
+                    targetValue = if (initialContentReady) 1f else 0f,
                     animationSpec = tween(SplashExitMillis.toInt(), easing = LinearOutSlowInEasing),
                     label = "appEnter",
                 )
@@ -388,16 +549,51 @@ class MainActivity : ComponentActivity() {
                         when {
                             // Still waiting on DataStore. The splash is holding
                             // the screen, so this is never actually seen.
-                            settings == null -> Unit
+                            settings == null || welcomeRequired == null -> Unit
 
                             settings.appLock && !lockViewModel.unlocked ->
                                 LockScreen(onUnlocked = { lockViewModel.unlocked = true })
 
-                            else -> AppNavigation(
-                                navController = navController,
-                                startupReaderBookId = startupReaderBookId,
-                                theme = theme,
-                            )
+                            else -> {
+                                val showingWelcome = welcomeRequired == true
+                                if (startupResolved && (!showingWelcome || preparingNavigation)) {
+                                    Box(
+                                        if (showingWelcome) Modifier.clearAndSetSemantics { }
+                                        else Modifier,
+                                    ) {
+                                        AppNavigation(
+                                            navController = navController,
+                                            startupReaderBookId = startupReaderBookId,
+                                            theme = theme,
+                                            libraryViewModel = libraryViewModel,
+                                            active = !showingWelcome,
+                                            onNavigationLaidOut = { navigationLaidOut.complete(Unit) },
+                                        )
+                                    }
+                                }
+                                if (showingWelcome) {
+                                    WelcomeScreen(
+                                        settings = welcomeDraft ?: settings,
+                                        onSettingsChange = { selected ->
+                                            if (!savingWelcome) {
+                                                draftChrome = selected.readerChromeStyle.name
+                                                draftDestination = selected.startupDestination.name
+                                                draftTheme = selected.theme.name
+                                                draftFollowSystem = selected.followSystemTheme
+                                                draftLightDefault = selected.lightThemeDefault.name
+                                                draftDynamicColor = selected.dynamicColor
+                                                welcomeError = null
+                                            }
+                                        },
+                                        onContinue = { completeWelcome(welcomeDraft ?: settings) },
+                                        isSaving = savingWelcome,
+                                        errorMessage = welcomeError,
+                                    )
+                                    // Hidden navigation must not respond to Back while the
+                                    // welcome screen owns interaction, especially during save.
+                                    BackHandler { if (!savingWelcome) finish() }
+                                }
+                            }
                         }
                     }
                 }
@@ -405,9 +601,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putParcelable(PendingIntentStateKey, pendingIntents.value)
+        outState.putLong(WelcomeLaunchStateKey, welcomeLaunchRequests.value)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        val isDebuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        if (shouldReplayWelcomeOnLauncherIntent(intent, isDebuggable)) {
+            welcomeLaunchRequests.value += 1L
+            return
+        }
         pendingIntents.value = intent
     }
 
@@ -455,6 +662,9 @@ class MainActivity : ComponentActivity() {
         navController: NavHostController,
         startupReaderBookId: String?,
         theme: AppTheme,
+        libraryViewModel: LibraryViewModel,
+        active: Boolean,
+        onNavigationLaidOut: () -> Unit,
     ) {
         val pagerState = rememberPagerState(initialPage = 0) { 2 }
         val coroutineScope = rememberCoroutineScope()
@@ -466,6 +676,13 @@ class MainActivity : ComponentActivity() {
 
         val backStackEntry by navController.currentBackStackEntryAsState()
         val destination = backStackEntry?.destination
+        var navigationHasLayout by remember { mutableStateOf(false) }
+        LaunchedEffect(navigationHasLayout, backStackEntry, active) {
+            if (!active && navigationHasLayout && backStackEntry != null) {
+                withFrameNanos { }
+                onNavigationLaidOut()
+            }
+        }
         // Null for the first frame, before the start destination reaches the
         // back stack. Mirror that destination so the bottom bar never flashes
         // over a reader-first launch.
@@ -474,6 +691,7 @@ class MainActivity : ComponentActivity() {
         val onReadingQueue = destination?.hasRoute<ReadingQueueRoute>() == true
         val onReadingLog = destination?.hasRoute<ReadingLogRoute>() == true
         var readingQueueFab by remember { mutableStateOf<Pair<String, ReadingQueueFabState>?>(null) }
+        var deletedLogReading by remember { mutableStateOf<com.example.frogreader.data.ReadingLogDeletion?>(null) }
 
         // Logical selection changes only after settling, including accessibility,
         // back behavior and library dock lifecycle. A cancelled drag changes none
@@ -495,8 +713,8 @@ class MainActivity : ComponentActivity() {
         // Library and Profile share one destination in the pager. Reapply icon
         // contrast on tab switches too; inReader alone stays false throughout
         // that transition and can leave stale light icons on a light surface.
-        LaunchedEffect(backStackEntry, selectedTab, theme, activity) {
-            if (inReader) return@LaunchedEffect
+        LaunchedEffect(backStackEntry, selectedTab, theme, activity, active) {
+            if (!active || inReader) return@LaunchedEffect
             val window = activity?.window ?: return@LaunchedEffect
             val controller = WindowCompat.getInsetsController(window, window.decorView)
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
@@ -505,14 +723,15 @@ class MainActivity : ComponentActivity() {
             controller.isAppearanceLightNavigationBars = !theme.isDark()
         }
 
-        val libraryViewModel: LibraryViewModel = viewModel(factory = LibraryViewModel.Factory)
         val isImportingBook by libraryViewModel.importing.collectAsStateWithLifecycle()
 
-        HandleIncomingIntents(
-            navController = navController,
-            libraryViewModel = libraryViewModel,
-            hasSyntheticReaderStart = startupReaderBookId != null,
-        )
+        if (active) {
+            HandleIncomingIntents(
+                navController = navController,
+                libraryViewModel = libraryViewModel,
+                hasSyntheticReaderStart = startupReaderBookId != null,
+            )
+        }
 
         var scanningFolder by remember { mutableStateOf<Uri?>(null) }
         var fabMenuExpanded by rememberSaveable { mutableStateOf(false) }
@@ -565,6 +784,8 @@ class MainActivity : ComponentActivity() {
 
         FrogMainScaffold(
             readingQueueActive = onReadingQueue || onReadingLog,
+            readingEntryFlowActive = onReadingQueue || onReadingLog ||
+                destination?.hasRoute<ReadingLogInfoRoute>() == true || destination?.hasRoute<ReadingLogCameraRoute>() == true,
             readingQueueFab = readingQueueFab?.takeIf { it.first == backStackEntry?.id }?.second,
             navigationVisible = onTopLevel,
             dockVisible = !onLibrary || libraryDockVisible,
@@ -594,24 +815,33 @@ class MainActivity : ComponentActivity() {
             NavHost(
                 navController = navController,
                 startDestination = startupReaderBookId?.let { ReaderRoute(it) } ?: LibraryRoute,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().onGloballyPositioned {
+                    navigationHasLayout = it.size.width > 0 && it.size.height > 0
+                },
                 enterTransition = {
                     when {
+                        !active -> EnterTransition.None
                         switchingTabs -> tabEnter()
                         initialState.destination.hasRoute<ReaderRoute>() &&
                             targetState.destination.hasRoute<LibraryRoute>() -> readerReturnEnter()
                         else -> pushEnter()
                     }
                 },
-                exitTransition = { if (switchingTabs) tabExit() else fadeOut(NavFade) },
-                popEnterTransition = {
+                exitTransition = {
                     when {
-                        switchingTabs -> tabEnter()
-                        initialState.destination.hasRoute<ReaderRoute>() -> readerReturnEnter()
-                        else -> fadeIn(NavFade)
+                        switchingTabs -> tabExit()
+                        initialState.destination.hasRoute<ReadingLogRoute>() && targetState.destination.hasRoute<ReadingLogInfoRoute>() ->
+                            fadeOut(tween(ReadingLogPageEnterMillis, easing = FastOutSlowInEasing))
+                        else -> fadeOut(NavFade)
                     }
                 },
-                popExitTransition = { if (switchingTabs) tabExit() else popExit() },
+                popEnterTransition = { appPopEnter() },
+                popExitTransition = { appPopExit() },
+                // Navigation 2.10 resolves gesture transitions independently
+                // of ordinary pop transitions. Share the policy so a gesture
+                // can seek/cancel the same motion as the Back button.
+                predictivePopEnterTransition = { _ -> appPopEnter() },
+                predictivePopExitTransition = { _ -> appPopExit() },
             ) {
                 composable<LibraryRoute> {
                     HorizontalPager(
@@ -634,11 +864,12 @@ class MainActivity : ComponentActivity() {
                                     navController.navigate(ReaderRoute(book.id))
                                 },
                                 onOpenSettings = { navController.navigate(SettingsRoute) },
-                                onEditBook = { navController.navigate(BookMetadataRoute(it.id)) },
+                                onEditBook = { navController.navigate(BookInfoRoute(it.id, editRequested = true)) },
                                 onBookInfo = { navController.navigate(BookInfoRoute(it.id)) },
                             )
                             1 -> ProfileScreen(
                                 contentPadding = innerPadding,
+                                isActive = active && onTopLevel && !onLibrary,
                                 onOpenSettings = { navController.navigate(SettingsRoute) },
                                 onOpenQuotesAndBookmarks = { navController.navigate(QuotesAndBookmarksRoute) { launchSingleTop = true } },
                                 onOpenStats = { navController.navigate(StatsRoute) { launchSingleTop = true } },
@@ -657,13 +888,9 @@ class MainActivity : ComponentActivity() {
                             pushEnter()
                         }
                     },
-                    popExitTransition = {
-                        if (targetState.destination.hasRoute<BookInfoRoute>()) {
-                            slideOutHorizontally(NavSlide) { it } + fadeOut(spring(stiffness = Spring.StiffnessMediumLow))
-                        } else {
-                            popExit()
-                        }
-                    },
+                    // Back is resolved by the shared NavHost policy rather
+                    // than implicitly inheriting this forward transition.
+                    popEnterTransition = null,
                 ) { entry ->
                     BookMetadataScreen(entry.toRoute<BookMetadataRoute>().bookId, onBack = { navController.popBackStack() })
                 }
@@ -676,20 +903,13 @@ class MainActivity : ComponentActivity() {
                             fadeOut(NavFade)
                         }
                     },
-                    popEnterTransition = {
-                        if (initialState.destination.hasRoute<ReaderRoute>()) {
-                            readerReturnEnter()
-                        } else if (initialState.destination.hasRoute<BookMetadataRoute>()) {
-                            slideInHorizontally(NavSlide) { -it } + fadeIn(spring(stiffness = Spring.StiffnessMediumLow))
-                        } else {
-                            fadeIn(NavFade)
-                        }
-                    },
+                    popExitTransition = null,
                 ) { entry ->
                     val info = entry.toRoute<BookInfoRoute>()
                     val id = info.bookId
-                    BookInfoScreen(id, onBack = { navController.popBackStack() }, onEdit = { navController.navigate(BookMetadataRoute(id)) },
+                    BookInfoScreen(id, onBack = { navController.popBackStack() },
                         reviewRequested = info.reviewRequested,
+                        editRequested = info.editRequested,
                         onEditReadingLog = { logId ->
                             navController.navigate(ReadingLogRoute) { launchSingleTop = true }
                             navController.currentBackStackEntry?.savedStateHandle?.set("readingLogEditId", logId)
@@ -725,7 +945,13 @@ class MainActivity : ComponentActivity() {
                             else if (readingQueueFab?.first == entry.id) readingQueueFab = null
                         })
                 }
-                composable<ReadingLogRoute> { entry ->
+                composable<ReadingLogRoute>(
+                    popEnterTransition = {
+                        if (initialState.destination.hasRoute<ReadingLogInfoRoute>())
+                            fadeIn(tween(ReadingLogPageExitMillis, easing = FastOutSlowInEasing))
+                        else appPopEnter()
+                    },
+                ) { entry ->
                     val captured by entry.savedStateHandle.getStateFlow<String?>("readingLogCoverUri", null).collectAsStateWithLifecycle()
                     val editId by entry.savedStateHandle.getStateFlow<String?>("readingLogEditId", null).collectAsStateWithLifecycle()
                     ReadingLogScreen(onBack = { navController.popBackStack() },
@@ -738,16 +964,30 @@ class MainActivity : ComponentActivity() {
                         capturedCoverUri = captured?.let(Uri::parse),
                         onCapturedCoverConsumed = { entry.savedStateHandle["readingLogCoverUri"] = null },
                         editEntryId = editId,
-                        onEditRequestConsumed = { entry.savedStateHandle["readingLogEditId"] = null })
+                        onEditRequestConsumed = { entry.savedStateHandle["readingLogEditId"] = null },
+                        deletedReading = deletedLogReading,
+                        onDeletedReadingConsumed = { deletedLogReading = null })
                 }
-                composable<ReadingLogInfoRoute> { entry ->
+                composable<ReadingLogInfoRoute>(
+                    enterTransition = { readingLogPageEnter() },
+                    exitTransition = { fadeOut(tween(ReadingLogPageEnterMillis, easing = FastOutSlowInEasing)) },
+                    popEnterTransition = { fadeIn(tween(ReadingLogPageExitMillis, easing = FastOutSlowInEasing)) },
+                    popExitTransition = { readingLogPageExit() },
+                ) { entry ->
                     val id = entry.toRoute<ReadingLogInfoRoute>().entryId
-                    BookInfoScreen("", onBack = { navController.popBackStack() }, onEdit = {}, readingLogId = id,
+                    BookInfoScreen("", onBack = { navController.popBackStack() }, readingLogId = id,
                         onEditReadingLog = { logId ->
                             if (!navController.popBackStack(ReadingLogRoute, inclusive = false)) navController.navigate(ReadingLogRoute)
                             navController.currentBackStackEntry?.savedStateHandle?.set("readingLogEditId", logId)
                         },
-                        onOpenReadingLog = { navController.navigate(ReadingLogInfoRoute(it)) })
+                        onOpenReadingLog = { navController.navigate(ReadingLogInfoRoute(it)) },
+                        onReadingLogDeleted = { deletion ->
+                            deletedLogReading = deletion
+                            if (!navController.popBackStack(ReadingLogRoute, inclusive = false)) {
+                                navController.popBackStack()
+                                navController.navigate(ReadingLogRoute) { launchSingleTop = true }
+                            }
+                        })
                 }
                 composable<ReadingLogCameraRoute> {
                     ReadingLogCameraScreen(onBack = { navController.popBackStack() }, onCaptured = { uri ->
@@ -771,13 +1011,15 @@ class MainActivity : ComponentActivity() {
                             fadeOut(NavFade)
                         }
                     },
-                    popExitTransition = { readerCloseExit() },
+                    popExitTransition = null,
                 ) { entry ->
                     val route = entry.toRoute<ReaderRoute>()
                     val openLibrary: () -> Unit = {
-                        navController.navigate(LibraryRoute) {
-                            popUpTo(route) { inclusive = true }
-                            launchSingleTop = true
+                        if (!navController.popBackStack<LibraryRoute>(inclusive = false)) {
+                            navController.navigate(LibraryRoute) {
+                                popUpTo(route) { inclusive = true }
+                                launchSingleTop = true
+                            }
                         }
                     }
                     // A reader used as the graph's start destination has no
@@ -793,7 +1035,15 @@ class MainActivity : ComponentActivity() {
                         onBack = {
                             if (!navController.popBackStack()) openLibrary()
                         },
-                        onReview = { navController.navigate(BookInfoRoute(it, reviewRequested = true)) },
+                        onExitToLibrary = openLibrary,
+                        contentMotion = Modifier.animateEnterExit(
+                            enter = EnterTransition.None,
+                            exit = scaleOut(
+                                ReaderCloseMotion,
+                                targetScale = 0.86f,
+                                transformOrigin = TransformOrigin.Center,
+                            ),
+                        ),
                     )
                 }
 
@@ -900,6 +1150,14 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_OPEN_BOOK_ID = "open_book_id"
+        private const val PendingIntentStateKey = "pending_external_intent"
+        private const val WelcomeLaunchStateKey = "debug_welcome_launch"
+
+        internal fun shouldReplayWelcomeOnLauncherIntent(
+            incoming: Intent,
+            isDebuggable: Boolean,
+        ): Boolean = isDebuggable && incoming.action == Intent.ACTION_MAIN &&
+            incoming.hasCategory(Intent.CATEGORY_LAUNCHER)
 
         fun processIntentForNavigation(
             incoming: Intent,
@@ -929,7 +1187,6 @@ private const val SplashExitScale = 1.08f
  * Flag to control the visibility of the bottom navigation bar (Library & Profile tabs).
  */
 private const val ShowBottomBar = true
-private val ImportButtonSize = 60.dp
 private val ImportButtonGap = 12.dp
 private val LibraryDockMaxWidth = 400.dp
 private val DockSidePadding = 20.dp
@@ -953,10 +1210,12 @@ internal fun FrogMainScaffold(
     onScanFolder: () -> Unit,
     onNewShelf: () -> Unit,
     readingQueueActive: Boolean = false,
+    readingEntryFlowActive: Boolean = readingQueueActive,
     readingQueueFab: ReadingQueueFabState? = null,
     content: @Composable (PaddingValues) -> Unit,
 ) {
-    var dockHeight by remember { mutableStateOf(72.dp) }
+    var dockHeight by remember { mutableStateOf(FrogDockMinHeight) }
+    val fabSize = dockHeight - FrogDockContentPadding * 2
     val controlsVisible = (navigationVisible && dockVisible) || importExpanded
     val hidden by animateFloatAsState(
         targetValue = if (controlsVisible) 0f else 1f,
@@ -967,7 +1226,7 @@ internal fun FrogMainScaffold(
         label = "bottomDockHidden",
     )
     val fabHidden by animateFloatAsState(
-        if (controlsVisible || readingQueueActive) 0f else 1f,
+        if (controlsVisible || readingEntryFlowActive) 0f else 1f,
         spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
         label = "sharedFabHidden",
     )
@@ -1003,7 +1262,7 @@ internal fun FrogMainScaffold(
                     onTabSelected = onTabSelected,
                     tabProgress = tabProgress,
                     reserveImportSpace = true,
-                    importButtonSize = ImportButtonSize,
+                    importButtonSize = fabSize,
                     onDockHeightChanged = { dockHeight = it },
                 )
             }
@@ -1014,14 +1273,15 @@ internal fun FrogMainScaffold(
                     .windowInsetsPadding(WindowInsets.systemBarsIgnoringVisibility
                         .only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
                     .padding(horizontal = DockSidePadding, vertical = 8.dp)
-                    .padding(bottom = ((dockHeight - ImportButtonSize) / 2).coerceAtLeast(0.dp))
+                    .padding(bottom = FrogDockContentPadding)
                     .widthIn(max = LibraryDockMaxWidth).fillMaxWidth(),
                 contentAlignment = Alignment.BottomEnd,
             ) {
                 ImportFabMenu(
-                    buttonSize = ImportButtonSize,
-                    visible = if (readingQueueActive) readingQueueFab?.visible != false else importVisible && controlsVisible,
+                    buttonSize = fabSize,
+                    visible = if (readingQueueActive) readingQueueFab?.visible == true else importVisible && controlsVisible,
                     readingQueueActive = readingQueueActive,
+                    keepExpanded = readingEntryFlowActive,
                     readingQueueFab = readingQueueFab,
                     importing = importing && !readingQueueActive,
                     expanded = importExpanded && !readingQueueActive,
@@ -1043,7 +1303,7 @@ internal fun FrogNavigationBar(
     onTabSelected: (NavTab) -> Unit,
     tabProgress: () -> Float = { if (selectedTab == NavTab.PROFILE) 1f else 0f },
     reserveImportSpace: Boolean = false,
-    importButtonSize: Dp = ImportButtonSize,
+    importButtonSize: Dp = FrogDockMinHeight - FrogDockContentPadding * 2,
     onDockHeightChanged: (Dp) -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
@@ -1086,7 +1346,7 @@ internal fun FrogNavigationBar(
                 shadowElevation = 3.dp,
             ) {
                 val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-                Box(modifier = Modifier.padding(6.dp)) {
+                Box(modifier = Modifier.padding(FrogDockContentPadding)) {
                     Box(modifier = Modifier.matchParentSize()) {
                         Box(
                             modifier = Modifier
@@ -1227,6 +1487,7 @@ private fun ImportFabMenu(
     buttonSize: Dp,
     visible: Boolean,
     readingQueueActive: Boolean,
+    keepExpanded: Boolean,
     readingQueueFab: ReadingQueueFabState?,
     importing: Boolean,
     expanded: Boolean,
@@ -1279,7 +1540,9 @@ private fun ImportFabMenu(
         FabMenuSpacer(expanded, 16.dp)
 
         FrogAddFab(
-            expanded = readingQueueActive,
+            // Log details/camera keep the hidden FAB's geometry and anchor. Only opacity/scale
+            // change, so returning does not collapse and re-expand Add a book mid-flight.
+            expanded = keepExpanded,
             visible = visible,
             enabled = if (readingQueueActive) readingQueueFab?.enabled == true else visible || expanded,
             importing = importing,
@@ -1480,13 +1743,52 @@ private fun pushEnter(): EnterTransition =
 private fun popExit(): ExitTransition =
     fadeOut(NavFade) + scaleOut(NavFade, targetScale = 0.94f)
 
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.appPopEnter(): EnterTransition =
+    when {
+        initialState.destination.hasRoute<ReadingLogInfoRoute>() && targetState.destination.hasRoute<ReadingLogRoute>() ||
+            targetState.destination.hasRoute<ReadingLogInfoRoute>() ->
+            fadeIn(tween(ReadingLogPageExitMillis, easing = FastOutSlowInEasing))
+        switchingTabs -> tabEnter()
+        targetState.destination.hasRoute<BookMetadataRoute>() ->
+            if (initialState.destination.hasRoute<BookInfoRoute>()) {
+                slideInHorizontally(NavSlide) { it } +
+                    fadeIn(spring(stiffness = Spring.StiffnessMediumLow))
+            } else {
+                pushEnter()
+            }
+        initialState.destination.hasRoute<ReaderRoute>() -> readerReturnEnter()
+        initialState.destination.hasRoute<BookMetadataRoute>() &&
+            targetState.destination.hasRoute<BookInfoRoute>() ->
+            slideInHorizontally(NavSlide) { -it } +
+                fadeIn(spring(stiffness = Spring.StiffnessMediumLow))
+        else -> fadeIn(NavFade)
+    }
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.appPopExit(): ExitTransition =
+    when {
+        initialState.destination.hasRoute<ReadingLogInfoRoute>() -> readingLogPageExit()
+        switchingTabs -> tabExit()
+        initialState.destination.hasRoute<ReaderRoute>() -> readerCloseExit()
+        initialState.destination.hasRoute<BookMetadataRoute>() &&
+            targetState.destination.hasRoute<BookInfoRoute>() ->
+            slideOutHorizontally(NavSlide) { it } +
+                fadeOut(spring(stiffness = Spring.StiffnessMediumLow))
+        initialState.destination.hasRoute<BookInfoRoute>() ->
+            if (targetState.destination.hasRoute<BookMetadataRoute>()) {
+                slideOutHorizontally(NavSlide) { -it } +
+                    fadeOut(spring(stiffness = Spring.StiffnessMediumLow))
+            } else {
+                fadeOut(NavFade)
+            }
+        else -> popExit()
+    }
+
 // Reader closing uses a bounded, non-overshooting curve for both layers.
 // Navigation owns it, so Back gestures can seek and cancel the same transition.
-private val ReaderCloseMotion = tween<Float>(durationMillis = 360, easing = FastOutSlowInEasing)
+private val ReaderCloseMotion = tween<Float>(durationMillis = 220, easing = LinearOutSlowInEasing)
 
 private fun readerCloseExit(): ExitTransition =
-    fadeOut(ReaderCloseMotion) +
-        scaleOut(ReaderCloseMotion, targetScale = 0.86f, transformOrigin = TransformOrigin.Center)
+    fadeOut(ReaderCloseMotion)
 
 private fun readerReturnEnter(): EnterTransition =
     fadeIn(ReaderCloseMotion) +

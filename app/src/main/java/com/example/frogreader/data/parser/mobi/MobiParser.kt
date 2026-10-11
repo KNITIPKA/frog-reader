@@ -38,6 +38,7 @@ import java.util.concurrent.CancellationException
  * engine) and fall back to MOBI6 when it is damaged.
  */
 object MobiParser {
+    private val metadataJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
     // ---------------------------------------------------------------- metadata
 
@@ -68,7 +69,7 @@ object MobiParser {
         val extra = main.exth.string(MobiMetadataWriter.EXTRA_METADATA, Charsets.UTF_8)
             ?: doc.mobi6.exth.string(MobiMetadataWriter.EXTRA_METADATA, Charsets.UTF_8)
         val extended = extra?.let {
-            runCatching { kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            runCatching { metadataJson
                 .decodeFromString(com.example.frogreader.data.model.MobiExtraMetadata.serializer(), it) }.getOrNull()
         }
 

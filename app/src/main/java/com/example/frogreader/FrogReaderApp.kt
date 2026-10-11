@@ -14,6 +14,7 @@ import coil3.svg.SvgDecoder
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.StatsRepository
+import com.example.frogreader.data.diagnostics.ReaderDiagnosticsTracker
 import com.example.frogreader.data.backup.BackupRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +24,7 @@ class FrogReaderApp : Application(), SingletonImageLoader.Factory {
     val bookRepository: BookRepository by lazy { BookRepository(this) }
     val settingsRepository: SettingsRepository by lazy { SettingsRepository(this) }
     val statsRepository: StatsRepository by lazy { StatsRepository(this) }
+    val readerDiagnostics = ReaderDiagnosticsTracker()
     val backupRepository: BackupRepository by lazy {
         BackupRepository(this, bookRepository, statsRepository, settingsRepository)
     }
@@ -61,6 +63,15 @@ class FrogReaderApp : Application(), SingletonImageLoader.Factory {
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
+        trimLegacyContentCache(level)
+    }
+
+    // These pressure signals are still delivered on our API 26–33 floor, but
+    // Android 14+ no longer sends them. Keep deprecated symbols scoped here.
+    // https://developer.android.com/reference/android/content/ComponentCallbacks2
+    @Suppress("DEPRECATION")
+    private fun trimLegacyContentCache(level: Int) {
         if (level == TRIM_MEMORY_RUNNING_CRITICAL || level >= TRIM_MEMORY_MODERATE) {
             bookRepository.releaseContentCache()
         }

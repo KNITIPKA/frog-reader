@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.rememberSliderState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -75,7 +76,7 @@ private fun NarrowCaptionMotionPreview() = CaptionMotionStates(AppTheme.WHITE)
 @Composable
 private fun BeigeCaptionMotionPreview() = CaptionMotionStates(AppTheme.SEPIA)
 
-@Preview(name = "Progress · motion blur · transition frames", widthDp = 393, heightDp = 210)
+@Preview(name = "Progress · motion blur · speed levels", widthDp = 393, heightDp = 210)
 @Composable
 private fun CaptionBlurFramesPreview() = CaptionBlurFrames(AppTheme.OLED)
 
@@ -83,7 +84,7 @@ private fun CaptionBlurFramesPreview() = CaptionBlurFrames(AppTheme.OLED)
 @Composable
 private fun NarrowCaptionBlurFramesPreview() = CaptionBlurFrames(AppTheme.WHITE)
 
-@Preview(name = "Progress · motion blur · Beige transition frames", widthDp = 393, heightDp = 210)
+@Preview(name = "Progress · motion blur · Beige speed levels", widthDp = 393, heightDp = 210)
 @Composable
 private fun BeigeCaptionBlurFramesPreview() = CaptionBlurFrames(AppTheme.SEPIA)
 
@@ -93,7 +94,7 @@ private fun CaptionBlurFrames(theme: AppTheme) {
         val colors = readerColors(theme)
         Surface(Modifier.fillMaxSize(), color = colors.chrome) {
             Column(Modifier.padding(16.dp)) {
-                for ((phase, blurAmount) in listOf("Чётко" to 0f, "Переход · motion blur" to 0.5f, "Быстрое движение" to 1f)) {
+                for ((phase, blurAmount) in listOf("Чётко" to 0f, "Быстрый поиск по книге" to 0.5f, "Резкое движение" to 1f)) {
                     Text(phase, style = MaterialTheme.typography.labelLarge, color = colors.onChrome)
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -113,7 +114,7 @@ private fun CaptionBlurFrames(theme: AppTheme) {
     }
 }
 
-/** Static blur states; the live gesture/animation is checked on the phone. */
+/** Static speed/release states; live gesture responsiveness is checked on the phone. */
 @Composable
 private fun CaptionMotionStates(theme: AppTheme) {
     FrogReaderTheme(theme) {
@@ -121,22 +122,23 @@ private fun CaptionMotionStates(theme: AppTheme) {
         Surface(Modifier.fillMaxSize(), color = colors.chrome) {
             Column(Modifier.padding(16.dp)) {
                 val states = listOf(
-                    Triple("Медленное движение", ReaderProgressCaptionPresentation("3 pages left in chapter"), 525),
-                    Triple("Быстрое движение", ReaderProgressCaptionPresentation("Last page of the chapter", blurred = true), 653),
-                    Triple("Пауза или отпускание", ReaderProgressCaptionPresentation("Last page of the chapter"), 653),
+                    Triple("Медленное движение / внутри главы", 0f, 525),
+                    Triple("Быстрый поиск между главами", 1f, 653),
+                    Triple("Пауза или отпускание", 0f, 653),
                 )
-                for ((phase, caption, page) in states) {
+                for ((phase, blurAmount, page) in states) {
+                    val caption = if (page == 525) "3 pages left in chapter" else "Last page of the chapter"
                     Text(phase, style = MaterialTheme.typography.labelLarge, color = colors.onChrome)
                     ReaderSegmentedProgressSlider(
                         fraction = (page - 1) / 1288f, chapterStops = List(100) { it / 100f }, positionCount = 1289,
-                        adjusting = caption.blurred, enabled = true, colors = colors,
+                        adjusting = blurAmount > 0f, enabled = true, colors = colors,
                         interactionSource = remember { MutableInteractionSource() },
                         label = "Book progress", progressDescription = "$page/1289",
                         onValueChange = {}, onValueChangeFinished = {},
                         modifier = Modifier.fillMaxWidth().height(36.dp),
                     )
                     Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        ReaderProgressCaptionText(caption, caption.text, colors, Modifier.weight(1f, fill = false))
+                        ReaderProgressCaptionLayer(caption, caption, colors, { blurAmount }, Modifier.weight(1f, fill = false))
                         Spacer(Modifier.padding(horizontal = 4.dp))
                         Text("$page/1289", color = colors.onChromeVariant, style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum",
@@ -357,7 +359,7 @@ private fun LongDragTrackPreview(reverse: Boolean) {
                         fraction to current
                     }
                     Slider(
-                        value = layout.trackFraction(book), onValueChange = {},
+                        state = rememberSliderState(layout.trackFraction(book)), onValueChange = {},
                         modifier = Modifier.fillMaxWidth(),
                         thumb = { ReaderProgressThumb() },
                         track = { ReaderSegmentedProgressTrack(book, layout, true, true, colors) },

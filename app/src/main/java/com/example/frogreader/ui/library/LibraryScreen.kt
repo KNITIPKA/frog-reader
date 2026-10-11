@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.library
 
+import com.example.frogreader.ui.components.FrogSnackbarHost
 import com.example.frogreader.ui.theme.floatingSurface
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -62,8 +63,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Snackbar
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -109,6 +108,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.em
 import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -392,13 +392,9 @@ fun LibraryScreen(
                     )
                     snackbarHostState.showSnackbar(
                         if (message.failed > 0) {
-                            resources.getString(
-                                R.string.library_imported_many_partial,
-                                message.added,
-                                message.failed,
-                            )
+                            resources.getQuantityString(R.plurals.library_imported_many_partial, message.added, message.added, message.failed)
                         } else {
-                            resources.getString(R.string.library_imported_many, message.added)
+                            resources.getQuantityString(R.plurals.library_imported_many, message.added, message.added)
                         },
                     )
                 }
@@ -708,13 +704,13 @@ fun LibraryScreen(
                 }
             }
 
-            SnackbarHost(
+            FrogSnackbarHost(
                 hostState = snackbarHostState,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     // The bar's height already carries the system inset.
                     .padding(bottom = contentPadding.calculateBottomPadding() + 16.dp),
-            ) { data -> Snackbar(data) }
+            )
 
             mountedShelf?.let { shelfEntry ->
                 ShelfPanel(
@@ -1068,8 +1064,8 @@ private fun HeroCard(
     val scheme = MaterialTheme.colorScheme
     var menuOpen by remember { mutableStateOf(false) }
 
-    val fraction = book.progress.fraction.let { if (it.isNaN()) 0f else it.coerceIn(0f, 1f) }
-    val percent = (fraction * 100).roundToInt()
+    val fraction = book.libraryProgressFraction
+    val percent = book.libraryReadPercent
 
     Surface(
         shape = RoundedCornerShape(FrogHeroCorner),
@@ -1167,19 +1163,27 @@ private fun HeroCard(
                             .weight(1f)
                             .fillMaxHeight(),
                     ) {
-                        val label = if (book.lastOpenedAtMillis == null) {
-                            stringResource(R.string.library_start_reading)
-                        } else {
-                            stringResource(R.string.library_continue_reading)
-                        }
+                        val label = stringResource(when (book.libraryReadingAction) {
+                            LibraryReadingAction.START -> R.string.library_start_reading
+                            LibraryReadingAction.CONTINUE -> R.string.library_continue_reading
+                            LibraryReadingAction.READ_AGAIN -> R.string.library_read_again
+                        })
                         Text(
                             text = label.uppercase(),
                             fontSize = 11.5.sp,
                             lineHeight = 14.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            letterSpacing = 1.sp,
+                            letterSpacing = 0.087.em,
                             color = scheme.onPrimary,
                             maxLines = 1,
+                            softWrap = false,
+                            textAlign = TextAlign.Center,
+                            autoSize = TextAutoSize.StepBased(
+                                minFontSize = 7.sp,
+                                maxFontSize = 11.5.sp,
+                                stepSize = 0.5.sp,
+                            ),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp),
                         )
                     }
                     Box {
@@ -1350,7 +1354,7 @@ private fun SectionRow(
     ) {
         Text(
             text = if (selection != null) {
-                stringResource(R.string.library_selected_count, selection.count).uppercase()
+                pluralStringResource(R.plurals.library_selected_count, selection.count, selection.count).uppercase()
             } else {
                 stringResource(R.string.library_all_books).uppercase()
             },
@@ -1556,8 +1560,7 @@ private fun BookGridTile(
     // around it slide aside — the same arrival a new folder gets.
     val arrival by rememberEntryArrival(book.id, pop)
     val frog = LocalFrogColors.current
-    val fraction = book.progress.fraction.let { if (it.isNaN()) 0f else it.coerceIn(0f, 1f) }
-    val percent = (fraction * 100).roundToInt()
+    val percent = book.libraryReadPercent
 
     Column(
         modifier = modifier.graphicsLayer {
@@ -1594,7 +1597,7 @@ private fun BookGridTile(
                         fontSize = 10.5.sp,
                         lineHeight = 13.sp,
                         fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = if (percent == 100) frog.completionInk else MaterialTheme.colorScheme.onSurface,
                     )
                 }
             }
@@ -1788,8 +1791,9 @@ private fun BookListRow(
     val arrival by rememberEntryArrival(book.id, pop)
     val frog = LocalFrogColors.current
     val scheme = MaterialTheme.colorScheme
-    val fraction = book.progress.fraction.let { if (it.isNaN()) 0f else it.coerceIn(0f, 1f) }
-    val percent = (fraction * 100).roundToInt()
+    val fraction = book.libraryProgressFraction
+    val percent = book.libraryReadPercent
+    val progressFill = if (percent == 100) frog.completionFill else frog.folder
     val fillWidth = animateFloatAsState(
         targetValue = fraction,
         animationSpec = tween(400),
@@ -1812,7 +1816,7 @@ private fun BookListRow(
                 // empty fillMaxHeight child, which can collapse to zero.
                 val width = size.width * fillWidth.value
                 drawRect(
-                    color = frog.folder,
+                    color = progressFill,
                     topLeft = Offset(
                         x = if (layoutDirection == LayoutDirection.Rtl) size.width - width else 0f,
                         y = 0f,
@@ -1837,14 +1841,14 @@ private fun BookListRow(
             }
 
             Column(modifier = Modifier.weight(1f)) {
-                TileTitle(text = book.title, fontSize = 13.5.sp)
+                TileTitle(text = book.title, fontSize = 13.5.sp, maxLines = 2)
                 book.author?.let { author ->
                     Spacer(Modifier.height(2.dp))
                     TileSubtitle(text = author, fontSize = 11.5.sp)
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = listMetaLine(book).uppercase(),
+                    text = book.format.name,
                     fontSize = 8.5.sp,
                     lineHeight = 10.sp,
                     fontWeight = FontWeight.Medium,
@@ -1863,7 +1867,7 @@ private fun BookListRow(
                     fontSize = 13.sp,
                     lineHeight = 16.sp,
                     fontWeight = FontWeight.Medium,
-                    color = scheme.primary,
+                    color = if (percent == 100) frog.completionInk else scheme.primary,
                     modifier = Modifier.padding(end = 8.dp),
                 )
             }
@@ -2120,17 +2124,7 @@ private fun chapterLine(book: Book): String {
     return if (left >= 0) {
         pluralStringResource(R.plurals.library_pages_left_in_chapter, left, left)
     } else {
-        val fraction = book.progress.fraction.let { if (it.isNaN()) 0f else it.coerceIn(0f, 1f) }
+        val fraction = book.libraryProgressFraction
         stringResource(R.string.library_percent_left, ((1f - fraction) * 100).roundToInt())
     }
-}
-
-@Composable
-private fun listMetaLine(book: Book): String {
-    val status = if (book.progress.fraction > 0f) {
-        stringResource(R.string.library_status_reading)
-    } else {
-        stringResource(R.string.library_status_not_started)
-    }
-    return "${book.format.name} · $status"
 }

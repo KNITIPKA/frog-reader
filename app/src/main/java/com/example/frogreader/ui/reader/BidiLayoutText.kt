@@ -7,8 +7,9 @@ import com.example.frogreader.data.model.InlineBidiMode
 
 /**
  * A layout-only representation of authored text containing inline bidi
- * scopes. [source] is always the exact searchable/copyable book text;
- * [display] additionally contains Unicode Bidirectional Algorithm controls.
+ * scopes and explicit paragraph styles. [source] is always the exact
+ * searchable/copyable book text; [display] includes bidi controls and omits
+ * separators whose line breaks Compose already supplies between paragraphs.
  * The two maps make selection, pagination and highlighting stay in source
  * coordinates even though Compose lays out the display copy.
  */
@@ -19,7 +20,7 @@ class BidiLayoutText private constructor(
     private val sourceEnds: IntArray,
     private val displayOffsets: IntArray,
 ) {
-    val hasControls: Boolean get() = source !== display
+    val hasLayoutChanges: Boolean get() = source !== display
 
     /** Source boundary used at the inclusive start of a painted/measured range. */
     fun layoutStart(sourceOffset: Int): Int =
@@ -36,7 +37,17 @@ class BidiLayoutText private constructor(
     companion object {
         fun of(source: AnnotatedString): BidiLayoutText {
             val rawRanges = source.getStringAnnotations(BIDI_TAG, 0, source.length)
-            if (rawRanges.isEmpty()) return identity(source)
+            val paragraphs = source.paragraphStyles
+            if (rawRanges.isEmpty() && paragraphs.size < 2) return identity(source)
+            val paragraphBreaks = if (paragraphs.size < 2) emptySet() else {
+                val paragraphStarts = paragraphs.map { it.start }.toHashSet()
+                paragraphs.mapNotNull { range ->
+                    range.end.takeIf {
+                        it < source.length && source[it] == '\n' && it + 1 in paragraphStarts
+                    }
+                }.toHashSet()
+            }
+            if (rawRanges.isEmpty() && paragraphBreaks.isEmpty()) return identity(source)
 
             val scopes = rawRanges.mapIndexedNotNull { order, range ->
                 val mode = runCatching { InlineBidiMode.valueOf(range.item) }.getOrNull()
@@ -45,12 +56,13 @@ class BidiLayoutText private constructor(
                 val end = range.end.coerceIn(start, source.length)
                 if (start == end) null else Scope(start, end, mode, order)
             }.distinctBy { listOf(it.start, it.end, it.mode) }
-            if (scopes.isEmpty()) return identity(source)
+            if (scopes.isEmpty() && paragraphBreaks.isEmpty()) return identity(source)
 
             val opens = scopes.groupBy { it.start }
             val closes = scopes.groupBy { it.end }
             val sourceStarts = IntArray(source.length + 1)
             val sourceEnds = IntArray(source.length + 1)
+            val paragraphOffsets = IntArray(source.length + 1)
             val displayToSource = ArrayList<Int>(source.length + scopes.size * 2 + 1)
             val text = StringBuilder(source.length + scopes.size * 2)
             displayToSource += 0
@@ -69,13 +81,20 @@ class BidiLayoutText private constructor(
                 closes[sourceOffset]
                     ?.sortedWith(compareByDescending<Scope> { it.start }.thenByDescending { it.order })
                     ?.forEach { appendControls(it.mode.close, sourceOffset) }
+                // Paragraphs include their opening/closing controls, sharing
+                // one boundary so controls cannot become extra paragraphs.
+                paragraphOffsets[sourceOffset] = text.length
                 opens[sourceOffset]
                     ?.sortedWith(compareByDescending<Scope> { it.end }.thenBy { it.order })
                     ?.forEach { appendControls(it.mode.open, sourceOffset) }
                 sourceStarts[sourceOffset] = text.length
                 if (sourceOffset < source.length) {
-                    text.append(source[sourceOffset])
-                    displayToSource += sourceOffset + 1
+                    if (sourceOffset in paragraphBreaks) {
+                        displayToSource[displayToSource.lastIndex] = sourceOffset + 1
+                    } else {
+                        text.append(source[sourceOffset])
+                        displayToSource += sourceOffset + 1
+                    }
                 }
             }
 
@@ -84,6 +103,7 @@ class BidiLayoutText private constructor(
                 displayText = text.toString(),
                 starts = sourceStarts,
                 ends = sourceEnds,
+                paragraphOffsets = paragraphOffsets,
             )
             return BidiLayoutText(
                 source,
@@ -105,6 +125,7 @@ class BidiLayoutText private constructor(
             displayText: String,
             starts: IntArray,
             ends: IntArray,
+            paragraphOffsets: IntArray,
         ): AnnotatedString {
             val builder = AnnotatedString.Builder(displayText)
             fun mappedStart(offset: Int) = starts[offset.coerceIn(0, source.length)]
@@ -114,7 +135,9 @@ class BidiLayoutText private constructor(
                 builder.addStyle(range.item, mappedStart(range.start), mappedEnd(range.end))
             }
             for (range in source.paragraphStyles) {
-                builder.addStyle(range.item, mappedStart(range.start), mappedEnd(range.end))
+                builder.addStyle(range.item,
+                    paragraphOffsets[range.start.coerceIn(0, source.length)],
+                    paragraphOffsets[range.end.coerceIn(0, source.length)])
             }
             for (range in source.getStringAnnotations(0, source.length)) {
                 if (range.tag == BIDI_TAG) continue

@@ -8,9 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -19,15 +17,44 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import com.example.frogreader.data.AppTheme
+import com.example.frogreader.data.model.ReaderChromeStyle
 import com.example.frogreader.ui.theme.FrogReaderTheme
 
 @Preview(name = "Reader · Alice · Midnight", widthDp = 393, heightDp = 760)
 @Composable
 private fun AliceReaderChromePreview() = ReaderChromePreview(AppTheme.OLED)
 
+@Preview(name = "Classic · Alice · Midnight", widthDp = 393, heightDp = 760)
+@Composable
+private fun ClassicReaderChromePreview() = ReaderChromePreview(AppTheme.OLED, chromeStyle = ReaderChromeStyle.REGULAR)
+
+@Preview(name = "Classic · Light", widthDp = 360, heightDp = 760)
+@Composable
+private fun ClassicLightReaderChromePreview() = ReaderChromePreview(AppTheme.WHITE, chromeStyle = ReaderChromeStyle.REGULAR)
+
+@Preview(name = "Classic · Beige", widthDp = 393, heightDp = 882)
+@Composable
+private fun ClassicBeigeReaderChromePreview() = ReaderChromePreview(AppTheme.SEPIA, chromeStyle = ReaderChromeStyle.REGULAR)
+
+@Preview(name = "Classic · narrow · large text", widthDp = 320, heightDp = 760, fontScale = 1.6f)
+@Composable
+private fun ClassicLargeTextReaderChromePreview() = ReaderChromePreview(
+    AppTheme.WHITE, nested = true, long = true, chromeStyle = ReaderChromeStyle.REGULAR,
+)
+
+@Preview(name = "Classic · landscape · long titles", widthDp = 760, heightDp = 360)
+@Composable
+private fun ClassicLandscapeReaderChromePreview() = ReaderChromePreview(
+    AppTheme.OLED, nested = true, long = true, chromeStyle = ReaderChromeStyle.REGULAR,
+)
+
 @Preview(name = "Reader · Alice · Light", widthDp = 360, heightDp = 760)
 @Composable
 private fun LightReaderChromePreview() = ReaderChromePreview(AppTheme.WHITE)
+
+@Preview(name = "Beige · reader chrome", widthDp = 393, heightDp = 882)
+@Composable
+private fun BeigeReaderChromePreview() = ReaderChromePreview(AppTheme.SEPIA)
 
 @Preview(name = "Reader · books and subchapters", widthDp = 393, heightDp = 760)
 @Composable
@@ -61,10 +88,16 @@ private fun ReaderChromePreview(
     later: Boolean = false,
     shortTitle: Boolean = false,
     subchapter: Boolean = false,
+    chromeStyle: ReaderChromeStyle = ReaderChromeStyle.FLOATING,
 ) {
     FrogReaderTheme(theme) {
         val colors = readerColors(theme)
-        Box(Modifier.fillMaxSize().background(colors.background).padding(horizontal = 16.dp, vertical = 8.dp)) {
+        val floating = chromeStyle == ReaderChromeStyle.FLOATING
+        Box(
+            Modifier.fillMaxSize().background(colors.background).then(
+                if (floating) Modifier.padding(horizontal = 16.dp, vertical = 8.dp) else Modifier,
+            ),
+        ) {
             Text(
                 text = if (subchapter) "«каравана» слишком пыльное, а затем выруливает с обочины на асфальт..."
                     else if (nested) "— Прокидайтеся, гобіти! — прокричав він. — Ранок прекрасний!\n\n— Що в ньому такого прекрасного? — буркнув Піпін, перехилившись через край свого ложа.\n\nФродо здер ковдри з Піпіна та Сема і, відкинувши їх набік, пішов униз до краю пагорба."
@@ -76,11 +109,10 @@ private fun ReaderChromePreview(
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                     .padding(horizontal = 4.dp, vertical = 100.dp),
             )
-            Surface(
-                color = colors.chrome,
-                contentColor = colors.onChrome,
-                shape = RoundedCornerShape(28.dp),
-                shadowElevation = 2.dp,
+            ReaderBarSurface(
+                colors = colors,
+                chromeStyle = chromeStyle,
+                topBar = true,
                 modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter),
             ) {
                 ReaderBookHeader(
@@ -90,16 +122,16 @@ private fun ReaderChromePreview(
                         else if (nested) "Джон Рональд Руел Толкін" else "Lewis Carroll",
                     colors = colors,
                     onBack = {}, onSearch = {},
+                    chromeStyle = chromeStyle,
                 )
             }
-            Surface(
-                color = colors.chrome,
-                contentColor = colors.onChrome,
-                shape = RoundedCornerShape(28.dp),
-                shadowElevation = 2.dp,
+            ReaderBarSurface(
+                colors = colors,
+                chromeStyle = chromeStyle,
+                topBar = false,
                 modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter),
             ) {
-                Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)) {
+                Column(Modifier.padding(start = 12.dp, end = 12.dp, top = if (floating) 8.dp else 6.dp, bottom = 8.dp)) {
                     ReaderChapterFooter(
                         chapterLabel = if (subchapter) "15"
                             else if (long) "Розділ 1. Довгоочікувана гостина, на якій сталося чимало несподіваного і розпочалася надзвичайна подорож"
@@ -116,6 +148,7 @@ private fun ReaderChromePreview(
                         chapterStartPages = listOf(0, 12, 36, 69, 93, 138, 156, 204, 222, 270),
                         progressValuesReady = true,
                         colors = colors,
+                        chromeStyle = chromeStyle,
                         contentsSelected = false, settingsSelected = false,
                         onContents = {}, onSettings = {}, onSeekBook = { false },
                         chapterAtFraction = { f ->

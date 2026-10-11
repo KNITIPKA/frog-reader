@@ -633,7 +633,7 @@ class CssResolverAdvancedTest {
 
     @Test
     fun `unsupported functional pseudo drops only its comma member`() {
-        val r = resolver("p:has(em), p.plain { font-weight: bold; }")
+        val r = resolver("p:host(em), p.plain { font-weight: bold; }")
         val d = doc("<p id='a' class='plain'>1</p><p id='b'><em>2</em></p>")
         assertEquals(true, r.computed(d.selectFirst("#a")!!).bold)
         assertNull(r.computed(d.selectFirst("#b")!!).bold)

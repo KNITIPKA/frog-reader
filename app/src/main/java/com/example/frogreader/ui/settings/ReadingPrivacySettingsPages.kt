@@ -13,7 +13,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Login
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Fingerprint
-import androidx.compose.material.icons.rounded.FormatAlignCenter
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Vibration
@@ -68,6 +67,13 @@ internal fun ReadingSettingsPage(
     ) {
         SettingsSectionLabel(stringResource(R.string.settings_while_reading))
         SettingsCard {
+            ReaderChromeStyleSettingsRow(
+                settings = settings,
+                onSelected = { selected ->
+                    onUpdate { it.copy(readerChromeStyle = selected) }
+                },
+            )
+            SettingsDivider()
             SettingsControlRow(
                 icon = Icons.AutoMirrored.Rounded.Login,
                 title = stringResource(R.string.settings_startup_title),
@@ -106,14 +112,6 @@ internal fun ReadingSettingsPage(
         Spacer(Modifier.height(24.dp))
         SettingsSectionLabel(stringResource(R.string.settings_reading_behavior))
         SettingsCard {
-            SettingsSwitchRow(
-                icon = Icons.Rounded.FormatAlignCenter,
-                title = stringResource(R.string.settings_center_headings),
-                subtitle = stringResource(R.string.settings_center_headings_subtitle),
-                checked = settings.centerHeadings,
-                onCheckedChange = { checked -> onUpdate { it.copy(centerHeadings = checked) } },
-            )
-            SettingsDivider()
             SettingsSwitchRow(
                 icon = Icons.Rounded.Timer,
                 title = stringResource(R.string.settings_auto_hide_return),

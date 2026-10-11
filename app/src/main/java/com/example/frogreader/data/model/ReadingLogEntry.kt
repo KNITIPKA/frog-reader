@@ -29,6 +29,10 @@ enum class ReadingLogSource { FROGREADER, PAPER, EXTERNAL }
 @Serializable
 enum class ReadingLogStatus { IN_PROGRESS, FINISHED, ABANDONED }
 
+/** A chronological position among readings with the same remembered partial date. */
+@Serializable
+data class ReadingLogDateOrder(val date: ReadingLogDate, val rank: Int)
+
 /** One reading, independent of the ebook file and of other readings of the same book. */
 @Serializable
 data class ReadingLogEntry(
@@ -49,6 +53,15 @@ data class ReadingLogEntry(
     val review: String = "",
     val createdAtMillis: Long = 0L,
     override val updatedAtMillis: Long = 0L,
+    /** Completion timestamp for same-day ordering; displayed dates retain their precision. */
+    val finishedAtMillis: Long? = null,
+    /** Actual ebook format retained if the library file is later removed. */
+    val bookFormat: BookFormat? = null,
+    /** Start and finish chronology are independent; ranks run from earliest to latest. */
+    val startedDateOrder: ReadingLogDateOrder? = null,
+    val finishedDateOrder: ReadingLogDateOrder? = null,
+    /** Last known 0..1 book progress; abandoned readings retain the position where they stopped. */
+    val progressFraction: Float? = null,
 ) : Timestamped<ReadingLogEntry> {
     override fun withUpdatedAt(millis: Long) = copy(updatedAtMillis = millis)
 }

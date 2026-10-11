@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Overlapping pages; the quieter rear sheet inherits the current icon tint. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="36dp" android:height="36dp"
+    android:viewportWidth="40" android:viewportHeight="40">
+    <path android:fillColor="@android:color/black"
+        android:fillAlpha="0.45"
+        android:pathData="M30.5,5 H31.2 Q35,5 35,8.8 V31.2 Q35,35 31.2,35 H30.5 Q31.4,33.5 31.4,31.2 V6.8 Q31.4,5.8 30.5,5 Z" />
+    <path android:fillColor="@android:color/black"
+        android:fillType="evenOdd"
+        android:pathData="M9.8,3 H25.2 Q29,3 29,6.8 V31.2 Q29,35 25.2,35 H9.8 Q6,35 6,31.2 V6.8 Q6,3 9.8,3 Z M11.7,10.8 H23.3 A1.2,1.2 0,0 1,23.3 13.2 H11.7 A1.2,1.2 0,0 1,11.7 10.8 Z M11.7,15.6 H23.3 A1.2,1.2 0,0 1,23.3 18 H11.7 A1.2,1.2 0,0 1,11.7 15.6 Z M11.7,20.4 H23.3 A1.2,1.2 0,0 1,23.3 22.8 H11.7 A1.2,1.2 0,0 1,11.7 20.4 Z" />
+</vector>

@@ -1,7 +1,8 @@
 package com.example.frogreader.ui.translation
 
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
 import android.content.ActivityNotFoundException
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -14,6 +15,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import com.example.frogreader.R
 import com.example.frogreader.data.translation.TranslationCoordinator
 import com.example.frogreader.data.translation.queryTranslatorApps
@@ -27,11 +29,14 @@ import kotlinx.coroutines.withContext
 fun rememberTranslationAction(
     defaultTranslator: String?,
     saveDefault: suspend (String) -> Unit,
+    snackbar: SnackbarHostState,
 ): (String) -> Unit {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val preferred by rememberUpdatedState(defaultTranslator)
     val save by rememberUpdatedState(saveDefault)
+    val launchFailedMessage by rememberUpdatedState(stringResource(R.string.translator_launch_failed))
+    val saveFailedMessage by rememberUpdatedState(stringResource(R.string.translator_save_failed))
     // PROCESS_TEXT activities can return a result; the source book is read-only.
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
     val coordinator = remember(context, launcher) {
@@ -59,14 +64,14 @@ fun rememberTranslationAction(
             } catch (_: ActivityNotFoundException) {
                 choosing = true
                 pickerRevision++
-                Toast.makeText(context, R.string.translator_launch_failed, Toast.LENGTH_LONG).show()
+                scope.launch { snackbar.showSnackbar(launchFailedMessage, duration = SnackbarDuration.Long) }
             } catch (_: SecurityException) {
                 choosing = true
                 pickerRevision++
-                Toast.makeText(context, R.string.translator_launch_failed, Toast.LENGTH_LONG).show()
+                scope.launch { snackbar.showSnackbar(launchFailedMessage, duration = SnackbarDuration.Long) }
             } catch (_: IOException) {
                 choosing = true
-                Toast.makeText(context, R.string.translator_save_failed, Toast.LENGTH_LONG).show()
+                scope.launch { snackbar.showSnackbar(saveFailedMessage, duration = SnackbarDuration.Long) }
             } finally {
                 busy = false
             }

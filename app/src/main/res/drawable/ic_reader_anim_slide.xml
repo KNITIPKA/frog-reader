@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Filled page with cut-out text and a clear two-way movement rail. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="36dp" android:height="36dp"
+    android:viewportWidth="40" android:viewportHeight="40">
+    <path android:fillColor="@android:color/black"
+        android:fillType="evenOdd"
+        android:pathData="M11.8,3 H28.2 Q32,3 32,6.8 V24.8 H31 Q30,24.8 30,25.8 V26 H10 V25.8 Q10,24.8 9,24.8 H8 V6.8 Q8,3 11.8,3 Z M14.2,10.8 H25.8 A1.2,1.2 0,0 1,25.8 13.2 H14.2 A1.2,1.2 0,0 1,14.2 10.8 Z M14.2,15.6 H25.8 A1.2,1.2 0,0 1,25.8 18 H14.2 A1.2,1.2 0,0 1,14.2 15.6 Z M14.2,20.4 H25.8 A1.2,1.2 0,0 1,25.8 22.8 H14.2 A1.2,1.2 0,0 1,14.2 20.4 Z M8,33 H32 Q31.8,35 28.2,35 H11.8 Q8.2,35 8,33 Z" />
+    <path android:fillColor="@android:color/black"
+        android:pathData="M8.8,25.5 Q8.8,24.7 8.2,25.2 L2.5,28.7 Q1.7,29.3 2.5,29.9 L8.2,33.4 Q8.8,33.9 8.8,33.1 V30.6 H31.2 V33.1 Q31.2,33.9 31.8,33.4 L37.5,29.9 Q38.3,29.3 37.5,28.7 L31.8,25.2 Q31.2,24.7 31.2,25.5 V28 H8.8 Z" />
+</vector>

@@ -1,14 +1,23 @@
 package com.example.frogreader.reader
 
+import androidx.compose.foundation.interaction.DragInteraction
+import com.example.frogreader.ui.reader.ReaderProgressCaptionIdleMillis
+import com.example.frogreader.ui.reader.ReaderProgressCaptionMotion
 import com.example.frogreader.ui.reader.ReaderProgressCaptionPolicy
-import com.example.frogreader.ui.reader.ReaderProgressCaptionSettleMillis
 import com.example.frogreader.ui.reader.ReaderProgressCaptionBlurSteps
+import com.example.frogreader.ui.reader.ReaderSeekInteractionSource
 import com.example.frogreader.ui.reader.readerProgressCaptionBlurIndex
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ReaderProgressCaptionTest {
     @Test
     fun `motion blur switches off at rest and remains active during sustained movement`() {
@@ -36,79 +45,228 @@ class ReaderProgressCaptionTest {
     }
 
     @Test
-    fun `rapid scrubbing keeps every live value and clears blur after a pause`() {
-        val policy = ReaderProgressCaptionPolicy("12 pages left")
-        assertEquals("11 pages left", policy.update("11 pages left", true, 1000).text)
-        val burst = policy.update("Last page of the chapter", true, 1016)
-        assertTrue(burst.blurred)
-        assertEquals("Last page of the chapter", burst.text)
-        val next = policy.update("7 pages left", true, 1032)
-        assertTrue(next.blurred)
-        assertEquals("7 pages left", next.text)
-        val last = policy.update("3 pages left", true, 1048)
-        assertTrue(last.blurred)
-        assertEquals("3 pages left", last.text)
-        assertTrue(policy.settle(1048 + ReaderProgressCaptionSettleMillis - 1).blurred)
-        val settled = policy.settle(1048 + ReaderProgressCaptionSettleMillis)
-        assertFalse(settled.blurred)
-        assertEquals("3 pages left", settled.text)
+    fun `fast directional travel across chapters enables blur after a short motion window`() {
+        val policy = ReaderProgressCaptionPolicy()
+        assertEquals(0f, policy.update(0.10f, 30f, 0, 0), 0f)
+        assertEquals(0f, policy.update(0.14f, 42f, 0, 16), 0f)
+        assertTrue(policy.update(0.18f, 54f, 1, 32) > 0f)
+        assertTrue(policy.update(0.22f, 66f, 2, 48) > 0f)
     }
 
     @Test
-    fun `slow scrubbing continues to show each live caption`() {
-        val policy = ReaderProgressCaptionPolicy("12 pages left")
-        for (step in 1..10) {
-            val text = "${12 - step} pages left"
-            val shown = policy.update(text, true, step * 250L)
-            assertFalse(shown.blurred)
-            assertEquals(text, shown.text)
+    fun `detection uses speed rather than event frequency`() {
+        for (interval in listOf(33L, 16L, 8L, 4L)) {
+            val policy = ReaderProgressCaptionPolicy()
+            for (step in 0..(160L / interval).toInt()) {
+                val time = step * interval
+                val fraction = 0.1f + time / 1000f
+                val amount = policy.update(fraction, fraction * 300f, (fraction * 40).toInt(), time)
+                if (time >= 48L) assertTrue("interval=$interval, time=$time", amount > 0f)
+            }
         }
     }
 
     @Test
-    fun `release and cancellation show the actual value without waiting for quiet`() {
-        for (actual in listOf("3 pages left", "12 pages left")) {
-            val policy = ReaderProgressCaptionPolicy("12 pages left")
-            policy.update("11 pages left", true, 1000)
-            assertTrue(policy.update("3 pages left", true, 1016).blurred)
-            val released = policy.update(actual, false, 1017)
-            assertFalse(released.blurred)
-            assertEquals(actual, released.text)
-            // The next drag starts fresh, even if it immediately follows the previous one.
-            assertFalse(policy.update("2 pages left", true, 1018).blurred)
+    fun `fast movement entirely within one chapter stays clear`() {
+        val policy = ReaderProgressCaptionPolicy()
+        for (step in 0..20) {
+            assertEquals(0f, policy.update(0.1f + step * 0.03f, step * 9f, 0, step * 16L), 0f)
         }
     }
 
     @Test
-    fun `ordinary rapid page turns remain clear`() {
-        val policy = ReaderProgressCaptionPolicy("12 pages left")
-        for (step in 1..10) {
-            val text = "${12 - step} pages left"
-            val shown = policy.update(text, false, step * 16L)
-            assertFalse(shown.blurred)
-            assertEquals(text, shown.text)
+    fun `slow finger stays clear even when compressed chapters change many pages`() {
+        val policy = ReaderProgressCaptionPolicy()
+        for (step in 0..20) {
+            assertEquals(0f, policy.update(step * 0.04f, step * 0.5f, step, step * 16L), 0f)
         }
     }
 
     @Test
-    fun `unchanged captions do not count as a burst or keep motion blur active`() {
-        val policy = ReaderProgressCaptionPolicy("Last page of the chapter")
+    fun `slow travel across the book never accumulates enough old evidence to blur`() {
+        val policy = ReaderProgressCaptionPolicy()
         for (step in 0..100) {
-            assertFalse(policy.update("Last page of the chapter", true, step * 16L).blurred)
+            assertEquals(0f, policy.update(step / 100f, step * 3f, step / 2, step * 50L), 0f)
         }
-        policy.update("3 pages left", true, 1700)
-        assertTrue(policy.update("2 pages left", true, 1716).blurred)
-        policy.update("2 pages left", true, 1800)
-        assertFalse(policy.settle(1716 + ReaderProgressCaptionSettleMillis).blurred)
     }
 
     @Test
-    fun `a slow update clears motion even if the idle callback has not run`() {
-        val policy = ReaderProgressCaptionPolicy("12 pages left")
-        policy.update("11 pages left", true, 1000)
-        assertTrue(policy.update("3 pages left", true, 1016).blurred)
-        val slow = policy.update("2 pages left", true, 1016 + ReaderProgressCaptionSettleMillis)
-        assertFalse(slow.blurred)
-        assertEquals("2 pages left", slow.text)
+    fun `expanded small chapters stay clear despite fast finger movement`() {
+        val policy = ReaderProgressCaptionPolicy()
+        for (step in 0..6) {
+            assertEquals(0f, policy.update(0.1f + step * 0.001f, step * 12f, step / 2, step * 16L), 0f)
+        }
+    }
+
+    @Test
+    fun `tiny corrections at chapter boundaries do not flash blur`() {
+        val policy = ReaderProgressCaptionPolicy()
+        for (step in 0..100) {
+            val fraction = if (step % 2 == 0) 0.399f else 0.401f
+            assertEquals(0f, policy.update(fraction, fraction * 300f, step % 2, step.toLong()), 0f)
+        }
+    }
+
+    @Test
+    fun `blur clears on slowing even before the preview leaves the current page`() {
+        val policy = burst()
+        assertEquals(0f, policy.update(0.18f, 54.3f, 1, 48), 0f)
+        assertEquals(0f, policy.blurAmount, 0f)
+    }
+
+    @Test
+    fun `direction reversal clears old motion and a new sweep can activate independently`() {
+        val policy = ReaderProgressCaptionPolicy()
+        policy.update(0.50f, 150f, 5, 0)
+        policy.update(0.54f, 162f, 5, 16)
+        assertTrue(policy.update(0.58f, 174f, 6, 32) > 0f)
+        assertEquals(0f, policy.update(0.54f, 162f, 5, 48), 0f)
+        policy.update(0.50f, 150f, 5, 64)
+        assertTrue(policy.update(0.46f, 138f, 4, 80) > 0f)
+    }
+
+    @Test
+    fun `old chapter crossings expire when fast travel continues inside a long chapter`() {
+        val policy = burst()
+        assertTrue(policy.update(0.20f, 60f, 1, 48) > 0f)
+        for (step in 2..10) {
+            policy.update(0.18f + step * 0.02f, 54f + step * 6f, 1, 32 + step * 16L)
+        }
+        assertEquals(0f, policy.blurAmount, 0f)
+    }
+
+    @Test
+    fun `idle timeout clears blur and a resumed gesture starts with fresh evidence`() {
+        val policy = burst()
+        assertTrue(policy.settle(32 + ReaderProgressCaptionIdleMillis - 1) > 0f)
+        assertEquals(0f, policy.settle(32 + ReaderProgressCaptionIdleMillis), 0f)
+        assertEquals(0f, policy.update(0.22f, 66f, 2, 97), 0f)
+    }
+
+    @Test
+    fun `a late motion event clears the burst without waiting for its idle callback`() {
+        val policy = burst()
+        assertEquals(0f, policy.update(0.22f, 66f, 2, 32 + ReaderProgressCaptionIdleMillis), 0f)
+    }
+
+    @Test
+    fun `duplicate event timestamps cannot manufacture a burst`() {
+        val policy = ReaderProgressCaptionPolicy()
+        for (step in 0..10) {
+            assertEquals(0f, policy.update(step / 10f, step * 30f, step, 100), 0f)
+        }
+    }
+
+    @Test
+    fun `invalid motion and backwards timestamps clear the active effect`() {
+        val invalid = listOf(Triple(Float.NaN, 70f, 2), Triple(0.22f, Float.POSITIVE_INFINITY, 2), Triple(0.22f, 70f, -1))
+        for ((book, track, chapter) in invalid) {
+            val policy = burst()
+            assertEquals(0f, policy.update(book, track, chapter, 48), 0f)
+        }
+        assertEquals(0f, burst().update(0.22f, 66f, 2, 31), 0f)
+    }
+
+    @Test
+    fun `intensity follows velocity and remains bounded`() {
+        fun amount(speed: Float): Float {
+            val policy = ReaderProgressCaptionPolicy()
+            policy.update(0.10f, 0f, 0, 0)
+            policy.update(0.13f, speed * 0.024f, 1, 24)
+            return policy.update(0.16f, speed * 0.048f, 2, 48)
+        }
+        val moderate = amount(300f)
+        val fast = amount(900f)
+        assertTrue(moderate > 0f)
+        assertTrue(fast > moderate)
+        assertEquals(1f, amount(2000f), 0f)
+    }
+
+    @Test
+    fun `release clears observable layer state synchronously without running a coroutine`() = runTest {
+        val motion = ReaderProgressCaptionMotion(this) { testScheduler.currentTime }
+        motion.update(0.10f, 30f, 0)
+        advanceTimeBy(16)
+        motion.update(0.14f, 42f, 0)
+        advanceTimeBy(16)
+        motion.update(0.18f, 54f, 1)
+        assertTrue(motion.blurAmount > 0f)
+
+        motion.reset()
+        assertEquals(0f, motion.blurAmount, 0f)
+        motion.update(0.22f, 66f, 2)
+        assertEquals(0f, motion.blurAmount, 0f)
+        advanceUntilIdle()
+        assertEquals(0f, motion.blurAmount, 0f)
+    }
+
+    @Test
+    fun `sustained input extends the idle deadline and holding still clears automatically`() = runTest {
+        val motion = ReaderProgressCaptionMotion(this) { testScheduler.currentTime }
+        for (step in 0..15) {
+            if (step > 0) advanceTimeBy(16)
+            motion.update(0.1f + step * 0.03f, 30f + step * 9f, step / 2)
+            runCurrent()
+            if (step >= 2) assertTrue(motion.blurAmount > 0f)
+        }
+        advanceTimeBy(ReaderProgressCaptionIdleMillis - 1)
+        runCurrent()
+        assertTrue(motion.blurAmount > 0f)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(0f, motion.blurAmount, 0f)
+    }
+
+    @Test
+    fun `a cancelled old idle watcher cannot clear a newly started burst`() = runTest {
+        val motion = ReaderProgressCaptionMotion(this) { testScheduler.currentTime }
+        for (step in 0..2) {
+            advanceTimeBy(16)
+            motion.update(0.1f + step * 0.04f, 30f + step * 12f, step / 2)
+            runCurrent()
+        }
+        motion.reset()
+        for (step in 0..6) {
+            advanceTimeBy(16)
+            motion.update(0.3f + step * 0.04f, 90f + step * 12f, 3 + step / 2)
+            runCurrent()
+            if (step >= 2) assertTrue(motion.blurAmount > 0f)
+        }
+        motion.reset()
+        advanceUntilIdle()
+        assertEquals(0f, motion.blurAmount, 0f)
+    }
+
+    @Test
+    fun `drag stop and cancellation clear the effect before interaction collectors run`() = runTest {
+        for (cancel in listOf(false, true)) {
+            val motion = ReaderProgressCaptionMotion(this) { testScheduler.currentTime }
+            var cancelled = false
+            val source = ReaderSeekInteractionSource(
+                onCancel = { cancelled = true; motion.reset() },
+                onStop = motion::reset,
+            )
+            assertFalse(source.isDragging)
+            val start = DragInteraction.Start()
+            source.emit(start)
+            assertTrue(source.isDragging)
+            for (step in 0..2) {
+                advanceTimeBy(16)
+                motion.update(0.1f + step * 0.04f, 30f + step * 12f, step / 2)
+            }
+            assertTrue(motion.blurAmount > 0f)
+            if (cancel) source.emit(DragInteraction.Cancel(start))
+            else source.tryEmit(DragInteraction.Stop(start))
+            assertEquals(0f, motion.blurAmount, 0f)
+            assertFalse(source.isDragging)
+            assertEquals(cancel, cancelled)
+        }
+        advanceUntilIdle()
+    }
+
+    private fun burst(): ReaderProgressCaptionPolicy = ReaderProgressCaptionPolicy().apply {
+        update(0.10f, 30f, 0, 0)
+        update(0.14f, 42f, 0, 16)
+        assertTrue(update(0.18f, 54f, 1, 32) > 0f)
     }
 }

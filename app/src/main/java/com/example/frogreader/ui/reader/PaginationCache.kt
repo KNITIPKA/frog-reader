@@ -2,9 +2,15 @@ package com.example.frogreader.ui.reader
 
 import androidx.compose.ui.text.AnnotatedString
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.data.model.CachedTableLayout
 import com.example.frogreader.data.model.EXTERNAL_LINK_TAG
 import com.example.frogreader.data.model.FOOTNOTE_TAG
+import com.example.frogreader.data.model.HIDDEN_TEXT_TAG
 import com.example.frogreader.data.model.INLINE_IMAGE_ALT_TAG
+import com.example.frogreader.data.model.INLINE_FONT_FAMILY_TAG
+import com.example.frogreader.data.model.INLINE_MATH_TAG
+import com.example.frogreader.data.model.INLINE_RUBY_TAG
+import com.example.frogreader.data.model.INLINE_TEXT_BOX_TAG
 import com.example.frogreader.data.model.INLINE_IMAGE_TAG
 import com.example.frogreader.data.model.LINK_TAG
 import kotlinx.serialization.Serializable
@@ -22,7 +28,7 @@ import java.security.MessageDigest
 object PaginationCache {
 
     /** Bump when the CachedPart/CachedPage shape changes. */
-    private const val FORMAT_VERSION = 6
+    private const val FORMAT_VERSION = 7
 
     @Serializable
     private class CachedPart(
@@ -31,12 +37,9 @@ object PaginationCache {
         val end: Int = -1,
         val paraStart: Boolean = true,
         val imageH: Int? = null,
-        // Table parts: row range + the measured layout (grid is rebuilt).
+        // Table parts retain a row range; layout is shared by source item.
         val rowS: Int = -1,
         val rowE: Int = -1,
-        val cols: List<Int>? = null,
-        val rowH: List<Int>? = null,
-        val tScale: Float = 1f,
         val hdr: Boolean = false,
         // Side-box composite (drop cap / float); present when sbBesideW > 0.
         val sbCap: String? = null,
@@ -72,6 +75,7 @@ object PaginationCache {
         val contentSignature: String,
         val pages: List<CachedPage>,
         val version: Int = 1,
+        val tables: Map<Int, CachedTableLayout> = emptyMap(),
     )
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -95,7 +99,7 @@ object PaginationCache {
             hash.boolean(item.suppressedByPublisherFloat)
             hash.string(item.publisherClearBefore.name)
             hash.int(item.publisherBoxes.size)
-            item.publisherBoxes.forEach { hash.string(it.toString()) }
+            item.publisherBoxes.forEach(hash::publisherBox)
             item.publisherFloat?.let { float ->
                 hash.string(float.side.name)
                 hash.string(float.style.toString())
@@ -103,7 +107,7 @@ object PaginationCache {
                 float.contents.forEach { content ->
                     hash.int(content.sourceItemIndex)
                     hash.int(content.publisherBoxes.size)
-                    content.publisherBoxes.forEach { hash.string(it.toString()) }
+                    content.publisherBoxes.forEach(hash::publisherBox)
                 }
             } ?: hash.int(-1)
             when (val element = item.element) {
@@ -127,6 +131,13 @@ object PaginationCache {
                     hash.float(element.widthFrac)
                     hash.float(element.widthEm)
                     hash.float(element.heightEm)
+                    hash.float(element.maxHeightEm)
+                    hash.float(element.maxHeightViewportFrac)
+                    hash.float(element.maxWidthEm)
+                    hash.float(element.maxWidthFrac)
+                    hash.boolean(element.darkModeInvert)
+                    hash.string(element.darkModeBackgroundArgb?.toString())
+                    hash.boolean(element.darkModeBackgroundCurrentColor)
                     hash.string(element.altText)
                     hash.boolean(element.spaceBeforeSpecified)
                     hash.boolean(element.spaceAfterSpecified)
@@ -143,6 +154,10 @@ object PaginationCache {
                     hash.string("table")
                     hash.block(element.block)
                     hash.int(element.rows.size)
+                    hash.string(element.publisherRowLayout?.name)
+                    hash.boolean(element.centerCellsVertically)
+                    hash.float(element.stackCellsBelowCssPx)
+                    hash.string(element.publisherBox?.toString())
                     for (row in element.rows) {
                         hash.boolean(row.isHeader)
                         hash.int(row.cells.size)
@@ -156,6 +171,7 @@ object PaginationCache {
                             hash.string(cell.publisherBox?.toString())
                             hash.boolean(cell.publisherPaddingSpecified)
                             hash.boolean(cell.publisherBorderSpecified)
+                            hash.string(cell.narrowStyle?.toString())
                         }
                     }
                 }
@@ -175,28 +191,46 @@ object PaginationCache {
             ) {
                 return null
             }
+            // Every page fragment of a long drama table shares the same
+            // grid and measured arrays. Rebuilding the full table per page
+            // made a cache hit quadratic and retained duplicate row heights.
+            val tableLayouts = HashMap<Int, TableLayout>()
             cached.pages.map { page ->
                 BookPage(
                     parts = page.parts.map { part ->
                         val element = items.getOrNull(part.item)?.element ?: return null
                         if (part.rowS >= 0) {
                             val table = element as? ContentElement.Table ?: return null
-                            val cols = part.cols ?: return null
-                            val rowHeights = part.rowH ?: return null
+                            val cachedTable = cached.tables[part.item] ?: return null
+                            val cols = cachedTable.cols
+                            val rowHeights = cachedTable.rowH
                             if (rowHeights.size != table.rows.size) return null
-                            val grid = TableGrid.build(table.rows)
-                            if (grid.columnCount != cols.size) return null
+                            if (part.rowS !in table.rows.indices ||
+                                part.rowE !in (part.rowS + 1)..table.rows.size
+                            ) return null
+                            val layout = tableLayouts[part.item] ?: run {
+                                val grid = TableGrid.build(table.rows)
+                                if (grid.columnCount != cols.size) return null
+                                val widths = cols.toIntArray()
+                                val offsets = cachedTable.offsets.takeIf { it.size == cols.size + 1 }?.toIntArray()
+                                    ?: tableColumnGeometry(widths, widths.sum(), null).offsetsPx
+                                val stacked = cachedTable.stackedCells?.let { heights ->
+                                    if (heights.size != table.rows.size || heights.indices.any { r ->
+                                        heights[r].size != table.rows[r].cells.size ||
+                                            heights[r].any { it < 0 } || heights[r].sum() != rowHeights[r]
+                                    }) return null
+                                    heights.map { it.toIntArray() }
+                                }
+                                TableLayout(grid, widths, rowHeights.toIntArray(), cachedTable.scale,
+                                    offsets, cachedTable.width ?: offsets.last(), stacked)
+                                    .also { tableLayouts[part.item] = it }
+                            }
                             return@map PagePart(
                                 itemIndex = part.item,
                                 element = element,
                                 rowStart = part.rowS,
                                 rowEnd = part.rowE,
-                                tableLayout = TableLayout(
-                                    grid,
-                                    cols.toIntArray(),
-                                    rowHeights.toIntArray(),
-                                    part.tScale,
-                                ),
+                                tableLayout = layout,
                                 headerRepeated = part.hdr,
                                 charStart = part.rowS,
                                 charEnd = part.rowE,
@@ -261,11 +295,26 @@ object PaginationCache {
     fun save(file: File, key: String, items: List<ReaderItem>, pages: List<BookPage>) {
         runCatching {
             file.parentFile?.mkdirs()
+            val tables = linkedMapOf<Int, CachedTableLayout>()
+            pages.forEach { page ->
+                page.parts.forEach { part ->
+                    part.tableLayout?.let { layout ->
+                        if (part.itemIndex !in tables) {
+                            tables[part.itemIndex] = CachedTableLayout(
+                                layout.colWidthsPx.toList(), layout.rowHeightsPx.toList(), layout.fontScale,
+                                layout.columnOffsetsPx.toList(), layout.tableWidthPx,
+                                layout.stackedCellHeightsPx?.map { it.toList() },
+                            )
+                        }
+                    }
+                }
+            }
             val cached = CachedPagination(
                 key = key,
                 itemCount = items.size,
                 contentSignature = contentSignature(items),
                 version = FORMAT_VERSION,
+                tables = tables,
                 pages = pages.map { page ->
                     CachedPage(
                         first = page.firstItemIndex,
@@ -279,9 +328,6 @@ object PaginationCache {
                                 imageH = part.imageHeightPx,
                                 rowS = part.rowStart,
                                 rowE = part.rowEnd,
-                                cols = part.tableLayout?.colWidthsPx?.toList(),
-                                rowH = part.tableLayout?.rowHeightsPx?.toList(),
-                                tScale = part.tableLayout?.fontScale ?: 1f,
                                 hdr = part.headerRepeated,
                                 sbCap = part.sideBox?.capText,
                                 sbImg = part.sideBox?.imagePath,
@@ -368,6 +414,17 @@ object PaginationCache {
             block?.floatImage?.path?.let(::file)
         }
 
+        fun publisherBox(box: ReaderPublisherBox) {
+            string(box.id)
+            string(box.parentId)
+            string(box.style.toString())
+            string(box.floatSide?.name)
+            boolean(box.startsAtElement)
+            boolean(box.endsAtElement)
+            // Inline content is derived from the source leaves, which are
+            // hashed separately. Its runtime width cache is not identity.
+        }
+
         /**
          * File metadata plus bounded head/tail samples catch replaced images
          * without rereading a 60 MB illustration on every cache lookup.
@@ -417,6 +474,11 @@ object PaginationCache {
         EXTERNAL_LINK_TAG,
         INLINE_IMAGE_TAG,
         INLINE_IMAGE_ALT_TAG,
+        HIDDEN_TEXT_TAG,
+        INLINE_FONT_FAMILY_TAG,
+        INLINE_MATH_TAG,
+        INLINE_RUBY_TAG,
+        INLINE_TEXT_BOX_TAG,
     )
 
     private const val FILE_SAMPLE_BYTES = 4 * 1024

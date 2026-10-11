@@ -1,5 +1,6 @@
 package com.example.frogreader.ui.profile
 
+import com.example.frogreader.ui.components.FrogSnackbarHost
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -47,12 +48,12 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -95,21 +96,21 @@ fun ReadingQueueScreen(onBack: () -> Unit, onOpenBook: (String) -> Unit,
     val editor by vm.editor.collectAsStateWithLifecycle()
     val addedEntryId by vm.addedEntryId.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    val context = LocalContext.current
+    val resources = LocalResources.current
     val currentOpenBook by rememberUpdatedState(onOpenBook)
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), vm::attachFile)
-    LaunchedEffect(vm) {
+    LaunchedEffect(vm, resources) {
         vm.events.collect { event ->
             when (event) {
                 is ReadingQueueEvent.OpenBook -> currentOpenBook(event.id)
                 is ReadingQueueEvent.Failed -> launch {
                     snackbar.currentSnackbarData?.dismiss()
-                    snackbar.showSnackbar(context.getString(event.message))
+                    snackbar.showSnackbar(resources.getString(event.message))
                 }
                 is ReadingQueueEvent.Deleted -> launch {
                     snackbar.currentSnackbarData?.dismiss()
-                    val result = snackbar.showSnackbar(context.getString(R.string.reading_queue_deleted, event.entry.title),
-                        context.getString(R.string.quotes_bookmarks_undo), withDismissAction = true, duration = SnackbarDuration.Long)
+                    val result = snackbar.showSnackbar(resources.getString(R.string.reading_queue_deleted, event.entry.title),
+                        resources.getString(R.string.quotes_bookmarks_undo), withDismissAction = true, duration = SnackbarDuration.Long)
                     if (result == SnackbarResult.ActionPerformed) vm.undo(event) else vm.finishDelete(event)
                 }
             }
@@ -162,12 +163,15 @@ internal fun ReadingQueueContent(
     val maxSpeed = with(density) { 750.dp.toPx() }
     var discard by rememberSaveable { mutableStateOf(false) }
     var filePromptId by rememberSaveable { mutableStateOf<String?>(null) }
-    val closeEditor = { if (!busy) { if (editor?.dirty == true) discard = true else actions.dismiss() } }
+    var dismissalRequested by remember { mutableStateOf(false) }
+    val dismiss = { dismissalRequested = true; actions.dismiss() }
+    val closeEditor = { if (!busy) { if (editor?.dirty == true) discard = true else dismiss() } }
     var sheetEditor by remember { mutableStateOf(editor) }
+    val mountedEditor = editor ?: sheetEditor
     val latestEditor by rememberUpdatedState(editor)
     val latestBusy by rememberUpdatedState(busy)
-    val opensWithKeyboard = sheetEditor != null && sheetEditor?.id == null
-    val sheetState = key(sheetEditor != null) {
+    val opensWithKeyboard = mountedEditor != null && mountedEditor.id == null
+    val sheetState = key(mountedEditor != null) {
         // New entries stay at their live expanded anchor and reveal with the first IME frame.
         // A show spring would keep chasing the changing keyboard height. Existing entries
         // retain Material's normal entrance because they do not request the keyboard.
@@ -176,28 +180,20 @@ internal fun ReadingQueueContent(
             if (value != SheetValue.Hidden || latestEditor == null) true
             else if (latestBusy) false
             else if (latestEditor?.dirty == true) { discard = true; false }
-            else true
+            else { dismissalRequested = true; true }
         })
     }
     val sheetEntrance = remember(sheetState) { ReadingQueueSheetEntrance() }
     LaunchedEffect(editor) {
-        if (editor != null) sheetEditor = editor
-        else if (sheetEditor != null) { sheetState.hide(); sheetEditor = null }
+        if (editor != null) { sheetEditor = editor; dismissalRequested = false }
+        else if (sheetEditor != null) { sheetState.hide(); sheetEditor = null; dismissalRequested = false }
     }
-    val sheetClosing = sheetState.currentValue != SheetValue.Hidden && sheetState.targetValue == SheetValue.Hidden
+    val sheetPresentation = readingEntrySheetPresentation(editor != null, mountedEditor != null, dismissalRequested,
+        sheetHiding = sheetState.currentValue != SheetValue.Hidden && sheetState.targetValue == SheetValue.Hidden)
     // The modal window still intercepts touches during its exit. Restore the controls'
     // appearance at the start of that exit rather than after its final animation frame.
-    val editorBlocksControls = editor != null && !sheetClosing
-    val controlsEnabled = !busy && !editorBlocksControls && drag.id == null && filePromptId == null
-    val fabRevealBoundary = LocalWindowInfo.current.containerSize.height - with(density) { 100.dp.toPx() }
-    val sheetCoversFab by remember(sheetState, fabRevealBoundary) {
-        derivedStateOf {
-            // Start the reveal as the sheet clears the button, before the spring's invisible tail.
-            (runCatching { sheetState.requireOffset() }.getOrNull() ?: 0f) < fabRevealBoundary
-        }
-    }
-    val fabVisible = !editorBlocksControls && (sheetEditor == null || !sheetCoversFab) &&
-        drag.id == null && filePromptId == null
+    val controlsEnabled = !busy && !sheetPresentation.blocksInteraction && drag.id == null && filePromptId == null
+    val fabVisible = !sheetPresentation.blocksAppearance && drag.id == null && filePromptId == null
     val addAction = remember { { currentActions.add() } }
     val currentFabCallback by rememberUpdatedState(onFabStateChange)
     SideEffect { currentFabCallback?.invoke(ReadingQueueFabState(fabVisible, ready && controlsEnabled, addAction)) }
@@ -266,7 +262,7 @@ internal fun ReadingQueueContent(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.surface),
             )
         },
-        snackbarHost = { if (sheetEditor == null) SnackbarHost(snackbar) },
+        snackbarHost = { if (sheetEditor == null) FrogSnackbarHost(snackbar) },
         floatingActionButton = {
             if (onFabStateChange == null) FrogAddFab(
                 expanded = true, visible = fabVisible, enabled = ready && controlsEnabled, onClick = addAction,
@@ -412,7 +408,7 @@ internal fun ReadingQueueContent(
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
         }
     }
-    sheetEditor?.let { displayedEditor ->
+    mountedEditor?.let { displayedEditor -> ReadingEntrySheetMotion {
         ModalBottomSheet(
             onDismissRequest = closeEditor,
             sheetState = sheetState,
@@ -435,12 +431,12 @@ internal fun ReadingQueueContent(
             },
         ) {
             if (opensWithKeyboard) BindReadingQueueSheetEntrance(sheetEntrance,
-                closing = editor == null || sheetClosing)
-            SnackbarHost(snackbar, Modifier.padding(horizontal = 20.dp))
+                closing = sheetPresentation.closing)
+            FrogSnackbarHost(snackbar)
             ReadingQueueEditorForm(editor ?: displayedEditor, busy || editor == null, actions, closeEditor,
                 autoFocusTitle = editor != null && displayedEditor.id == null)
         }
-    }
+    } }
     entries.firstOrNull { it.id == filePromptId }?.let { entry ->
         AlertDialog(onDismissRequest = { filePromptId = null }, containerColor = colors.floatingSurface,
             icon = { Icon(Icons.Rounded.AttachFile, null) },
@@ -455,7 +451,7 @@ internal fun ReadingQueueContent(
         onDismissRequest = { discard = false }, containerColor = colors.floatingSurface,
         title = { Text(stringResource(R.string.reading_queue_discard_title)) },
         text = { Text(stringResource(R.string.reading_queue_discard_hint)) },
-        confirmButton = { TextButton(onClick = { discard = false; actions.dismiss() }) {
+        confirmButton = { TextButton(onClick = { discard = false; dismiss() }) {
             Text(stringResource(R.string.reading_queue_discard))
         } },
         dismissButton = { TextButton(onClick = { discard = false }) { Text(stringResource(R.string.reading_queue_keep_editing)) } },
@@ -624,11 +620,11 @@ internal fun ReadingQueueEditorForm(
             }, enabled = !busy, singleLine = false, minLines = 2, maxLines = 4,
                 label = stringResource(R.string.reading_queue_note), icon = Icons.AutoMirrored.Rounded.Notes,
                 errorMessage = if (!editor.noteValid)
-                    stringResource(R.string.reading_queue_legacy_note, ReadingQueueEntry.NOTE_LIMIT) else null,
+                    pluralStringResource(R.plurals.reading_queue_legacy_note, ReadingQueueEntry.NOTE_LIMIT, ReadingQueueEntry.NOTE_LIMIT) else null,
                 supportingText = {
                     Column {
                         if (editor.originalNote.length > ReadingQueueEntry.NOTE_LIMIT) Text(
-                            stringResource(R.string.reading_queue_legacy_note, ReadingQueueEntry.NOTE_LIMIT))
+                            pluralStringResource(R.plurals.reading_queue_legacy_note, ReadingQueueEntry.NOTE_LIMIT, ReadingQueueEntry.NOTE_LIMIT))
                         Text("${editor.note.length} / ${ReadingQueueEntry.NOTE_LIMIT}", Modifier.fillMaxWidth(),
                             textAlign = androidx.compose.ui.text.style.TextAlign.End)
                     }

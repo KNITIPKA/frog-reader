@@ -1,6 +1,13 @@
 package com.example.frogreader.ui.reader
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -11,9 +18,11 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -24,14 +33,14 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoFixHigh
-import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.BrightnessAuto
@@ -44,7 +53,7 @@ import androidx.compose.material.icons.rounded.DensitySmall
 import androidx.compose.material.icons.rounded.FormatAlignJustify
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.HistoryEdu
-import androidx.compose.material.icons.rounded.MenuBook
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.InvertColors
 import androidx.compose.material.icons.rounded.Remove
@@ -53,7 +62,6 @@ import androidx.compose.material.icons.rounded.Superscript
 import androidx.compose.material.icons.rounded.Tag
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.rounded.Vibration
-import androidx.compose.material.icons.rounded.ViewColumn
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ColorScheme
@@ -71,6 +79,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -79,6 +88,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -92,10 +102,12 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.positionInParent
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
@@ -105,9 +117,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.frogreader.R
 import com.example.frogreader.data.AppSettings
+import com.example.frogreader.data.model.ReaderChromeStyle
 import com.example.frogreader.data.AppTheme
 import com.example.frogreader.data.PageMargins
-import com.example.frogreader.data.PageTurnAnimation
 import com.example.frogreader.data.ReaderFont
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.EmbeddedFont
@@ -132,7 +144,7 @@ fun ReaderPanelsContent(
     currentChapter: Int,
     chapterStartPages: List<Int>?,
     /** Lets the whole tab header drag the panel like the handle does. */
-    dragModifier: Modifier = Modifier,
+    modifier: Modifier = Modifier,
     onChapterClick: (ReaderNavigationTarget) -> Unit,
     onBookmarkClick: (Int) -> Unit,
     onRemoveBookmark: (String) -> Unit,
@@ -144,8 +156,11 @@ fun ReaderPanelsContent(
     onToggleBookmark: () -> Unit = {},
     /** Exact nav anchor when one spine chapter contains several subchapters. */
     currentNavigationIndex: Int? = null,
+    /** Changes when the Contents button opens the panel again. */
+    openRequest: Int = 0,
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(openRequest) { tab = 0 }
 
     // Match the reader surface even while the app-wide theme is transitioning.
     MaterialTheme(colorScheme = colorScheme) {
@@ -155,7 +170,7 @@ fun ReaderPanelsContent(
                 containerColor = colorScheme.surfaceContainerLow,
                 contentColor = colorScheme.primary,
                 divider = {},
-                modifier = dragModifier.clip(RoundedCornerShape(16.dp)),
+                modifier = modifier.clip(RoundedCornerShape(16.dp)),
             ) {
                 Tab(
                     selected = tab == 0,
@@ -179,7 +194,7 @@ fun ReaderPanelsContent(
 
             Box(Modifier.weight(1f)) {
                 when (tab) {
-                    0 -> ContentsTab(ready, currentChapter, chapterStartPages, onChapterClick, currentNavigationIndex)
+                    0 -> ContentsTab(ready, currentChapter, chapterStartPages, onChapterClick, currentNavigationIndex, openRequest)
                     1 -> BookmarksTab(
                         ready, book, bookmarked, onToggleBookmark,
                         onBookmarkClick, onRemoveBookmark,
@@ -204,15 +219,16 @@ private fun ContentsTab(
     chapterStartPages: List<Int>?,
     onChapterClick: (ReaderNavigationTarget) -> Unit,
     currentNavigationIndex: Int?,
+    openRequest: Int,
 ) {
     val entries = ready.navigation
     val tree = remember(entries) { ReaderContentsTree(entries.map { it.depth }) }
     val currentEntryIndex = remember(entries, currentChapter, currentNavigationIndex) {
-        currentNavigationIndex ?: entries.indexOfFirst { entry ->
+        currentNavigationIndex?.takeIf { it in entries.indices } ?: entries.indexOfFirst { entry ->
             (entry.target as? ReaderNavigationTarget.ReadingOrder)?.chapterIndex == currentChapter
         }.takeIf { it >= 0 }
     }
-    val collapsed = remember(tree, currentEntryIndex) {
+    val collapsed = remember(tree) {
         val expanded = currentEntryIndex?.let { tree.ancestorsOf(it) + it }.orEmpty().toSet()
         mutableStateMapOf<Int, Boolean>().apply {
             tree.isGroup.indices.forEach { index ->
@@ -225,89 +241,127 @@ private fun ContentsTab(
     }
     val haptics = LocalHapticFeedback.current
     val scheme = MaterialTheme.colorScheme
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = tree.visiblePositionOf(currentEntryIndex, visibleIndices),
+    )
+    var previousOpenRequest by remember(tree) { mutableIntStateOf(Int.MIN_VALUE) }
+    LaunchedEffect(tree, currentEntryIndex, openRequest) {
+        var revealedRows = false
+        currentEntryIndex?.let { current ->
+            (tree.ancestorsOf(current) + current).forEach { index ->
+                if (tree.isGroup[index] && collapsed[index] != false) {
+                    collapsed[index] = false
+                    revealedRows = true
+                }
+            }
+        }
+        if (revealedRows) withFrameNanos { }
+        val visible = tree.visibleIndices { collapsed[it] == true }
+        if (visible.isEmpty()) return@LaunchedEffect
+        val target = tree.visiblePositionOf(currentEntryIndex, visible)
+        val opening = previousOpenRequest != openRequest
+        previousOpenRequest = openRequest
+        if (opening) {
+            listState.scrollToItem(target)
+        } else if (listState.layoutInfo.visibleItemsInfo.none { it.index == target }) {
+            // A tapped row stays under the finger. Only bring the current row
+            // into view if navigation elsewhere moved it outside this viewport.
+            listState.animateScrollToItem(target)
+        }
+    }
 
-    LazyColumn(
-        contentPadding = PaddingValues(8.dp),
+    Box(
         modifier = Modifier
+            .fillMaxSize()
             .padding(top = 8.dp)
             .clip(RoundedCornerShape(20.dp))
             .background(scheme.surfaceContainerLow),
     ) {
-        itemsIndexed(
-            items = visibleIndices,
-            key = { _, index -> index },
-            contentType = { _, index -> if (tree.isGroup[index]) "group" else "chapter" },
-        ) { visibleIndex, index ->
-            val entry = entries[index]
-            val group = tree.isGroup[index]
-            val isCurrent = index == currentEntryIndex
-            val previous = visibleIndices.getOrNull(visibleIndex - 1)
-            val startsSection = group || previous != null && tree.parent[previous] != tree.parent[index]
-            val title = entry.title ?: stringResource(R.string.reader_chapter_n, index + 1)
-            val titleParts = remember(title, group) {
-                if (group) contentsGroupTitle(title) else null to title.replace('\n', ' ')
-            }
-            val rowBackground = contentsRowBackground(scheme, current = isCurrent, group = group)
-            // Spacing expresses hierarchy. A single rounded fill marks the
-            // current location; no duplicate stripe, check badge or row grid.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(
-                        start = 14.dp * tree.depth[index].coerceAtMost(4),
-                        top = if (startsSection && visibleIndex > 0) 10.dp else 2.dp,
-                        bottom = 2.dp,
-                    )
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(rowBackground)
-                    .semantics { selected = isCurrent }
-                    .clickable { onChapterClick(entry.target) }
-                    .heightIn(min = 48.dp)
-                    .padding(start = 14.dp, end = if (group) 2.dp else 14.dp),
-            ) {
-                Column(Modifier.weight(1f).padding(vertical = if (group) 14.dp else 12.dp)) {
-                    titleParts.first?.let { prefix ->
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(8.dp),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            itemsIndexed(
+                items = visibleIndices,
+                key = { _, index -> index },
+                contentType = { _, index -> if (tree.isGroup[index]) "group" else "chapter" },
+            ) { visibleIndex, index ->
+                val entry = entries[index]
+                val group = tree.isGroup[index]
+                val isCurrent = index == currentEntryIndex
+                val previous = visibleIndices.getOrNull(visibleIndex - 1)
+                val startsSection = group || previous != null && tree.parent[previous] != tree.parent[index]
+                val title = entry.title ?: stringResource(R.string.reader_chapter_n, index + 1)
+                val titleParts = remember(title, group) {
+                    if (group) contentsGroupTitle(title) else null to title.replace('\n', ' ')
+                }
+                val rowBackground by animateColorAsState(
+                    contentsRowBackground(scheme, current = isCurrent, group = group),
+                    animationSpec = readerChapterSwitchSpec(),
+                    label = "contentsCurrentRow",
+                )
+                // Spacing expresses hierarchy. A single rounded fill marks the
+                // current location; no duplicate stripe, check badge or row grid.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(
+                            start = 14.dp * tree.depth[index].coerceAtMost(4),
+                            top = if (startsSection && visibleIndex > 0) 10.dp else 2.dp,
+                            bottom = 2.dp,
+                        )
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(rowBackground)
+                        .semantics { selected = isCurrent }
+                        .clickable { onChapterClick(entry.target) }
+                        .heightIn(min = 48.dp)
+                        .padding(start = 14.dp, end = if (group) 2.dp else 14.dp),
+                ) {
+                    Column(Modifier.weight(1f).padding(vertical = if (group) 14.dp else 12.dp)) {
+                        titleParts.first?.let { prefix ->
+                            Text(
+                                text = prefix,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = scheme.primary,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                        }
                         Text(
-                            text = prefix,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = scheme.primary,
+                            text = titleParts.second,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (isCurrent || group) FontWeight.SemiBold else FontWeight.Normal,
+                            color = scheme.onSurface,
                         )
-                        Spacer(Modifier.height(4.dp))
                     }
-                    Text(
-                        text = titleParts.second,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = if (isCurrent || group) FontWeight.SemiBold else FontWeight.Normal,
-                        color = scheme.onSurface,
-                    )
-                }
-                val page = (entry.target as? ReaderNavigationTarget.ReadingOrder)
-                    ?.chapterIndex?.let { chapterStartPages?.getOrNull(it) }
-                if (page != null) {
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        text = "${page + 1}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = scheme.onSurfaceVariant,
-                    )
-                }
-                if (group) {
-                    val isCollapsed = collapsed[index] == true
-                    val rotation by animateFloatAsState(if (isCollapsed) 0f else 180f, label = "contentsChevron")
-                    IconButton(onClick = {
-                        haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                        collapsed[index] = !isCollapsed
-                    }) {
-                        Icon(
-                            Icons.Rounded.ExpandMore,
-                            contentDescription = stringResource(
-                                if (isCollapsed) R.string.reader_expand_section else R.string.reader_collapse_section,
-                            ),
-                            tint = scheme.primary,
-                            modifier = Modifier.rotate(rotation),
+                    val page = (entry.target as? ReaderNavigationTarget.ReadingOrder)
+                        ?.chapterIndex?.let { chapterStartPages?.getOrNull(it) }
+                    if (page != null) {
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = "${page + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = scheme.onSurfaceVariant,
                         )
+                    }
+                    if (group) {
+                        val isCollapsed = collapsed[index] == true
+                        val rotation by animateFloatAsState(if (isCollapsed) 0f else 180f, label = "contentsChevron")
+                        IconButton(onClick = {
+                            haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                            collapsed[index] = !isCollapsed
+                        }) {
+                            Icon(
+                                Icons.Rounded.ExpandMore,
+                                contentDescription = stringResource(
+                                    if (isCollapsed) R.string.reader_expand_section else R.string.reader_collapse_section,
+                                ),
+                                tint = scheme.primary,
+                                modifier = Modifier.rotate(rotation),
+                            )
+                        }
                     }
                 }
             }
@@ -523,7 +577,7 @@ private fun EmptyTabHint(text: String) {
  */
 @Composable
 internal fun sheetMaxContentHeight(): Dp =
-    LocalConfiguration.current.screenHeightDp.dp - 140.dp
+    with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() - 140.dp }.coerceAtLeast(0.dp)
 
 /**
  * The reader settings controls, shown inside the pull-up panel of the bottom
@@ -581,8 +635,8 @@ fun ReaderSettingsControls(
         val fontPath = style.fontPath
             ?.takeIf { keepFont }
             ?.let { storeBookFont(context, it, style.fontName) }
-        // A book that just asks for a generic face keeps that face: these
-        // map to the very same families the page was drawn with a moment ago.
+        // Keep a book's generic category when leaving publisher formatting.
+        // Sans adopts the reader's bundled IBM Plex Sans default.
         val genericFont = style.fontCss
             ?.takeIf { keepFont && style.fontPath == null }
             ?.let {
@@ -623,7 +677,9 @@ fun ReaderSettingsControls(
             ),
             selectedIndex = themes.indexOf(appSettings.theme),
             colors = colors,
-            onSelect = { index -> onUpdateApp { it.copy(theme = themes[index]) } },
+            onSelect = { index ->
+                onUpdateApp { it.copy(theme = themes[index], followSystemTheme = false) }
+            },
             leading = { index ->
                 Box(
                     Modifier
@@ -688,18 +744,18 @@ fun ReaderSettingsControls(
                 modifier = Modifier.size(22.dp),
             )
             Spacer(Modifier.width(10.dp))
-            // Auto = filled accent pill; manual = hollow outline.
+            // Auto shares the selected-setting face; manual remains an outline.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .clip(RoundedCornerShape(20.dp))
                     .background(
-                        if (autoBrightness) colors.accent else Color.Transparent,
+                        if (autoBrightness) colors.selectedControl else Color.Transparent,
                     )
                     .border(
                         width = 1.dp,
                         color = if (autoBrightness) {
-                            Color.Transparent
+                            colors.selectedControlBorder
                         } else {
                             colors.onChrome.copy(alpha = 0.3f)
                         },
@@ -714,7 +770,7 @@ fun ReaderSettingsControls(
                 Icon(
                     Icons.Rounded.BrightnessAuto,
                     contentDescription = null,
-                    tint = if (autoBrightness) colors.onAccent else colors.onChromeVariant,
+                    tint = if (autoBrightness) colors.onSelectedControl else colors.onChromeVariant,
                     modifier = Modifier.size(16.dp),
                 )
                 Spacer(Modifier.width(4.dp))
@@ -722,7 +778,7 @@ fun ReaderSettingsControls(
                     stringResource(R.string.reader_brightness_auto),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = if (autoBrightness) FontWeight.Bold else FontWeight.Medium,
-                    color = if (autoBrightness) colors.onAccent else colors.onChromeVariant,
+                    color = if (autoBrightness) colors.onSelectedControl else colors.onChromeVariant,
                 )
             }
         }
@@ -852,29 +908,11 @@ fun ReaderSettingsControls(
             Column {
                 Spacer(Modifier.height(18.dp))
                 PanelSectionLabel(stringResource(R.string.reader_section_page_anim), colors)
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    AnimationCard(
-                        label = stringResource(R.string.reader_anim_slide),
-                        icon = Icons.AutoMirrored.Rounded.Article,
-                        selected = settings.pageTurnAnimation == PageTurnAnimation.SLIDE,
-                        colors = colors,
-                        modifier = Modifier.weight(1f),
-                    ) { onUpdate { it.copy(pageTurnAnimation = PageTurnAnimation.SLIDE) } }
-                    AnimationCard(
-                        label = stringResource(R.string.reader_anim_cascade),
-                        icon = Icons.Rounded.ViewColumn,
-                        selected = settings.pageTurnAnimation == PageTurnAnimation.CASCADE,
-                        colors = colors,
-                        modifier = Modifier.weight(1f),
-                    ) { onUpdate { it.copy(pageTurnAnimation = PageTurnAnimation.CASCADE) } }
-                    AnimationCard(
-                        label = stringResource(R.string.reader_anim_curl),
-                        icon = Icons.Rounded.AutoStories,
-                        selected = settings.pageTurnAnimation == PageTurnAnimation.PAGE_CURL,
-                        colors = colors,
-                        modifier = Modifier.weight(1f),
-                    ) { onUpdate { it.copy(pageTurnAnimation = PageTurnAnimation.PAGE_CURL) } }
-                }
+                ReaderPageTurnPicker(
+                    selected = settings.pageTurnAnimation,
+                    colors = colors,
+                    onSelected = { animation -> onUpdate { it.copy(pageTurnAnimation = animation) } },
+                )
             }
         }
 
@@ -907,9 +945,10 @@ fun ReaderSettingsControls(
             ),
             optionFontFamilies = listOf(
                 com.example.frogreader.ui.theme.LiterataFamily,
-                androidx.compose.ui.text.font.FontFamily.SansSerif,
+                com.example.frogreader.ui.theme.IBMPlexSansFamily,
                 bookFontFamily,
             ),
+            labelMaxLines = 2,
             selectedIndex = when {
                 bookFontName != null -> 2
                 settings.font == ReaderFont.SANS -> 1
@@ -1071,23 +1110,15 @@ fun ReaderSettingsControls(
         PanelSectionLabel(
             stringResource(R.string.reader_section_pages_nav),
             colors,
-            icon = Icons.Rounded.MenuBook,
+            icon = Icons.AutoMirrored.Rounded.MenuBook,
         )
         SettingsGroup(colors) {
             SettingToggleRow(
-                icon = Icons.Rounded.MenuBook,
+                icon = Icons.AutoMirrored.Rounded.MenuBook,
                 title = stringResource(R.string.reader_chapter_new_page),
                 colors = colors,
                 checked = settings.startChaptersOnNewPage,
                 onCheckedChange = { onUpdate { s -> s.copy(startChaptersOnNewPage = it) } },
-            )
-            PanelDivider(colors)
-            SettingToggleRow(
-                icon = Icons.Rounded.Tag,
-                title = stringResource(R.string.reader_show_chapter_pages),
-                colors = colors,
-                checked = settings.showChapterPagesLeft,
-                onCheckedChange = { onUpdate { s -> s.copy(showChapterPagesLeft = it) } },
             )
             PanelDivider(colors)
             SettingToggleRow(
@@ -1098,6 +1129,33 @@ fun ReaderSettingsControls(
                 checked = settings.hideFootnotes,
                 onCheckedChange = { onUpdate { s -> s.copy(hideFootnotes = it) } },
             )
+            PanelDivider(colors)
+            SettingToggleRow(
+                icon = Icons.Rounded.Tag,
+                title = stringResource(R.string.reader_show_page_counter),
+                colors = colors,
+                checked = settings.showPageCounter,
+                onCheckedChange = { onUpdate { s -> s.copy(showPageCounter = it) } },
+            )
+            AnimatedVisibility(
+                visible = settings.showPageCounter,
+                enter = expandVertically(tween(220), expandFrom = Alignment.Top) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Top) + fadeOut(tween(120)),
+            ) {
+                Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
+                    ChipRow(
+                        options = listOf(
+                            stringResource(R.string.reader_counter_page_number),
+                            stringResource(R.string.reader_counter_chapter_left),
+                        ),
+                        selectedIndex = if (settings.showChapterPagesLeft) 1 else 0,
+                        colors = colors,
+                        labelMaxLines = 3,
+                        enabled = settings.showPageCounter,
+                        onSelect = { index -> onUpdate { it.copy(showChapterPagesLeft = index == 1) } },
+                    )
+                }
+            }
         }
 
         Spacer(Modifier.height(20.dp))
@@ -1133,6 +1191,21 @@ fun ReaderSettingsControls(
                 onCheckedChange = { onUpdateApp { s -> s.copy(volumeKeyPaging = it) } },
             )
         }
+
+        Spacer(Modifier.height(20.dp))
+
+        PanelSectionLabel(stringResource(R.string.settings_reader_chrome_title), colors)
+        ChipRow(
+            options = listOf(
+                stringResource(R.string.reader_chrome_floating),
+                stringResource(R.string.reader_chrome_classic),
+            ),
+            selectedIndex = ReaderChromeStyle.entries.indexOf(appSettings.readerChromeStyle),
+            colors = colors,
+            onSelect = { index ->
+                onUpdateApp { it.copy(readerChromeStyle = ReaderChromeStyle.entries[index]) }
+            },
+        )
 
         Spacer(Modifier.height(24.dp))
     }
@@ -1484,11 +1557,15 @@ private fun ChipRow(
     leading: (@Composable (Int) -> Unit)? = null,
     /** Per-option font families (a font chip previews its own face). */
     optionFontFamilies: List<androidx.compose.ui.text.font.FontFamily?>? = null,
+    /** Longer font names wrap without changing the other settings rows. */
+    labelMaxLines: Int = 1,
+    enabled: Boolean = true,
 ) {
     val haptics = LocalHapticFeedback.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (labelMaxLines > 1) Modifier.height(IntrinsicSize.Min) else Modifier)
             .clip(RoundedCornerShape(26.dp))
             .background(colors.control)
             .padding(4.dp),
@@ -1500,9 +1577,16 @@ private fun ChipRow(
                 horizontalArrangement = Arrangement.Center,
                 modifier = Modifier
                     .weight(1f)
+                    .then(if (labelMaxLines > 1) Modifier.fillMaxHeight() else Modifier)
                     .clip(RoundedCornerShape(22.dp))
-                    .background(if (selected) colors.accent else Color.Transparent)
-                    .clickable {
+                    .background(if (selected) colors.selectedControl else Color.Transparent)
+                    .border(
+                        1.dp,
+                        if (selected) colors.selectedControlBorder else Color.Transparent,
+                        RoundedCornerShape(22.dp),
+                    )
+                    .semantics { this.selected = selected }
+                    .clickable(enabled = enabled) {
                         haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                         onSelect(index)
                     }
@@ -1517,8 +1601,9 @@ private fun ChipRow(
                     style = MaterialTheme.typography.labelLarge,
                     fontFamily = optionFontFamilies?.getOrNull(index),
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (selected) colors.onAccent else colors.onChrome,
-                    maxLines = 1,
+                    color = if (selected) colors.onSelectedControl else colors.onChrome,
+                    maxLines = labelMaxLines,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )
             }
         }
@@ -1562,7 +1647,7 @@ private fun SettingSlider(
                 }
             },
     ) {
-        val active = colors.accent
+        val active = colors.progress
         val inactive = colors.track
         Canvas(Modifier.fillMaxSize()) {
             val w = size.width
@@ -1704,57 +1789,6 @@ private fun SettingToggleRow(
                 )
                 onCheckedChange(value)
             },
-        )
-    }
-}
-
-/** Page-turn animation choice card (stub; the animations come later). */
-@Composable
-private fun AnimationCard(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    selected: Boolean,
-    colors: ReaderColors,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    val haptics = LocalHapticFeedback.current
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier
-            .clip(RoundedCornerShape(20.dp))
-            .border(
-                width = if (selected) 1.5.dp else 1.dp,
-                color = if (selected) colors.accent else colors.onChrome.copy(alpha = 0.15f),
-                shape = RoundedCornerShape(20.dp),
-            )
-            .clickable {
-                haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                onClick()
-            }
-            .padding(vertical = 14.dp),
-    ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(46.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(
-                    if (selected) colors.accent else colors.controlStrong,
-                ),
-        ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = if (selected) colors.onAccent else colors.onChrome,
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = colors.onChrome,
-            maxLines = 1,
         )
     }
 }

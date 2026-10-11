@@ -11,19 +11,21 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
 import com.example.frogreader.data.model.EXTERNAL_LINK_TAG
 import com.example.frogreader.data.model.LINK_TAG
+import com.example.frogreader.data.model.INLINE_MATH_TAG
+import com.example.frogreader.data.model.INLINE_MATH_CONTENT_PREFIX
+import com.example.frogreader.data.model.InlineMath
+import com.example.frogreader.data.model.InlineMathCodec
+import com.example.frogreader.data.model.RubySpan
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.TextNode
 
 /**
- * A bounded, linear presentation-MathML renderer.
+ * A bounded presentation-MathML parser with a selectable linear fallback.
  *
- * Compose does not ship a two-dimensional MathML layout engine. Silently
- * flattening the DOM is worse, though: `<msup><mi>x</mi><mn>2</mn></msup>`
- * used to become the ambiguous `x2`. This formatter keeps the expression
- * selectable and paginatable while retaining the most important visual and
- * semantic relationships with Unicode, relative size and baseline shifts.
- * It is deliberately a readable fallback, not a claim of pixel-identical
- * browser MathML layout.
+ * Supported presentation trees carry native layout metadata over the original
+ * text range; measurement/drawing render fractions, radicals and scripts in
+ * two dimensions. Unsupported trees still retain Unicode operators, relative
+ * sizes and baseline shifts instead of flattening `<msup>` to ambiguous `x2`.
  */
 internal class MathMlFormatter(
     private val maxDepth: Int,
@@ -48,7 +50,31 @@ internal class MathMlFormatter(
         out: InlineTextBuilder,
         applyRootAuthorStyle: Boolean = true,
     ) {
-        appendElement(math, out, depth = 0, applyAuthorStyle = applyRootAuthorStyle)
+        val native = MathMlNativeParser(resolveAuthorStyle).parse(math, applyRootAuthorStyle)
+        if (native == null) {
+            appendElement(math, out, depth = 0, applyAuthorStyle = applyRootAuthorStyle)
+            return
+        }
+        val preserveLeadingSpace = out.lastCharacter?.let { it != ' ' && it != '\n' } == true
+        val rawFallback = InlineTextBuilder().also {
+            if (preserveLeadingSpace) it.text("\uFFFF")
+            appendElement(math, it, depth = 0, applyAuthorStyle = applyRootAuthorStyle)
+        }.build()
+        val fallback = if (preserveLeadingSpace) rawFallback.subSequence(1, rawFallback.length) else rawFallback
+        val payload = InlineMathCodec.encode(InlineMath(
+            root = native,
+            fallback = fallback.text,
+            description = accessibilityLabel(math) ?: fallback.text,
+            wholeStyles = fallback.spanStyles.filter { it.start == 0 && it.end == fallback.length }
+                .map { RubySpan.from(it.item, 0, 0) },
+        ))
+        if (payload == null) {
+            out.appendAnnotated(fallback)
+            return
+        }
+        out.pushAnnotation(INLINE_MATH_TAG, payload)
+        out.inlineAnnotated(INLINE_MATH_CONTENT_PREFIX + payload, fallback)
+        out.pop()
     }
 
     private fun appendElement(

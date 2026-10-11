@@ -35,6 +35,18 @@ private fun SavedQuotesPreview() = FrogReaderTheme(AppTheme.WHITE) {
     QuotesAndBookmarksContent(sampleAnnotatedBooks, initialBookId = "a")
 }
 
+@Preview(name = "Beige · quotes and thoughts", widthDp = 393, heightDp = 882, showSystemUi = true)
+@Composable
+private fun BeigeSavedQuotesPreview() = FrogReaderTheme(AppTheme.SEPIA) {
+    QuotesAndBookmarksContent(sampleAnnotatedBooks, initialBookId = "a")
+}
+
+@Preview(name = "Beige · bookmarks · large text", widthDp = 360, heightDp = 800, showSystemUi = true, fontScale = 1.5f)
+@Composable
+private fun BeigeSavedBookmarksPreview() = FrogReaderTheme(AppTheme.SEPIA) {
+    QuotesAndBookmarksContent(sampleAnnotatedBooks, initialBookId = "a", initialTab = 1)
+}
+
 @Preview(name = "Bookmarks · midnight", widthDp = 360, heightDp = 800, showSystemUi = true)
 @Composable
 private fun SavedBookmarksPreview() = FrogReaderTheme(AppTheme.OLED) {

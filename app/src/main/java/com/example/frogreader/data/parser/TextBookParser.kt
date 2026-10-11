@@ -25,8 +25,15 @@ import java.util.Locale
 
 /** Standalone text files use the same native element stream as packaged books. */
 internal object TextBookParser {
+    private const val MAX_MARKDOWN_DEPTH = 128
     private val extensions = listOf(TablesExtension.create(), StrikethroughExtension.create())
-    private val markdown = Parser.builder().extensions(extensions).build()
+    // CommonMark 0.30 defaults to flattening nesting after 100 levels. Let the
+    // bounded AST reach our rejection threshold, so valid structure is retained
+    // and excessive nesting still fails before the recursive HTML renderer.
+    private val markdown = Parser.builder().extensions(extensions)
+        .maxOpenBlockParsers(MAX_MARKDOWN_DEPTH + 1)
+        .maxInlineNesting(MAX_MARKDOWN_DEPTH + 1)
+        .build()
     private val html = HtmlRenderer.builder().extensions(extensions)
         .escapeHtml(true).sanitizeUrls(true).build()
 
@@ -146,7 +153,7 @@ internal object TextBookParser {
         pending.add(document to 0)
         while (pending.isNotEmpty()) {
             val (node, depth) = pending.removeLast()
-            if (depth > 128) throw IOException("Markdown nesting is too deep.")
+            if (depth > MAX_MARKDOWN_DEPTH) throw IOException("Markdown nesting is too deep.")
             var child = node.firstChild
             while (child != null) {
                 pending.add(child to depth + 1)

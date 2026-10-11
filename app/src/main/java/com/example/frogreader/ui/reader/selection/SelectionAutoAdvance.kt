@@ -5,17 +5,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlin.time.Duration.Companion.milliseconds
-
-/**
- * How long to wait after an auto page turn before considering the next one.
- * Together with the turn's own animation this is about half a second a page —
- * fast enough to sweep through a chapter, slow enough to stop where intended.
- */
-private val PAGE_HOLD = 150.milliseconds
 
 /**
  * How the reading surface follows a selection drag that has reached the edge
@@ -33,7 +25,7 @@ class SelectionAutoAdvance(
 )
 
 /**
- * Turns pages (or scrolls) while a selection drag rests against the edge of
+ * Turns pages (or scrolls) while a selection drag stays against the edge of
  * the screen, and re-reads the character under the finger after every step.
  *
  * This is the thing that makes a selection able to span pages at all in the
@@ -48,44 +40,53 @@ class SelectionAutoAdvance(
 @Composable
 fun SelectionAutoAdvanceEffect(controller: SelectionController) {
     val density = LocalDensity.current
-    val bandPx = with(density) { SelectionHitRules.EDGE_BAND.toPx() }
+    val pageBandPx = with(density) { SelectionHitRules.PAGE_EDGE_BAND.toPx() }
+    val pageTravelPx = with(density) { SelectionHitRules.PAGE_ADVANCE_MIN_TRAVEL.toPx() }
+    val scrollBandPx = with(density) { SelectionHitRules.SCROLL_EDGE_BAND.toPx() }
     val maxScrollPx = with(density) { SelectionHitRules.AUTO_SCROLL_MAX_PER_FRAME.toPx() }
+    val exitSlopPx = LocalViewConfiguration.current.touchSlop
 
-    LaunchedEffect(controller.dragging) {
+    LaunchedEffect(controller.dragging, density, exitSlopPx) {
         if (!controller.dragging) return@LaunchedEffect
+        val initialPoint = controller.dragStartPoint ?: return@LaunchedEffect
+        val pageGate = SelectionPageAdvanceGate(initialPoint, pageBandPx, pageTravelPx, exitSlopPx)
         var advanced = false
         try {
             while (true) {
-                withFrameNanos { }
+                val nowMillis = withFrameNanos { it / 1_000_000L }
                 val advance = controller.advance ?: continue
                 val point = controller.lastPoint ?: continue
                 val size = controller.spaceSize ?: continue
-                val direction = SelectionHitRules.edgeAdvance(
-                    point = point,
-                    width = size.width.toFloat(),
-                    height = size.height.toFloat(),
-                    paged = advance.paged,
-                    bandPx = bandPx,
-                )
+                val direction = if (advance.paged) {
+                    pageGate.direction(point, size.width.toFloat(), nowMillis)
+                } else {
+                    SelectionHitRules.edgeAdvance(
+                        point = point,
+                        width = size.width.toFloat(),
+                        height = size.height.toFloat(),
+                        paged = false,
+                        bandPx = scrollBandPx,
+                    )
+                }
                 if (direction == 0) continue
 
                 advanced = true
                 if (advance.paged) {
-                    advance.step(direction, 0f)
-                    delay(PAGE_HOLD)
+                    pageGate.didAdvance(nowMillis)
+                    controller.advancePage(advance, direction)
                 } else {
                     advance.step(
                         direction,
                         SelectionHitRules.autoScrollPx(
                             y = point.y,
                             height = size.height.toFloat(),
-                            bandPx = bandPx,
+                            bandPx = scrollBandPx,
                             maxPerFrame = maxScrollPx,
                         ),
                     )
+                    // The finger has not moved; the text under it has.
+                    controller.reExtend()
                 }
-                // The finger has not moved; the text under it has.
-                controller.reExtend()
             }
         } finally {
             // Lifting a finger in the middle of a page turn would otherwise

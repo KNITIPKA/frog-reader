@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.SliderState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
@@ -66,32 +67,39 @@ internal fun ReaderSegmentedProgressSlider(
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
     modifier: Modifier = Modifier,
+    onScrubMotion: ((bookFraction: Float, trackPositionDp: Float, chapterIndex: Int) -> Unit)? = null,
+    forceContinuous: Boolean = false,
 ) {
     BoxWithConstraints(modifier) {
         val trackWidth = (maxWidth - ProgressThumbWidth).value.coerceAtLeast(0f)
-        val base = remember(chapterStops, trackWidth, positionCount) {
-            ReaderProgressLayout(chapterStops, trackWidth, positionCount)
+        val base = remember(chapterStops, trackWidth, positionCount, forceContinuous) {
+            ReaderProgressLayout(chapterStops, trackWidth, positionCount, forceContinuous)
         }
         var anchor by remember(base) { mutableStateOf<ReaderProgressAnchor?>(null) }
         val layout = rememberReaderProgressLayout(base, fraction, adjusting, enabled, anchor.takeIf { adjusting })
+        val sliderState = remember { SliderState() }
+        sliderState.value = layout.trackFraction(fraction)
         Slider(
-            value = layout.trackFraction(fraction),
+            state = sliderState,
             onValueChange = { visual ->
                 val book = layout.bookFraction(visual)
+                val selected = base.chapters.indexAt(book)
                 if (base.segmented) {
-                    val selected = base.chapters.indexAt(book)
                     if (!adjusting || anchor?.chapterIndex != selected) {
                         anchor = ReaderProgressAnchor(selected, book, visual)
                     }
                 }
                 onValueChange(book)
+                // Raw finger coordinates keep slow input clear even in a compressed chapter;
+                // deliver repeats within the same page so slowing can clear blur immediately.
+                onScrubMotion?.invoke(book, visual * trackWidth, selected)
             },
             onValueChangeFinished = onValueChangeFinished,
             enabled = enabled,
             interactionSource = interactionSource,
             colors = SliderDefaults.colors(
-                thumbColor = colors.accent,
-                activeTrackColor = colors.accent,
+                thumbColor = colors.progress,
+                activeTrackColor = colors.progress,
                 inactiveTrackColor = colors.track,
                 disabledThumbColor = colors.onChromeVariant,
                 disabledActiveTrackColor = colors.track,
@@ -176,8 +184,8 @@ internal fun ReaderSegmentedProgressTrack(
             label = "readerShortChapterFocus",
         ).value else 0f
         val detail = layout.detail
-        val activeTick = colors.onAccent.copy(alpha = 0.45f)
-        val inactiveTick = colors.onChromeVariant.copy(alpha = 0.45f)
+        val activeTick = colors.onProgress.copy(alpha = 0.35f)
+        val inactiveTick = colors.onChromeVariant.copy(alpha = 0.30f)
         Canvas(Modifier.fillMaxSize()) {
             val width = size.width
             if (width <= 0f) return@Canvas
@@ -195,7 +203,7 @@ internal fun ReaderSegmentedProgressTrack(
                 drawRoundRect(colors.track, topLeft, capsuleSize, radius)
                 if (enabled) {
                     clipRect(left = if (rtl) cursor else 0f, right = if (rtl) width else cursor) {
-                        drawRoundRect(colors.accent, topLeft, capsuleSize, radius)
+                        drawRoundRect(colors.progress, topLeft, capsuleSize, radius)
                     }
                 }
             }
@@ -278,7 +286,7 @@ internal fun ReaderSegmentedProgressTrack(
                     clipPath(interior) { marker() }
                 }
                 drawRoundRect(
-                    colors.accent,
+                    colors.progress,
                     Offset(left + stroke / 2f, y - focusHeight / 2f + stroke / 2f),
                     Size((right - left - stroke).coerceAtLeast(0f), focusHeight - stroke),
                     CornerRadius(focusRadius),

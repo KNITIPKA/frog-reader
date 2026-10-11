@@ -3,6 +3,7 @@ package com.example.frogreader.ui.profile
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import androidx.core.net.toUri
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.LocalActivity
@@ -147,7 +148,7 @@ fun ReadingLogCameraScreen(onBack: () -> Unit, onCaptured: (Uri) -> Unit) {
                     Text(stringResource(if (error) R.string.reading_log_camera_error else R.string.reading_log_camera_permission), style = MaterialTheme.typography.bodyMedium)
                     TextButton(onClick = {
                         if (error) { attempt++; error = false }
-                        else if (asked && activity != null && !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)) context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
+                        else if (asked && activity != null && !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)) context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri()))
                         else permission.launch(Manifest.permission.CAMERA)
                     }) { Text(stringResource(if (error) R.string.reading_log_camera_retry else if (asked && activity != null && !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)) R.string.reading_log_camera_settings else R.string.reading_log_camera_allow)) }
                 }

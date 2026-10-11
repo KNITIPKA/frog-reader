@@ -240,6 +240,16 @@ sealed interface ContentElement {
         /** Own CSS vertical margins, including explicit zero (publisher mode). */
         val spaceBeforeSpecified: Boolean = false,
         val spaceAfterSpecified: Boolean = false,
+        /** Authored maximum height, normalized to reader-root em. */
+        val maxHeightEm: Float? = null,
+        /** CSS `max-height: Nvh`, relative to the available reading viewport. */
+        val maxHeightViewportFrac: Float? = null,
+        val maxWidthEm: Float? = null,
+        val maxWidthFrac: Float? = null,
+        /** Publisher dark-scheme image treatment, independent of text metrics. */
+        val darkModeInvert: Boolean = false,
+        val darkModeBackgroundArgb: Int? = null,
+        val darkModeBackgroundCurrentColor: Boolean = false,
     ) : ContentElement
 
     data object Divider : ContentElement
@@ -251,6 +261,13 @@ sealed interface ContentElement {
     data class Table(
         val rows: List<TableRow>,
         val block: BlockStyle? = null,
+        /** Bounded horizontal CSS row, distinct from a semantic table grid. */
+        val publisherRowLayout: PublisherRowLayout? = null,
+        val centerCellsVertically: Boolean = false,
+        /** Authored simple max-width media query that stacks this table's cells. */
+        val stackCellsBelowCssPx: Float? = null,
+        /** Own frame for formats without retained publisher box ranges (FB2). */
+        val publisherBox: PublisherBoxStyle? = null,
     ) : ContentElement {
         /** The table's text flattened row by row (search, previews). */
         fun flatText(): String = rows.joinToString("\n") { row ->
@@ -258,6 +275,8 @@ sealed interface ContentElement {
         }
     }
 }
+
+enum class PublisherRowLayout { NATURAL, SPACE_BETWEEN, SPACE_AROUND }
 
 /**
  * How much text a bookmark remembers about the place it marks.
@@ -304,7 +323,17 @@ class TableCell(
     val publisherBox: PublisherBoxStyle? = null,
     /** Distinguishes CSS `padding: 0` from no authored padding declaration. */
     val publisherPaddingSpecified: Boolean = false,
-    /** Distinguishes CSS `border: none` from an unstylized reader grid. */
+    /** Own/table/row border policy, including explicit `none` instead of a reader grid. */
+    val publisherBorderSpecified: Boolean = false,
+    val narrowStyle: TableCellStyle? = null,
+)
+
+/** Geometry and text style for an admitted responsive table-cell variant. */
+data class TableCellStyle(
+    val block: BlockStyle? = null,
+    val publisherBox: PublisherBoxStyle? = null,
+    val align: BlockAlign? = null,
+    val publisherPaddingSpecified: Boolean = false,
     val publisherBorderSpecified: Boolean = false,
 )
 
@@ -344,6 +373,12 @@ enum class InlineBidiMode {
 
 const val BIDI_TAG = "frogreader:bidi"
 
+/** CSS visibility preserves advance widths while keeping glyphs invisible. */
+const val HIDDEN_TEXT_TAG = "frogreader:hidden"
+
+/** Named embedded family resolved after font files are loaded for a reader session. */
+const val INLINE_FONT_FAMILY_TAG = "frogreader:font-family"
+
 /**
  * Block presentation computed by a parser — from EPUB CSS or FB2 semantics.
  * Null fields fall back to the reader's defaults for the element's
@@ -379,6 +414,8 @@ data class BlockStyle(
     val firstLineIndent: Boolean? = null,
     /** Exact first-line indent width in em, when the book specifies one. */
     val firstLineIndentEm: Float? = null,
+    /** CSS block lines retain their flow geometry when using reader typography. */
+    val isCssTextLine: Boolean = false,
     /** Extra vertical spacing (em) above/below the block. */
     val spaceBeforeEm: Float = 0f,
     val spaceAfterEm: Float = 0f,
@@ -412,6 +449,8 @@ data class BlockStyle(
     val foregroundColorArgb: Int? = null,
     /** Author box background in packed ARGB, publisher mode only. */
     val backgroundColorArgb: Int? = null,
+    /** OpenType features shared by native text measurement and rendering. */
+    val fontFeatureSettings: String? = null,
 ) {
     val isDefault: Boolean
         get() = this == DEFAULT
