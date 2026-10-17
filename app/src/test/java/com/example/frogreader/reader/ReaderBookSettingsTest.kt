@@ -79,8 +79,12 @@ class ReaderBookSettingsTest {
         }
     }
 
-    private fun book(id: String, settings: ReaderSettings? = null) = Book(
-        id, "Book $id", format = BookFormat.EPUB, addedAtMillis = 1,
+    private fun book(
+        id: String,
+        settings: ReaderSettings? = null,
+        format: BookFormat = BookFormat.EPUB,
+    ) = Book(
+        id, "Book $id", format = format, addedAtMillis = 1,
         readerSettings = settings,
     )
 
@@ -172,5 +176,49 @@ class ReaderBookSettingsTest {
         val reloaded = BookRepository(context)
         assertEquals(edited, reloaded.bookById("a")!!.readerSettings)
         assertEquals(ReaderSettings(), reloaded.bookById("b")!!.readerSettings)
+    }
+
+    @Test fun `markdown and txt files use dedicated plain text defaults`() = runTest(dispatcher) {
+        val expected = ReaderSettings(
+            fontSizeSp = 15f,
+            lineHeight = 1.5f,
+            font = ReaderFont.SANS,
+            justify = false,
+            hyphenation = false,
+            pageMarginDp = 14,
+            readingMode = ReadingMode.SCROLL,
+        )
+        assertEquals(expected, ReaderSettings.defaultFor(BookFormat.TXT))
+        assertEquals(expected, ReaderSettings.defaultFor(BookFormat.MD))
+        assertEquals(14, expected.sideMarginDp)
+        assertEquals(ReaderSettings(), ReaderSettings.defaultFor(BookFormat.EPUB))
+        assertEquals(ReaderSettings(), ReaderSettings.defaultFor(BookFormat.FB2))
+        assertEquals(ReaderSettings(), ReaderSettings.defaultFor(BookFormat.MOBI))
+
+        StoreFixture.seed(
+            temporary.root,
+            listOf(
+                book("txt", format = BookFormat.TXT),
+                book("md", format = BookFormat.MD),
+                book("epub", format = BookFormat.EPUB),
+            ),
+        )
+        val repo = repository()
+        val txtReader = model(repo, "txt")
+        val mdReader = model(repo, "md")
+        assertEquals(expected, txtReader.settings.value)
+        assertEquals(expected, mdReader.settings.value)
+        open(repo, "txt")
+        open(repo, "md")
+        runCurrent()
+        assertEquals(expected, txtReader.settings.value)
+        assertEquals(expected, mdReader.settings.value)
+
+        repo.markStarted("txt")
+        repo.markStarted("md")
+        repo.markStarted("epub")
+        assertEquals(expected, repo.bookById("txt")!!.readerSettings)
+        assertEquals(expected, repo.bookById("md")!!.readerSettings)
+        assertEquals(ReaderSettings(), repo.bookById("epub")!!.readerSettings)
     }
 }

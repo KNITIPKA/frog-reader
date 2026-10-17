@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.frogreader.data.model.BackupMode
+import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.ReaderChromeStyle
 import java.io.File
 import kotlinx.coroutines.flow.Flow
@@ -134,6 +135,20 @@ data class ReaderSettings(
         const val MIN_SIDE_MARGIN_DP = 8
         const val MAX_SIDE_MARGIN_DP = 48
         const val SIDE_MARGIN_STEP_DP = 2
+
+        /** Default reading settings for [format], before the book saves its own. */
+        fun defaultFor(format: BookFormat?): ReaderSettings = when (format) {
+            BookFormat.TXT, BookFormat.MD -> ReaderSettings(
+                fontSizeSp = 15f,
+                lineHeight = 1.5f,
+                font = ReaderFont.SANS,
+                justify = false,
+                hyphenation = false,
+                pageMarginDp = 14,
+                readingMode = ReadingMode.SCROLL,
+            )
+            else -> ReaderSettings()
+        }
     }
 }
 
@@ -226,12 +241,6 @@ class SettingsRepository(private val context: Context) {
     private val firstLaunch by lazy {
         FirstLaunchRepository(
             stateFile = File(context.noBackupFilesDir, "welcome_state.json"),
-            showOnEveryLaunch = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0,
-            hasExistingData = {
-                context.installHistory(
-                    hasSavedPreferences = context.settingsDataStore.data.first().hasSavedUserPreferences(),
-                ).isExistingReader
-            },
         )
     }
 

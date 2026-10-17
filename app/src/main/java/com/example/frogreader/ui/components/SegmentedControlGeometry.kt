@@ -68,6 +68,42 @@ internal fun segmentUnderPill(slots: List<SegmentSlot>, pill: Rect, pointerX: Fl
             .thenBy { -abs(it.center - pointerX) },
     )?.index
 
+/**
+ * Resolves the target option when releasing a dragged pill.
+ *
+ * When a user grabs near the trailing edge of a wide pill (e.g. the right side of Library
+ * when dragging right towards Profile) and swipes into the adjacent segment, the finger
+ * is inside the target segment and the pill has moved a meaningful fraction of a slot,
+ * even if the pill's center has not quite crossed the midpoint before the finger reaches
+ * the edge of the control.
+ */
+internal fun committedSegmentForDrag(
+    slots: List<SegmentSlot>,
+    initialPill: Rect,
+    releasedPill: Rect,
+    downX: Float,
+    releaseX: Float,
+): Int? {
+    val byOverlap = segmentUnderPill(slots, releasedPill, releaseX) ?: return null
+    val initialIndex = segmentUnderPill(slots, initialPill, downX) ?: return byOverlap
+    if (byOverlap != initialIndex) return byOverlap
+    val initialSlot = slots.firstOrNull { it.index == initialIndex } ?: return byOverlap
+    val pillShift = releasedPill.center.x - initialPill.center.x
+    val fingerSlot = slots.firstOrNull { releaseX >= it.left && releaseX <= it.right }
+        ?: if (releaseX < slots.first().left) slots.first()
+        else if (releaseX > slots.last().right) slots.last()
+        else null
+    if (
+        fingerSlot != null &&
+        fingerSlot.index != initialIndex &&
+        (fingerSlot.center - initialSlot.center) * pillShift > 0f &&
+        abs(pillShift) >= initialSlot.width * 0.2f
+    ) {
+        return fingerSlot.index
+    }
+    return byOverlap
+}
+
 internal data class SegmentDragUpdate(
     val pill: Rect? = null,
     val consume: Boolean = false,
@@ -116,7 +152,7 @@ internal class SegmentPillDrag(
             pill = pill,
             consume = true,
             finished = finished,
-            selection = if (finished) segmentUnderPill(slots, pill, position.x) else null,
+            selection = if (finished) committedSegmentForDrag(slots, initialPill, pill, down.x, position.x) else null,
         )
     }
 }

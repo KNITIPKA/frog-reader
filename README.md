@@ -4,7 +4,7 @@
 
 Built with **Kotlin, Jetpack Compose and Material 3**, FrogReader combines a carefully designed native interface with a dedicated reading engine, a personal library and tools to track your reading — all without an account or cloud dependency.
 
-[![Release](https://img.shields.io/badge/Release-BETA%201-2f7356?style=for-the-badge&logo=android&logoColor=white)](https://github.com/KNITIPKA/frog-reader/releases/tag/beta-1)
+[![Release](https://img.shields.io/badge/Release-BETA%202-2f7356?style=for-the-badge&logo=android&logoColor=white)](https://github.com/KNITIPKA/frog-reader/releases/tag/beta-2)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://developer.android.com/)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0%2B-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Material 3](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
@@ -19,9 +19,9 @@ Built with **Kotlin, Jetpack Compose and Material 3**, FrogReader combines a car
   <img src="assets/banners/frogreader-dark.webp" alt="FrogReader — Midnight & Dark Theme Showcase" width="100%" />
 </p>
 
-### [Download FrogReader BETA 1](https://github.com/KNITIPKA/frog-reader/releases/tag/beta-1)
+### [Download FrogReader BETA 2](https://github.com/KNITIPKA/frog-reader/releases/tag/beta-2)
 
-[Release notes](docs/releases/BETA_1.md) · [Changelog](CHANGELOG.md) · [Report a bug](https://github.com/KNITIPKA/frog-reader/issues)
+[Release notes](docs/releases/BETA_2.md) · [Changelog](CHANGELOG.md) · [Report a bug](https://github.com/KNITIPKA/frog-reader/issues)
 
 **Requires Android 8.0 or later.** Download the APK from the release assets and open it on your device.
 

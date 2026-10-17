@@ -20,9 +20,12 @@ class PublisherImageAppearanceTest {
         val diagramLook = publisherImageAppearance(diagram, true, Color.Black, Color.White, false)
         assertTrue(diagramLook.invert)
         assertNull(diagramLook.background)
-        val realisticLook = publisherImageAppearance(realistic, true, Color.Black, Color.White, true)
+        val realisticLook = publisherImageAppearance(realistic, true, Color.Black, Color.White, false)
         assertFalse(realisticLook.invert)
         assertEquals(Color.White, realisticLook.background)
+        val realisticReaderTypography = publisherImageAppearance(realistic, false, Color.Black, Color.White, false)
+        assertFalse(realisticReaderTypography.invert)
+        assertEquals(Color.White, realisticReaderTypography.background)
     }
 
     @Test
@@ -35,6 +38,9 @@ class PublisherImageAppearanceTest {
         val reader = publisherImageAppearance(image, false, Color.Black, Color.White, true)
         assertTrue(reader.invert)
         assertNull(reader.background)
+        val publisherInverted = publisherImageAppearance(image, true, Color.Black, Color.White, true)
+        assertTrue(publisherInverted.invert)
+        assertNull(publisherInverted.background)
         val unstyled = publisherImageAppearance(ContentElement.Image("photo.jpg"), true,
             Color.Black, Color.White, true)
         assertTrue(unstyled.invert)

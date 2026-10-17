@@ -1758,6 +1758,16 @@ private fun LinkedDocumentOverlay(
     ) {
         val returnRightPadding = stableInsets.calculateRightPadding(LayoutDirection.Ltr) + 16.dp
         val contentWidth = maxWidth - ReaderMetrics.horizontalPadding(settings) * 2
+        val viewportHeight = maxHeight - stableInsets.calculateTopPadding() -
+            stableInsets.calculateBottomPadding()
+        ReaderScrollImagePrefetchEffect(
+            items = document.items,
+            listState = listState,
+            settings = settings,
+            fontSize = fontSize,
+            contentWidth = contentWidth,
+            viewportHeight = viewportHeight,
+        )
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
@@ -2222,6 +2232,16 @@ private fun ScrollReader(
         if (completionVisible) Modifier.navigationBarsPadding().imePadding() else Modifier,
     )) {
         val contentWidth = maxWidth - ReaderMetrics.horizontalPadding(settings) * 2
+        val viewportHeight = maxHeight - stableInsets.calculateTopPadding() -
+            stableInsets.calculateBottomPadding()
+        ReaderScrollImagePrefetchEffect(
+            items = ready.items,
+            listState = listState,
+            settings = settings,
+            fontSize = fontSize,
+            contentWidth = contentWidth,
+            viewportHeight = viewportHeight,
+        )
         LazyColumn(
             state = listState,
             userScrollEnabled = !completionVisible,
@@ -2486,6 +2506,13 @@ private fun PagedReader(
             val pagerState = rememberPagerState(initialPage = initialPage) {
                 realPageCount + extraPages
             }
+            ReaderPagedImagePrefetchEffect(
+                pages = pages,
+                pagerState = pagerState,
+                settings = renderSettings,
+                contentWidth = renderContentWidth,
+                viewportHeightPx = contentHeightPx,
+            )
             val curlTouch = remember(pagerState) { PageCurlTouch() }
             LaunchedEffect(pagerState, curlTouch) {
                 snapshotFlow {
@@ -3317,19 +3344,24 @@ internal fun RenderPart(
             // A float rendered as a plain block image above its paragraph
             // (publisher formatting off) — its own synthesized page part.
             if (floatImagePath != null) {
-                val heightModifier = if (imageHeightPx != null) {
-                    with(LocalDensity.current) { Modifier.height(imageHeightPx.toDp()) }
-                } else {
-                    Modifier.heightIn(max = ReaderMetrics.maxImageHeight)
+                val maxImageHeightPx = with(density) { ReaderMetrics.maxImageHeight.roundToPx() }
+                val resolvedFloatHeightPx = imageHeightPx ?: remember(
+                    floatImagePath, columnWidthPx, maxImageHeightPx,
+                ) {
+                    plainFloatImageHeightPx(
+                        path = floatImagePath,
+                        contentWidthPx = columnWidthPx,
+                        maxHeightPx = maxImageHeightPx,
+                    )
                 }
                 AsyncImage(
-                    model = File(floatImagePath),
+                    model = rememberReaderImageRequest(floatImagePath, columnWidthPx, resolvedFloatHeightPx),
                     contentDescription = element.block?.floatImage?.altText,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = basePadding, vertical = 12.dp)
-                        .then(heightModifier)
+                        .height(with(density) { resolvedFloatHeightPx.toDp() })
                         .imageInvertFilter(actuallyInvert),
                 )
                 return@Box
@@ -3434,14 +3466,24 @@ internal fun RenderPart(
                             ),
                     ) {
                         if (floatBlock != null) {
+                            val maxImageHeightPx = with(density) { ReaderMetrics.maxImageHeight.roundToPx() }
+                            val floatHeightPx = remember(
+                                floatBlock.path, widthPx, maxImageHeightPx,
+                            ) {
+                                plainFloatImageHeightPx(
+                                    path = floatBlock.path,
+                                    contentWidthPx = widthPx,
+                                    maxHeightPx = maxImageHeightPx,
+                                )
+                            }
                             AsyncImage(
-                                model = File(floatBlock.path),
+                                model = rememberReaderImageRequest(floatBlock.path, widthPx, floatHeightPx),
                                 contentDescription = floatBlock.altText,
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier
                                     .width(exactTextWidth)
-                                    .heightIn(max = ReaderMetrics.maxImageHeight)
                                     .padding(bottom = 12.dp)
+                                    .height(with(density) { floatHeightPx.toDp() })
                                     .imageInvertFilter(actuallyInvert),
                             )
                         }
@@ -3640,21 +3682,33 @@ internal fun RenderPart(
                 publisherBoxes,
                 settings.bookStyles,
             )
-            val displayImageWidthPx = imageWidthPx(
-                element = element,
-                contentWidthPx = availableImageWidthPx,
-                fontSizePx = fontSizePx,
-                publisherOwnsWidth = publisherOwnsImageWidth,
-            )
-            val displayImageHeightPx = imageHeightPx ?:
-                com.example.frogreader.ui.reader.imageHeightPx(
-                element = element,
-                contentWidthPx = availableImageWidthPx,
-                fontSizePx = fontSizePx,
-                maxHeightPx = with(density) { ReaderMetrics.maxImageHeight.roundToPx() },
-                publisherOwnsWidth = publisherOwnsImageWidth,
-                viewportHeightPx = viewportHeightPx.takeIf { settings.bookStyles },
+            val maxImageHeightPx = with(density) { ReaderMetrics.maxImageHeight.roundToPx() }
+            val effectiveViewportHeightPx = viewportHeightPx.takeIf { settings.bookStyles }
+            val (displayImageWidthPx, displayImageHeightPx) = remember(
+                element,
+                availableImageWidthPx,
+                fontSizePx,
+                maxImageHeightPx,
+                publisherOwnsImageWidth,
+                effectiveViewportHeightPx,
+                imageHeightPx,
+            ) {
+                val w = imageWidthPx(
+                    element = element,
+                    contentWidthPx = availableImageWidthPx,
+                    fontSizePx = fontSizePx,
+                    publisherOwnsWidth = publisherOwnsImageWidth,
                 )
+                val h = imageHeightPx ?: com.example.frogreader.ui.reader.imageHeightPx(
+                    element = element,
+                    contentWidthPx = availableImageWidthPx,
+                    fontSizePx = fontSizePx,
+                    maxHeightPx = maxImageHeightPx,
+                    publisherOwnsWidth = publisherOwnsImageWidth,
+                    viewportHeightPx = effectiveViewportHeightPx,
+                )
+                w to h
+            }
             // Percentage-width block images are centered in their containing
             // publisher box. Full-width artwork is unchanged.
             Box(
@@ -3670,7 +3724,11 @@ internal fun RenderPart(
                 // No corner rounding: an illustration or a map is the book's
                 // own artwork and must arrive exactly as authored.
                 AsyncImage(
-                    model = File(element.path),
+                    model = rememberReaderImageRequest(
+                        path = element.path,
+                        widthPx = displayImageWidthPx,
+                        heightPx = displayImageHeightPx,
+                    ),
                     contentDescription = element.altText,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier

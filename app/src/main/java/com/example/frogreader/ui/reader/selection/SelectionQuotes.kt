@@ -13,8 +13,11 @@ fun quoteHighlights(quotes: List<Quote>): List<QuoteHighlight> =
     }
 
 internal fun availableQuoteColors(selection: BookSelection?, quotes: List<Quote>): List<QuoteColor> {
-    val ids = selectedQuoteIds(selection, quotes)
-    val used = quotes.filter { it.id in ids }.mapTo(HashSet()) { it.color }
+    if (selection == null || selection.isEmpty) return QuoteColor.entries
+    val used = quotes.mapNotNullTo(HashSet()) { quote ->
+        val range = quote.range() ?: return@mapNotNullTo null
+        quote.color.takeIf { selection.overlaps(range) }
+    }
     return QuoteColor.entries.filterNot { it in used }
 }
 
@@ -57,16 +60,50 @@ internal fun quoteHighlightSpans(
 private fun BookSelection.strictlyContains(other: BookSelection): Boolean =
     this != other && start <= other.start && end >= other.end
 
+private fun BookSelection.overlaps(other: BookSelection): Boolean =
+    start < other.end && other.start < end
+
 /**
- * Quotes touched by the selection, including a single word inside a quote.
- * Compare book positions: identical text elsewhere must never offer deletion
- * of an unrelated quote. Ranges are half-open, so merely touching an endpoint
- * is not an intersection.
+ * Quotes whose visible highlight is touched by [selection].
+ *
+ * When a smaller quote is nested inside a larger one, selecting strictly inside
+ * the inner quote targets only that inner quote — the outer quote's highlight is
+ * not directly under the selection. Selecting part of the outer quote without
+ * entering the inner one targets only the outer quote, and a selection that spans
+ * across both targets both (works for any nesting depth of 2, 3, 4+ quotes).
+ * Identical ranges target all quotes sharing that exact range.
  */
 internal fun selectedQuoteIds(selection: BookSelection?, quotes: List<Quote>): Set<String> {
     if (selection == null || selection.isEmpty) return emptySet()
-    return quotes.mapNotNull { quote ->
-        val range = quote.range() ?: return@mapNotNull null
-        quote.id.takeIf { selection.start < range.end && range.start < selection.end }
-    }.toSet()
+    val overlapping = quotes
+        .sortedBy { it.createdAtMillis }
+        .mapNotNull { quote ->
+            val range = quote.range() ?: return@mapNotNull null
+            if (selection.overlaps(range)) quote to range else null
+        }
+    if (overlapping.isEmpty()) return emptySet()
+
+    val boundaries = buildList {
+        add(selection.start)
+        add(selection.end)
+        overlapping.forEach { (_, range) ->
+            add(maxOf(selection.start, range.start))
+            add(minOf(selection.end, range.end))
+        }
+    }.distinct().sorted()
+
+    val result = LinkedHashSet<String>()
+    for (index in 0 until boundaries.lastIndex) {
+        val start = boundaries[index]
+        val end = boundaries[index + 1]
+        val covering = overlapping.filter { (_, range) -> range.start <= start && range.end >= end }
+        val innermost = covering.filter { (_, range) ->
+            covering.none { (_, otherRange) -> range.strictlyContains(otherRange) }
+        }
+        val winnerRange = innermost.lastOrNull()?.second ?: continue
+        innermost.forEach { (quote, range) ->
+            if (range == winnerRange) result += quote.id
+        }
+    }
+    return result
 }

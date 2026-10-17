@@ -11,11 +11,12 @@ import java.io.File
 internal fun imageAspectRatio(path: String): Float? = ImageGeometryCache.aspectRatio(path)
 
 private object ImageGeometryCache {
+    private const val MAX_ENTRIES = 512
     private data class Entry(val length: Long, val modified: Long, val aspect: Float?)
 
-    private val entries = object : LinkedHashMap<String, Entry>(128, 0.75f, true) {
+    private val entries = object : LinkedHashMap<String, Entry>(MAX_ENTRIES, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Entry>?): Boolean =
-            size > 128
+            size > MAX_ENTRIES
     }
 
     fun aspectRatio(path: String): Float? {
@@ -33,13 +34,15 @@ private object ImageGeometryCache {
                 file.bufferedReader().use { reader ->
                     val head = CharArray(16_384)
                     var count = 0
+                    var prefix = ""
                     while (count < head.size) {
                         val read = reader.read(head, count, head.size - count)
                         if (read < 0) break
                         count += read
-                        if (SVG_ROOT.find(String(head, 0, count)) != null) break
+                        prefix = String(head, 0, count)
+                        if (SVG_ROOT.containsMatchIn(prefix)) break
                     }
-                    svgAspectRatio(String(head, 0, count))
+                    svgAspectRatio(prefix)
                 }
             } else {
                 val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }

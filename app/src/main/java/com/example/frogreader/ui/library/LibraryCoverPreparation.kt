@@ -31,13 +31,16 @@ internal fun welcomeCoverBooks(books: List<Book>, entries: List<LibraryEntry>): 
         .toList()
 }
 
+internal fun coverDecodeWidthPx(context: Context): Int =
+    (context.resources.displayMetrics.widthPixels / 3).coerceIn(128, 384)
+
 /** Warm the same path-keyed Coil cache that BookCover uses on its first draw. */
 internal suspend fun prepareLibraryCovers(context: Context, files: List<File>) {
     if (files.isEmpty()) return
     val loader = SingletonImageLoader.get(context)
     // A bounded preview is sufficient for a non-empty first frame. Coil can
     // upgrade it for larger layouts using BookCover's placeholderMemoryCacheKey.
-    val width = (context.resources.displayMetrics.widthPixels / 3).coerceIn(128, 384)
+    val width = coverDecodeWidthPx(context)
     for (batch in files.distinctBy { it.path }.chunked(3)) {
         coroutineScope {
             batch.map { file ->

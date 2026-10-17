@@ -10,7 +10,8 @@ import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import coil3.gif.AnimatedImageDecoder
 import coil3.gif.GifDecoder
-import coil3.svg.SvgDecoder
+import com.example.frogreader.ui.reader.CachedSvgDecoder
+import java.io.File
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.StatsRepository
@@ -81,7 +82,7 @@ class FrogReaderApp : Application(), SingletonImageLoader.Factory {
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
             .components {
-                add(SvgDecoder.Factory())
+                add(CachedSvgDecoder.Factory(cacheDirProvider = { File(cacheDir, "svg_raster_cache") }))
                 // ImageDecoder handles animated GIF/WebP/HEIF from API 28;
                 // Movie keeps GIF animation working on our API 26/27 floor.
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

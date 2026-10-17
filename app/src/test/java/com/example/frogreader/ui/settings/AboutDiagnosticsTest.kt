@@ -33,7 +33,7 @@ class AboutDiagnosticsTest {
         addedAtMillis = 1, lastOpenedAtMillis = opened,
     )
     private fun data(book: Book? = book(), snapshot: ReaderDiagnosticSnapshot? = null) = AboutDiagnosticData(
-        app = InstalledAppInfo("BETA 1", 4), device = device, collectedAtMillis = 1_000,
+        app = InstalledAppInfo("BETA 2", 6), device = device, collectedAtMillis = 1_000,
         book = book, appSettings = AppSettings(),
         bookFileAvailable = true, bookSizeBytes = 2_097_152, customFontAvailable = null,
         readerSnapshot = snapshot,
@@ -62,6 +62,14 @@ class AboutDiagnosticsTest {
         val personal = ReaderSettings(fontSizeSp = 24f, pageMargins = PageMargins.WIDE)
         assertEquals(personal, diagnosticReaderSettings(book().copy(readerSettings = personal)))
         assertEquals(ReaderSettings(), diagnosticReaderSettings(book()))
+        assertEquals(
+            ReaderSettings.defaultFor(BookFormat.MD),
+            diagnosticReaderSettings(book().copy(format = BookFormat.MD)),
+        )
+        assertEquals(
+            ReaderSettings.defaultFor(BookFormat.TXT),
+            diagnosticReaderSettings(book().copy(format = BookFormat.TXT)),
+        )
         assertEquals(ReaderSettings(), diagnosticReaderSettings(null))
     }
 
@@ -80,7 +88,7 @@ class AboutDiagnosticsTest {
             appSettings = AppSettings(profileName = "private-profile", profileAvatarBase64 = "private-avatar",
                 defaultTranslator = "private-translator"),
         ))
-        listOf("Version: BETA 1", "Build type: release", "Title: Title with a newline",
+        listOf("Version: BETA 2", "Build type: release", "Title: Title with a newline",
             "Author: An Author", "Format: EPUB", "2.00 MiB (2097152 bytes)",
             "Custom font file name: UserFont.ttf", "Font size (sp): 18.00",
             "Logical density DPI: 432", "System font scale: 1.30", "400.00 × 897.78 dp",

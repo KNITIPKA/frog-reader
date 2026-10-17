@@ -42,6 +42,19 @@ class SegmentedControlGeometryTest {
     }
 
     @Test
+    fun `swiping across navigation pill from trailing edge commits when reaching target tab`() {
+        for (rtl in listOf(false, true)) {
+            val navigation = segmentSlots(300, listOf(1f, 1f), 0, rtl)
+            val libraryPill = segmentPillAtProgress(navigation, 0f, 60f)
+            val downX = if (rtl) libraryPill.left + 15f else libraryPill.right - 15f
+            val releaseX = if (rtl) 75f else 225f
+            val gesture = SegmentPillDrag(navigation, libraryPill, Offset(downX, 30f), 8f)
+            gesture.update(Offset(releaseX, 30f), pressed = true)
+            assertEquals(1, gesture.update(Offset(releaseX, 30f), pressed = false).selection)
+        }
+    }
+
+    @Test
     fun `holding and crossing several options only commits on release`() {
         val gesture = SegmentPillDrag(slots, Rect(0f, 0f, 100f, 40f), Offset(50f, 20f), 8f)
         val held = gesture.update(Offset(50f, 20f), pressed = true)

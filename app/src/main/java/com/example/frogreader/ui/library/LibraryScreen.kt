@@ -176,17 +176,32 @@ private const val ModeSwapOutMillis = 90
 private const val ModeSwapInMillis = 210
 private const val ModeSwapScale = 0.92f
 
+private val IdleArrivalState: State<Float> = mutableStateOf(1f)
+
+private val ItemFadeSpec = spring<Float>(stiffness = Spring.StiffnessMediumLow)
+private val ItemPlacementSpec = spring(
+    stiffness = Spring.StiffnessMedium,
+    dampingRatio = Spring.DampingRatioNoBouncy,
+    visibilityThreshold = IntOffset.VisibilityThreshold,
+)
+
 /**
- * The arrival animation for [shelfId], or a flat `1f` for every folder that has
- * been there all along — so the modifier chain is the same shape either way and
- * existing folders pay nothing for it.
+ * The arrival animation for [entryId], or a flat `1f` for every entry that has
+ * been there all along — so existing items allocate no [Animatable] or
+ * [LaunchedEffect] when scrolling or switching between grid and list modes.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun rememberEntryArrival(entryId: String, pop: ShelfPopState): State<Float> {
     val justCreated = pop.entryId == entryId
+    val animating = remember(entryId) { mutableStateOf(justCreated) }
+    if (justCreated && !animating.value) {
+        animating.value = true
+    }
+    if (!animating.value) return IdleArrivalState
+
     val spec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
-    val arrival = remember { Animatable(if (justCreated) 0f else 1f) }
+    val arrival = remember(entryId) { Animatable(0f) }
 
     LaunchedEffect(justCreated) {
         if (justCreated) {
@@ -201,6 +216,7 @@ private fun rememberEntryArrival(entryId: String, pop: ShelfPopState): State<Flo
             // leave a tile stranded at two-thirds size.
             arrival.animateTo(1f, spec)
         }
+        animating.value = false
     }
     return arrival.asState()
 }
@@ -461,26 +477,29 @@ fun LibraryScreen(
     // fade-through. `renderMode` is what is actually on screen; `viewMode` is
     // what was asked for.
     var renderMode by remember { mutableStateOf(viewMode) }
-    var swapping by remember { mutableStateOf(false) }
+    var swapSettling by remember { mutableStateOf(false) }
     // Only a tap on the toggle earns a transition. The persisted mode arrives
     // from DataStore a beat after the first frame, and animating that would
     // make every cold start look like the app changed its mind.
     var userChoseMode by remember { mutableStateOf(false) }
+    val swapping = swapSettling
     val swap = remember { Animatable(1f) }
     LaunchedEffect(viewMode) {
         if (viewMode != renderMode) {
             if (userChoseMode) {
-                swapping = true
                 swap.animateTo(0f, tween(ModeSwapOutMillis, easing = FastOutLinearInEasing))
             }
+            swapSettling = true
             renderMode = viewMode
         }
         // Never skip this tail, even when the modes already match. Toggling
         // back mid-fade cancels and restarts this effect with viewMode already
         // equal to renderMode, and an early return there would strand the grid
         // at whatever alpha it had reached — permanently half-invisible.
-        swap.animateTo(1f, tween(ModeSwapInMillis, easing = LinearOutSlowInEasing))
-        swapping = false
+        if (swap.value < 1f) {
+            swap.animateTo(1f, tween(ModeSwapInMillis, easing = LinearOutSlowInEasing))
+        }
+        swapSettling = false
     }
     // Content types for the grid, so LazyGrid can reuse a book tile for another
     // book instead of composing it from scratch. Hoisted rather than built per
@@ -645,6 +664,8 @@ fun LibraryScreen(
                     ) { entry ->
                         val itemModifier = Modifier
                             .animateItem(
+                                fadeInSpec = if (swapping) null else ItemFadeSpec,
+                                fadeOutSpec = if (swapping) null else ItemFadeSpec,
                                 // Snappy and NOT bouncy. The old low-stiffness
                                 // bouncy spring overshot and took ~500ms to
                                 // settle, so displaced tiles stayed under the
@@ -655,15 +676,7 @@ fun LibraryScreen(
                                 // would otherwise fly from its grid position to
                                 // its row position while fading in. The
                                 // cross-fade carries that motion instead.
-                                placementSpec = if (swapping) {
-                                    null
-                                } else {
-                                    spring(
-                                        stiffness = Spring.StiffnessMedium,
-                                        dampingRatio = Spring.DampingRatioNoBouncy,
-                                        visibilityThreshold = IntOffset.VisibilityThreshold,
-                                    )
-                                },
+                                placementSpec = if (swapping) null else ItemPlacementSpec,
                             )
                             .tileBounds(entry.id, tileBounds)
                             // AFTER tileBounds, so its onGloballyPositioned sits
@@ -1572,12 +1585,16 @@ private fun BookGridTile(
     val percent = book.libraryReadPercent
 
     Column(
-        modifier = modifier.graphicsLayer {
-            // Grows from ShelfPopFrom into place. A layer, so the arrival
-            // costs a draw and not a re-measure of the row it lands in.
-            scaleX = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
-            scaleY = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
-            alpha = arrival
+        modifier = if (arrival < 1f) {
+            modifier.graphicsLayer {
+                // Grows from ShelfPopFrom into place. A layer, so the arrival
+                // costs a draw and not a re-measure of the row it lands in.
+                scaleX = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
+                scaleY = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
+                alpha = arrival
+            }
+        } else {
+            modifier
         },
     ) {
         Box(
@@ -1637,6 +1654,7 @@ private fun ShelfGridTile(
     val frog = LocalFrogColors.current
     val extra = entry.books.size - 4
     val arrival = rememberEntryArrival(entry.shelf.id, pop)
+    val arrivalAnimating = arrival.value < 1f
 
     Column(modifier = modifier) {
         Box(
@@ -1656,11 +1674,17 @@ private fun ShelfGridTile(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        // The artwork pops, the label under it does not: an
-                        // overshoot spring on 12sp type is visibly jittery.
-                        .graphicsLayer {
-                            scaleX = lerp(ShelfPopFrom, 1f, arrival.value)
-                            scaleY = scaleX
+                        .let { base ->
+                            if (arrivalAnimating) {
+                                // The artwork pops, the label under it does not: an
+                                // overshoot spring on 12sp type is visibly jittery.
+                                base.graphicsLayer {
+                                    scaleX = lerp(ShelfPopFrom, 1f, arrival.value)
+                                    scaleY = scaleX
+                                }
+                            } else {
+                                base
+                            }
                         },
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
@@ -1678,15 +1702,21 @@ private fun ShelfGridTile(
                                         // Cropped a little squarer than 2:3 to
                                         // leave the plate room for its label.
                                         .fillMaxHeight()
-                                        // Mini covers land one after another, so a
-                                        // new folder reads as books dropping in
-                                        // rather than a card appearing.
-                                        .graphicsLayer {
-                                            val t = ((arrival.value - slot * 0.07f) / 0.6f)
-                                                .coerceIn(0f, 1f)
-                                            alpha = t
-                                            scaleX = lerp(0.7f, 1f, t)
-                                            scaleY = scaleX
+                                        .let { base ->
+                                            if (arrivalAnimating) {
+                                                // Mini covers land one after another, so a
+                                                // new folder reads as books dropping in
+                                                // rather than a card appearing.
+                                                base.graphicsLayer {
+                                                    val t = ((arrival.value - slot * 0.07f) / 0.6f)
+                                                        .coerceIn(0f, 1f)
+                                                    alpha = t
+                                                    scaleX = lerp(0.7f, 1f, t)
+                                                    scaleY = scaleX
+                                                }
+                                            } else {
+                                                base
+                                            }
                                         }
                                         .clip(RoundedCornerShape(8.dp))
                                         .background(
@@ -1803,27 +1833,29 @@ private fun BookListRow(
     val fraction = book.libraryProgressFraction
     val percent = book.libraryReadPercent
     val progressFill = if (percent == 100) frog.completionFill else frog.folder
-    val fillWidth = animateFloatAsState(
-        targetValue = fraction,
-        animationSpec = tween(400),
-        label = "listProgressFill",
-    )
 
     Box(
         modifier = modifier
-            .graphicsLayer {
-                scaleX = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
-                scaleY = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
-                alpha = arrival
+            .let { base ->
+                if (arrival < 1f) {
+                    base.graphicsLayer {
+                        scaleX = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
+                        scaleY = ShelfPopFrom + (1f - ShelfPopFrom) * arrival
+                        alpha = arrival
+                    }
+                } else {
+                    base
+                }
             }
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .background(scheme.surfaceContainer)
             .drawBehind {
+                if (fraction <= 0f) return@drawBehind
                 // Lazy list rows have no bounded height during measurement.
                 // Draw against the final row size instead of measuring an
                 // empty fillMaxHeight child, which can collapse to zero.
-                val width = size.width * fillWidth.value
+                val width = size.width * fraction
                 drawRect(
                     color = progressFill,
                     topLeft = Offset(
@@ -1904,10 +1936,16 @@ private fun ShelfListRow(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            // The whole card is the folder here, so all of it pops.
-            .graphicsLayer {
-                scaleX = lerp(ShelfPopFrom, 1f, arrival.value)
-                scaleY = scaleX
+            .let { base ->
+                if (arrival.value < 1f) {
+                    // The whole card is the folder here, so all of it pops.
+                    base.graphicsLayer {
+                        scaleX = lerp(ShelfPopFrom, 1f, arrival.value)
+                        scaleY = scaleX
+                    }
+                } else {
+                    base
+                }
             }
             .clip(RoundedCornerShape(20.dp))
             .background(frog.folder)

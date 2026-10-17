@@ -95,14 +95,18 @@ class SelectionQuotesTest {
             quote("elsewhere", range(4, 15, 4, 45)).copy(color = QuoteColor.ROSE),
         )
         assertEquals(listOf(QuoteColor.ROSE, QuoteColor.AMBER, QuoteColor.VIOLET), availableQuoteColors(selection, quotes))
-        assertEquals(setOf("original", "second"), selectedQuoteIds(selection, quotes))
+        // Selecting strictly inside the nested "second" quote targets only "second" for deletion
+        assertEquals(setOf("second"), selectedQuoteIds(selection, quotes))
+        // Selecting across both "original" and "second" targets both
+        assertEquals(setOf("original", "second"), selectedQuoteIds(range(2, 12, 2, 40), quotes))
     }
 
     @Test
     fun `a newer nested quote owns the overlap without recoloring the original outside it`() {
         val original = quote("original", range(2, 10, 2, 60)).copy(createdAtMillis = 10L)
         val newer = quote("newer", range(2, 20, 2, 40)).copy(createdAtMillis = 20L, color = QuoteColor.BLUE)
-        val highlights = quoteHighlights(listOf(newer, original))
+        val quotes = listOf(newer, original)
+        val highlights = quoteHighlights(quotes)
         assertEquals(listOf(
             QuoteHighlightSpan(CharSpan(10, 20), QuoteColor.DEFAULT),
             QuoteHighlightSpan(CharSpan(20, 40), QuoteColor.BLUE),
@@ -110,10 +114,17 @@ class SelectionQuotesTest {
         ), quoteHighlightSpans(highlights, 2, 0, 100))
         assertEquals(listOf(QuoteHighlightSpan(CharSpan(10, 60), QuoteColor.DEFAULT)),
             quoteHighlightSpans(quoteHighlights(listOf(original)), 2, 0, 100))
+        // Selecting only inside the inner quote targets only the inner quote
+        assertEquals(setOf("newer"), selectedQuoteIds(range(2, 25, 2, 35), quotes))
+        // Selecting only the outer quote (before or after the inner one) targets only the outer quote
+        assertEquals(setOf("original"), selectedQuoteIds(range(2, 12, 2, 18), quotes))
+        assertEquals(setOf("original"), selectedQuoteIds(range(2, 45, 2, 55), quotes))
+        // Selecting across the boundary between outer and inner targets both
+        assertEquals(setOf("original", "newer"), selectedQuoteIds(range(2, 15, 2, 30), quotes))
     }
 
     @Test
-    fun `a newer enclosing quote keeps all three nested quote colors visible`() {
+    fun `a newer enclosing quote keeps all three nested quote colors visible and targets only touched layers`() {
         val original = quote("original", range(2, 30, 2, 70)).copy(createdAtMillis = 10L)
         val blue = quote("blue", range(2, 35, 2, 65)).copy(createdAtMillis = 20L, color = QuoteColor.BLUE)
         val rose = quote("rose", range(2, 40, 2, 60)).copy(createdAtMillis = 30L, color = QuoteColor.ROSE)
@@ -129,8 +140,16 @@ class SelectionQuotesTest {
             QuoteHighlightSpan(CharSpan(65, 70), QuoteColor.DEFAULT),
             QuoteHighlightSpan(CharSpan(70, 90), QuoteColor.VIOLET),
         ), quoteHighlightSpans(quoteHighlights(quotes), 2, 0, 100))
-        assertEquals(setOf("original", "blue", "rose", "enclosing"),
-            selectedQuoteIds(range(2, 45, 2, 50), quotes))
+        // Selecting strictly inside the innermost quote ("rose") targets only "rose"
+        assertEquals(setOf("rose"), selectedQuoteIds(range(2, 45, 2, 50), quotes))
+        // Selecting strictly inside "blue" without entering "rose" targets only "blue"
+        assertEquals(setOf("blue"), selectedQuoteIds(range(2, 36, 2, 39), quotes))
+        // Selecting across "blue" and "rose" targets those two
+        assertEquals(setOf("blue", "rose"), selectedQuoteIds(range(2, 36, 2, 50), quotes))
+        // Selecting across "original", "blue", and "rose" targets those three
+        assertEquals(setOf("original", "blue", "rose"), selectedQuoteIds(range(2, 31, 2, 50), quotes))
+        // Selecting across all four layers targets all four
+        assertEquals(setOf("enclosing", "original", "blue", "rose"), selectedQuoteIds(range(2, 20, 2, 50), quotes))
     }
 
     @Test

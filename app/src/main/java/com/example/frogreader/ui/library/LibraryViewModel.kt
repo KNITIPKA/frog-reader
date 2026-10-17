@@ -80,9 +80,10 @@ class LibraryViewModel(
     val viewMode: StateFlow<LibraryViewMode> = _viewMode.asStateFlow()
 
     fun setViewMode(mode: LibraryViewMode) {
+        if (_viewMode.value == mode) return
         _viewMode.value = mode
         settingsRepository?.let { settings ->
-            viewModelScope.launch {
+            viewModelScope.launch(Dispatchers.IO) {
                 runCatching { settings.setLibraryViewMode(mode) }
             }
         }

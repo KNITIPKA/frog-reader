@@ -97,4 +97,14 @@ class QuotesAndBookmarksTest {
         assertEquals("", bookmarkExcerpt(" "))
     }
 
+    @Test fun `copied quote includes book title and author attribution`() {
+        assertEquals(
+            "Андрій сидів у кабінеті.\n\n— Я бачу, вас цікавить пітьма · Ілларіон Павлюк",
+            formatQuoteForCopy("Андрій сидів у кабінеті.  ", " Я бачу, вас цікавить пітьма ", " Ілларіон Павлюк "),
+        )
+        assertEquals(
+            "Such was the history.\n\n— Frankenstein",
+            formatQuoteForCopy("Such was the history.", "Frankenstein", null),
+        )
+    }
 }

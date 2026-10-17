@@ -1,7 +1,7 @@
 package com.example.frogreader.ui.reader
 
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.toRect
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
@@ -39,11 +39,13 @@ internal fun imageColorFilter(invert: Boolean): ColorFilter? =
  */
 internal fun Modifier.imageInvertFilter(invert: Boolean): Modifier =
     if (!invert) this
-    else this.drawWithContent {
-        drawIntoCanvas { canvas ->
-            val paint = Paint().apply { colorFilter = invertColorFilter }
-            canvas.saveLayer(size.toRect(), paint)
-            drawContent()
-            canvas.restore()
+    else this.drawWithCache {
+        val paint = Paint().apply { colorFilter = invertColorFilter }
+        onDrawWithContent {
+            drawIntoCanvas { canvas ->
+                canvas.saveLayer(size.toRect(), paint)
+                drawContent()
+                canvas.restore()
+            }
         }
     }

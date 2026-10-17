@@ -277,7 +277,6 @@
     <string name="settings_keep_screen_on_subtitle">The screen won\'t dim while you read</string>
     <string name="settings_volume_keys">Volume-key page turning</string>
     <string name="settings_volume_keys_subtitle">Volume down — next page, volume up — previous</string>
-    <string name="settings_section_feedback">Feedback</string>
     <string name="settings_haptics">Vibration</string>
     <string name="settings_haptics_subtitle">Gentle haptic feedback across the app</string>
     <string name="backup_export">Back up now</string>
@@ -406,8 +405,10 @@
     <string name="settings_theme_helper_system">The reader keeps its own page colour — Midnight only takes over the library and app chrome.</string>
     <string name="settings_theme_helper_manual">With system switching off, the chosen theme stays put day and night.</string>
 
-    <string name="settings_while_reading">While you read</string>
-    <string name="settings_reading_behavior">Book display and navigation</string>
+    <string name="settings_reader_panels_section">Panels and menus</string>
+    <string name="settings_controls_gestures_section">Controls and gestures</string>
+    <string name="settings_selected_text_section">Selected text</string>
+    <string name="settings_screen_startup_section">Screen and startup</string>
     <string name="settings_auto_hide_return">Auto-hide the return button</string>
     <string name="settings_auto_hide_return_subtitle">Forget the previous page 15 seconds after a jump, even with controls hidden. Accessibility settings may extend this time.</string>
     <string name="settings_startup_title">On opening the app</string>

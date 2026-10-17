@@ -2,16 +2,18 @@ package com.example.frogreader.ui.reader
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import coil3.compose.AsyncImage
 import com.example.frogreader.data.model.INLINE_IMAGE_ALT_TAG
 import com.example.frogreader.data.model.INLINE_IMAGE_TAG
-import java.io.File
 
 /**
  * Images that live inside the text flow — decorative initials drawn as
@@ -20,13 +22,6 @@ import java.io.File
  * letter and never drift between measurement and rendering: both sides build
  * their placeholders here.
  */
-
-/**
- * Placeholder height in em. Sits a little above cap height (~0.72 em) so the
- * initial reads as decorative, while staying inside the line's ascent — a
- * taller box would push the first line of every such paragraph apart.
- */
-private const val INLINE_IMAGE_HEIGHT_EM = 0.9f
 
 /** Placeholder box for the image at [path], sized from its aspect ratio. */
 private fun placeholderFor(path: String): Placeholder {
@@ -67,8 +62,14 @@ internal fun inlineImageContent(
             it.start == mark.start && it.end == mark.end
         }?.item
         mark.item to InlineTextContent(placeholderFor(mark.item)) {
+            val density = LocalDensity.current
+            val textFontSize = LocalTextStyle.current.fontSize
+            val fontSizePx = with(density) {
+                if (textFontSize.isSp) textFontSize.toPx() else 20.dp.toPx()
+            }
+            val (widthPx, heightPx) = inlineImageDimensionsPx(mark.item, fontSizePx)
             AsyncImage(
-                model = File(mark.item),
+                model = rememberReaderImageRequest(mark.item, widthPx, heightPx),
                 contentDescription = description,
                 modifier = Modifier
                     .fillMaxSize()

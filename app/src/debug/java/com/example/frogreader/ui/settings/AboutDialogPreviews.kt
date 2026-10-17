@@ -54,7 +54,7 @@ private fun AboutPreview(theme: AppTheme) {
     FrogReaderTheme(theme) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             AboutPopup(
-                versionName = "BETA 1", copied = copied,
+                versionName = "BETA 2", copied = copied,
                 onDismiss = {}, onOpenLink = {}, onCopyDiagnostics = { copied = !copied },
             )
         }

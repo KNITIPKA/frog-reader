@@ -8,6 +8,7 @@ import androidx.compose.ui.graphics.lerp
 import com.example.frogreader.data.AppTheme
 import com.example.frogreader.data.model.QuoteColor
 import com.example.frogreader.ui.reader.readerColors
+import com.example.frogreader.ui.reader.selectionToolbarPalette
 import com.example.frogreader.ui.reader.contentsRowBackground
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -455,5 +456,20 @@ class ThemePaletteTest {
         }
         val beige = readerColors(AppTheme.SEPIA)
         assertEquals(1f, beige.selectedControl.alpha)
+    }
+
+    @Test
+    fun `selection toolbar tiles keep icons and labels readable across all themes and Material You`() {
+        val palettes = AppTheme.entries.map { it.name to readerColors(it) } + listOf(
+            "dynamic light" to readerColors(AppTheme.WHITE, systemBlueScheme),
+            "dynamic dark" to readerColors(AppTheme.OLED, systemDarkBlueScheme),
+        )
+        palettes.forEach { (name, colors) ->
+            val toolbar = selectionToolbarPalette(colors)
+            assertEquals("$name container must be opaque", 1f, toolbar.container.alpha)
+            assertEquals("$name tile must be opaque", 1f, toolbar.tile.alpha)
+            assertContrast("$name toolbar label on tile", toolbar.label, toolbar.tile)
+            assertContrast("$name toolbar icon on tile", toolbar.icon, toolbar.tile, minimum = 3f)
+        }
     }
 }

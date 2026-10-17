@@ -15,8 +15,8 @@ class WelcomeLaunchIntentTest {
     }
 
     @Test
-    fun `debug launcher intent replays welcome when singleTask reuses activity`() {
-        assertTrue(MainActivity.shouldReplayWelcomeOnLauncherIntent(
+    fun `debug launcher intent does not replay welcome when singleTask reuses activity`() {
+        assertFalse(MainActivity.shouldReplayWelcomeOnLauncherIntent(
             incoming(Intent.ACTION_MAIN, launcher = true), isDebuggable = true,
         ))
     }

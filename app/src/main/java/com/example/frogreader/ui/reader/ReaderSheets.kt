@@ -647,7 +647,6 @@ fun ReaderSettingsControls(
     val shownHyphenation = book?.hyphenation ?: settings.hyphenation
     val shownLineHeight = book?.lineHeight ?: settings.lineHeight
     val shownDropCaps = settings.dropCaps || book?.dropCaps == true
-    val shownAutoInvert = book?.autoInvertImages ?: appSettings.autoInvertImages
     val bookFontFamily = remember(book?.fontPath, book?.fontCss, book?.fontFaces) {
         book?.fontPath?.let { publisherFontFamily(book.fontFaces) ?: customFontFamily(it) }
             ?: book?.fontCss?.let { css -> bundledFontFamilyForCss(css) ?: when (css) {
@@ -1239,11 +1238,8 @@ fun ReaderSettingsControls(
                 title = stringResource(R.string.reader_invert_images),
                 subtitle = stringResource(R.string.reader_invert_images_subtitle),
                 colors = colors,
-                checked = shownAutoInvert,
-                fromBook = book?.autoInvertImages != null,
+                checked = appSettings.autoInvertImages,
                 onCheckedChange = { value ->
-                    val bake = bakeBook(book?.autoInvertImages != null)
-                    onUpdate { s -> bake(s) }
                     onUpdateApp { s -> s.copy(autoInvertImages = value) }
                 },
             )

@@ -1168,8 +1168,7 @@ class MainActivity : ComponentActivity() {
         internal fun shouldReplayWelcomeOnLauncherIntent(
             incoming: Intent,
             isDebuggable: Boolean,
-        ): Boolean = isDebuggable && incoming.action == Intent.ACTION_MAIN &&
-            incoming.hasCategory(Intent.CATEGORY_LAUNCHER)
+        ): Boolean = false
 
         fun processIntentForNavigation(
             incoming: Intent,

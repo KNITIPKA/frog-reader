@@ -228,9 +228,13 @@ private object SafeTypefaceLoader : AndroidFont.TypefaceLoader {
                             } else {
                                 // Legacy create adds 300 to the base weight for BOLD. Adding only
                                 // slant to a real Bold must not accidentally turn 700 into 1000.
-                                Typeface.create(loaded,
-                                    (if (descriptor.key.synthesizeBold) Typeface.BOLD else Typeface.NORMAL) or
-                                        (if (italic) Typeface.ITALIC else Typeface.NORMAL))
+                                val legacyStyle = when {
+                                    descriptor.key.synthesizeBold && italic -> Typeface.BOLD_ITALIC
+                                    descriptor.key.synthesizeBold -> Typeface.BOLD
+                                    italic -> Typeface.ITALIC
+                                    else -> Typeface.NORMAL
+                                }
+                                Typeface.create(loaded, legacyStyle)
                             }
                         } else loaded
                     }

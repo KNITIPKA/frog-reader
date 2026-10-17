@@ -16,13 +16,16 @@ internal fun publisherImageAppearance(
 ): PublisherImageAppearance {
     val authored = image.darkModeInvert || image.darkModeBackgroundArgb != null ||
         image.darkModeBackgroundCurrentColor
-    if (!publisherMode || !authored || surroundingBackground.luminance() >= 0.5f) {
+    if (!authored || surroundingBackground.luminance() >= 0.5f) {
         return PublisherImageAppearance(defaultInvert, null)
+    }
+    if (defaultInvert) {
+        return PublisherImageAppearance(invert = true, background = null)
     }
     val background = when {
         image.darkModeBackgroundCurrentColor -> currentColor
         image.darkModeBackgroundArgb != null -> Color(image.darkModeBackgroundArgb)
         else -> null
     }
-    return PublisherImageAppearance(image.darkModeInvert, background)
+    return PublisherImageAppearance(publisherMode && image.darkModeInvert, background)
 }

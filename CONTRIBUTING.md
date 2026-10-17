@@ -72,7 +72,7 @@ export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 
 ## Release checks and licensing
 
-For BETA 1, also verify `./gradlew :app:assembleRelease :app:lintDebug :app:lintRelease`.
+For BETA 2, also verify `./gradlew :app:assembleRelease :app:lintDebug :app:lintRelease`.
 Release builds run R8 optimization and are unsigned unless signing is explicitly
 configured. See [the release guide](docs/releasing.md).
 

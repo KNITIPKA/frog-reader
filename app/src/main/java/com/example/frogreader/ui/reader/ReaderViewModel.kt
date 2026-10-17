@@ -160,9 +160,9 @@ class ReaderViewModel(
     /** Each book starts with code defaults; edits belong only to that book. */
     val settings: StateFlow<ReaderSettings> =
         kotlinx.coroutines.flow.combine(book, settingsWriter.pending) { current, pending ->
-            (pending ?: current?.readerSettings ?: ReaderSettings()).withAutomaticTypography()
+            (pending ?: current?.readerSettings ?: ReaderSettings.defaultFor(current?.format)).withAutomaticTypography()
         }.stateIn(viewModelScope, SharingStarted.Eagerly,
-            (book.value?.readerSettings ?: ReaderSettings()).withAutomaticTypography())
+            (book.value?.readerSettings ?: ReaderSettings.defaultFor(book.value?.format)).withAutomaticTypography())
 
     val appSettings: StateFlow<AppSettings> = settingsRepository.appSettings
         .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())

@@ -64,7 +64,7 @@ private fun QuotesMidnight() = QuotePagePreview(AppTheme.OLED)
 
 @Preview(name = "Quotes · Midnight · selection", widthDp = 393, heightDp = 690)
 @Composable
-private fun QuotesMidnightSelection() = QuotePagePreview(AppTheme.OLED, selecting = true)
+private fun QuotesMidnightSelection() = QuotePagePreview(AppTheme.OLED, selecting = true, existingQuotes = false)
 
 @Preview(name = "Quotes · menu · large text", widthDp = 320, heightDp = 800, fontScale = 1.5f)
 @Composable
@@ -100,9 +100,10 @@ private fun HandlesCurl() = HandleTurnPreview(PageTurnAnimation.PAGE_CURL, 0.45f
 private fun HandlesSlide() = HandleTurnPreview(PageTurnAnimation.SLIDE, 0.32f)
 
 @Composable
-private fun QuotePagePreview(theme: AppTheme, selecting: Boolean = false) {
+private fun QuotePagePreview(theme: AppTheme, selecting: Boolean = false, existingQuotes: Boolean = true) {
     FrogReaderTheme(theme) {
         val colors = readerColors(theme, MaterialTheme.colorScheme)
+        val palette = selectionToolbarPalette(colors)
         val controller = remember {
             SelectionController().apply {
                 if (selecting) set(BookSelection.of(BookAnchor(0, 90), BookAnchor(0, 190)))
@@ -113,9 +114,18 @@ private fun QuotePagePreview(theme: AppTheme, selecting: Boolean = false) {
         val fragment = rememberTextFragment(highlights, 0, 0, quotePreviewText.length)
         Column(Modifier.fillMaxSize().background(colors.background).padding(top = 32.dp)) {
             if (selecting) {
-                Surface(color = colors.chrome, contentColor = colors.onChrome) {
-                    SelectionToolbarActions(colors, setOf("original", "blue", "rose", "enclosing"),
-                        availableQuoteColors(controller.selection, quotePreviewQuotes), {}, {}, {}, {}, {}, {})
+                Surface(
+                    color = palette.container,
+                    contentColor = colors.onChrome,
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                ) {
+                    SelectionToolbarActions(
+                        colors = colors,
+                        selectedQuotes = if (existingQuotes) setOf("original", "blue", "rose", "enclosing") else emptySet(),
+                        availableQuoteColors(controller.selection, quotePreviewQuotes),
+                        {}, {}, {}, {}, {}, {},
+                    )
                 }
                 Spacer(Modifier.height(24.dp))
             }

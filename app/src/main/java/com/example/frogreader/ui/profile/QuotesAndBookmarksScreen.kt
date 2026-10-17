@@ -8,6 +8,8 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -26,6 +28,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalContext
@@ -48,6 +56,7 @@ import com.example.frogreader.ui.library.BookCover
 import com.example.frogreader.ui.theme.floatingSurface
 import com.example.frogreader.ui.theme.quoteInk
 import java.io.File
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -115,19 +124,22 @@ internal fun QuotesAndBookmarksContent(
     var bookSearchVisible by rememberSaveable(selectedBookId) { mutableStateOf(false) }
     var newestFirst by rememberSaveable { mutableStateOf(false) }
     var leaveAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var headerOffsetPx by rememberSaveable(selectedBookId) { mutableFloatStateOf(0f) }
+    var headerHeightPx by remember(selectedBookId) { mutableIntStateOf(0) }
     val selectedBook = books.firstOrNull { it.id == selectedBookId }
     val query = if (selectedBook == null) libraryQuery else bookQuery
     val searchVisible = if (selectedBook == null) librarySearchVisible else bookSearchVisible
     val colors = MaterialTheme.colorScheme
     val collection = remember(books, libraryQuery) { booksWithQuotesAndBookmarks(books, libraryQuery) }
     val bookListState = rememberLazyListState()
+    val headerCollapsed = selectedBook != null && headerHeightPx > 0 && -headerOffsetPx > headerHeightPx * 0.65f
 
     fun changeQuery(value: String) {
         if (selectedBook == null) libraryQuery = value else bookQuery = value
     }
     fun toggleSearch() {
         if (selectedBook == null) { librarySearchVisible = !librarySearchVisible; libraryQuery = "" }
-        else { bookSearchVisible = !bookSearchVisible; bookQuery = "" }
+        else { bookSearchVisible = !bookSearchVisible; bookQuery = ""; headerOffsetPx = 0f }
     }
 
     fun leaveEditor(action: () -> Unit) {
@@ -149,8 +161,15 @@ internal fun QuotesAndBookmarksContent(
         snackbarHost = { FrogSnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.profile_quotes_bookmarks), style = MaterialTheme.typography.titleLarge,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                title = {
+                    val collapsedBook = selectedBook?.takeIf { headerCollapsed }
+                    Text(
+                        text = collapsedBook?.title ?: stringResource(R.string.profile_quotes_bookmarks),
+                        style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = goBack, enabled = editor?.saving != true) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.reader_back))
@@ -178,8 +197,8 @@ internal fun QuotesAndBookmarksContent(
                             Icon(Icons.Rounded.Close, stringResource(R.string.quotes_bookmarks_clear_search))
                         }
                     }} else null,
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 12.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp),
                 )
             }
             AnimatedContent(
@@ -189,8 +208,8 @@ internal fun QuotesAndBookmarksContent(
                 if (book == null) {
                     LazyColumn(
                         state = bookListState, modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(20.dp, 16.dp, 20.dp, 24.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 24.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         if (collection.isNotEmpty()) item("heading") {
                             CollectionLabel(stringResource(R.string.quotes_bookmarks_books_label))
@@ -208,10 +227,47 @@ internal fun QuotesAndBookmarksContent(
                     }
                     val pager = rememberPagerState(initialPage = initialTab ?: if (book.quotes.isEmpty()) 1 else 0) { 2 }
                     val scope = rememberCoroutineScope()
-                    Column(Modifier.fillMaxSize()) {
-                        BookQuotesAndBookmarksHeader(book, coverOf)
-                        QuotesAndBookmarksTabs(pager.currentPage, annotations.quoteCount, annotations.bookmarkCount) { index ->
-                            leaveEditor { scope.launch { pager.animateScrollToPage(index) } }
+                    val nestedScrollConnection = remember(book.id) {
+                        object : NestedScrollConnection {
+                            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                                val maxCollapse = headerHeightPx.toFloat()
+                                if (maxCollapse <= 0f) return Offset.Zero
+                                if (available.y < 0f && headerOffsetPx > -maxCollapse) {
+                                    val prev = headerOffsetPx
+                                    headerOffsetPx = (prev + available.y).coerceIn(-maxCollapse, 0f)
+                                    return Offset(0f, headerOffsetPx - prev)
+                                }
+                                if (available.y > 0f && headerOffsetPx < 0f) {
+                                    val prev = headerOffsetPx
+                                    headerOffsetPx = (prev + available.y).coerceIn(-maxCollapse, 0f)
+                                    return Offset(0f, headerOffsetPx - prev)
+                                }
+                                return Offset.Zero
+                            }
+                        }
+                    }
+                    Column(Modifier.fillMaxSize().nestedScroll(nestedScrollConnection)) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clipToBounds()
+                                .layout { measurable, constraints ->
+                                    val placeable = measurable.measure(constraints)
+                                    headerHeightPx = placeable.height
+                                    val clampedOffset = headerOffsetPx.roundToInt().coerceIn(-placeable.height, 0)
+                                    val visibleHeight = (placeable.height + clampedOffset).coerceAtLeast(0)
+                                    layout(placeable.width, visibleHeight) {
+                                        placeable.placeRelative(0, clampedOffset)
+                                    }
+                                },
+                        ) {
+                            BookQuotesAndBookmarksHeader(book, coverOf)
+                            QuotesAndBookmarksTabs(pager.currentPage, annotations.quoteCount, annotations.bookmarkCount) { index ->
+                                leaveEditor {
+                                    headerOffsetPx = 0f
+                                    scope.launch { pager.animateScrollToPage(index) }
+                                }
+                            }
                         }
                         HorizontalPager(
                             state = pager, userScrollEnabled = editor == null,
@@ -219,22 +275,29 @@ internal fun QuotesAndBookmarksContent(
                         ) { page ->
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(20.dp, 12.dp, 20.dp, 24.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                                contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
                                 if (book.fileName == null) item("missing") {
                                     MissingBookHint { leaveEditor { onBookInfo(book.id) } }
                                 }
                                 if (page == 0) {
                                     if (annotations.quotes.isNotEmpty()) item("sort") {
-                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                                            TextButton(
-                                                onClick = { leaveEditor { newestFirst = !newestFirst } },
-                                                colors = ButtonDefaults.textButtonColors(contentColor = colors.onSurfaceVariant),
-                                            ) {
-                                                Icon(Icons.Rounded.SwapVert, null, Modifier.size(18.dp))
-                                                Spacer(Modifier.width(6.dp))
-                                                Text(stringResource(if (newestFirst) R.string.quotes_bookmarks_newest_first else R.string.quotes_bookmarks_book_order))
+                                        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                                TextButton(
+                                                    onClick = { leaveEditor { newestFirst = !newestFirst } },
+                                                    modifier = Modifier.heightIn(min = 30.dp),
+                                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                                    colors = ButtonDefaults.textButtonColors(contentColor = colors.onSurfaceVariant),
+                                                ) {
+                                                    Icon(Icons.Rounded.SwapVert, null, Modifier.size(16.dp))
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Text(
+                                                        stringResource(if (newestFirst) R.string.quotes_bookmarks_newest_first else R.string.quotes_bookmarks_book_order),
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -261,7 +324,7 @@ internal fun QuotesAndBookmarksContent(
                                     }
                                     items(annotations.bookmarks, key = { "bookmark:${it.bookmark.id}" }) { entry ->
                                         BookmarkCard(
-                                            entry, coverOf, busy,
+                                            entry, busy,
                                             onOpen = { onOpenQuoteOrBookmark(book.id, null, entry.bookmark.id) },
                                             onBookInfo = { onBookInfo(book.id) },
                                             onDelete = { onDeleteBookmark(book, entry.bookmark) },
@@ -305,10 +368,10 @@ private fun QuotesAndBookmarksTabs(selected: Int, quoteCount: Int, bookmarkCount
         indicatorColor = colors.primary,
         contentColor = colors.onSurfaceVariant,
         selectedContentColor = colors.onPrimary,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 4.dp),
-        containerRadius = 20.dp,
-        indicatorRadius = 16.dp,
-        minItemHeight = 48.dp,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 6.dp),
+        containerRadius = 16.dp,
+        indicatorRadius = 13.dp,
+        minItemHeight = 40.dp,
     ) { index, active, foreground ->
         val (label, count) = options[index]
         Text(
@@ -318,7 +381,7 @@ private fun QuotesAndBookmarksTabs(selected: Int, quoteCount: Int, bookmarkCount
             maxLines = 2,
             color = foreground,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         )
     }
 }
@@ -340,21 +403,21 @@ private fun AnnotationBookCover(book: Book, coverOf: (Book) -> File?, width: Dp 
 @Composable
 private fun SavedBookCard(book: Book, coverOf: (Book) -> File?, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    Card(onClick = onClick, shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerLowest)) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            AnnotationBookCover(book, coverOf)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(book.title, style = MaterialTheme.typography.titleMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+    Card(onClick = onClick, shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerLowest)) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            AnnotationBookCover(book, coverOf, width = 38.dp, height = 54.dp)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(book.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 book.author?.takeIf { it.isNotBlank() }?.let { author ->
                     Text(author, style = MaterialTheme.typography.bodySmall,
-                        color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 val quotes = pluralStringResource(R.plurals.quotes_bookmarks_quotes_count, book.quotes.size, book.quotes.size)
                 val bookmarks = pluralStringResource(R.plurals.quotes_bookmarks_bookmarks_count, book.bookmarks.size, book.bookmarks.size)
                 Text(stringResource(R.string.quotes_bookmarks_book_counts, quotes, bookmarks),
                     style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
             }
-            Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, tint = colors.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, tint = colors.onSurfaceVariant, modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -362,22 +425,22 @@ private fun SavedBookCard(book: Book, coverOf: (Book) -> File?, onClick: () -> U
 @Composable
 private fun BookQuotesAndBookmarksHeader(book: Book, coverOf: (Book) -> File?) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically,
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically,
     ) {
-        AnnotationBookCover(book, coverOf)
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(book.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
+        AnnotationBookCover(book, coverOf, width = 36.dp, height = 50.dp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(book.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
             book.author?.takeIf { it.isNotBlank() }?.let { author ->
-                Text(author, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(author, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun QuoteCard(
     book: Book, quote: Quote, editor: QuoteThoughtEditor?, busy: Boolean,
@@ -387,83 +450,118 @@ private fun QuoteCard(
     val colors = MaterialTheme.colorScheme
     val clipboard = LocalClipboard.current
     val context = LocalContext.current
-    val unknownAuthor = stringResource(R.string.import_author_unknown)
     val scope = rememberCoroutineScope()
     var expanded by rememberSaveable(quote.id) { mutableStateOf(false) }
+    var hasOverflow by remember(quote.text) { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var shareFailed by remember { mutableStateOf(false) }
-    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerLowest)) {
-        Column(Modifier.fillMaxWidth().animateContentSize().padding(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.FormatQuote, null, Modifier.size(20.dp), tint = colors.quoteInk(quote.color))
-                Text(stringResource(R.string.reader_chapter_n, quote.chapterIndex + 1),
-                    style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant,
-                    modifier = Modifier.weight(1f).padding(start = 8.dp))
-                Box {
-                    IconButton(onClick = { showMenu = true }) { Icon(Icons.Rounded.MoreVert, stringResource(R.string.quotes_bookmarks_actions)) }
-                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = colors.floatingSurface) {
-                        DropdownMenuItem(text = { Text(stringResource(R.string.selection_copy)) },
-                            leadingIcon = { Icon(Icons.Rounded.ContentCopy, null) },
-                            onClick = {
-                                scope.launch { clipboard.setClipEntry(ClipEntry(android.content.ClipData.newPlainText(book.title, quote.text))) }
-                                showMenu = false
-                            })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.book_info_share)) },
-                            leadingIcon = { Icon(Icons.Rounded.Share, null) }, onClick = {
-                                showMenu = false
-                                val author = book.author?.trim()?.takeIf { it.isNotEmpty() }
-                                    ?: unknownAuthor
-                                val text = buildString {
-                                    append(quote.text.trimEnd())
-                                    append("\n\n— ")
-                                    append(book.title.trim())
-                                    append('\n')
-                                    append(author)
-                                }
-                                try {
-                                    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                                        type = "text/plain"; putExtra(Intent.EXTRA_TEXT, text)
-                                    }, null))
-                                } catch (_: android.content.ActivityNotFoundException) { shareFailed = true }
-                            })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.quotes_bookmarks_open_in_book)) },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Rounded.MenuBook, null) },
-                            enabled = book.fileName != null && quote.startItem >= 0 && quote.startChar >= 0 && !busy,
-                            onClick = { showMenu = false; onOpen() })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.reader_font_delete), color = colors.error) },
-                            leadingIcon = { Icon(Icons.Rounded.DeleteOutline, null, tint = colors.error) }, enabled = !busy,
-                            onClick = { showMenu = false; onDelete() })
+    val canToggleExpand = hasOverflow || expanded
+    val attributedText = remember(quote.text, book.title, book.author) {
+        formatQuoteForCopy(quote.text, book.title, book.author)
+    }
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerLowest),
+        modifier = Modifier.clickable(
+            enabled = canToggleExpand && editor == null,
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+        ) { expanded = !expanded },
+    ) {
+        Column(
+            Modifier.fillMaxWidth().animateContentSize().padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.FormatQuote, null, Modifier.size(18.dp), tint = colors.quoteInk(quote.color))
+                    Text(
+                        stringResource(R.string.reader_chapter_n, quote.chapterIndex + 1),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.onSurfaceVariant,
+                        modifier = Modifier.weight(1f).padding(start = 6.dp),
+                    )
+                    if (editor == null && quote.note.isNullOrBlank()) {
+                        TextButton(
+                            onClick = onEdit,
+                            enabled = !busy,
+                            modifier = Modifier.heightIn(min = 28.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        ) {
+                            Icon(Icons.Rounded.EditNote, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                stringResource(R.string.quotes_bookmarks_add_thoughts),
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        }
+                    }
+                    Box {
+                        IconButton(onClick = { showMenu = true }, modifier = Modifier.size(30.dp)) {
+                            Icon(Icons.Rounded.MoreVert, stringResource(R.string.quotes_bookmarks_actions), Modifier.size(18.dp))
+                        }
+                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = colors.floatingSurface) {
+                            DropdownMenuItem(text = { Text(stringResource(R.string.selection_copy)) },
+                                leadingIcon = { Icon(Icons.Rounded.ContentCopy, null) },
+                                onClick = {
+                                    scope.launch {
+                                        clipboard.setClipEntry(
+                                            ClipEntry(android.content.ClipData.newPlainText(book.title, attributedText)),
+                                        )
+                                    }
+                                    showMenu = false
+                                })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.book_info_share)) },
+                                leadingIcon = { Icon(Icons.Rounded.Share, null) }, onClick = {
+                                    showMenu = false
+                                    try {
+                                        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/plain"; putExtra(Intent.EXTRA_TEXT, attributedText)
+                                        }, null))
+                                    } catch (_: android.content.ActivityNotFoundException) { shareFailed = true }
+                                })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.quotes_bookmarks_open_in_book)) },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Rounded.MenuBook, null) },
+                                enabled = book.fileName != null && quote.startItem >= 0 && quote.startChar >= 0 && !busy,
+                                onClick = { showMenu = false; onOpen() })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.reader_font_delete), color = colors.error) },
+                                leadingIcon = { Icon(Icons.Rounded.DeleteOutline, null, tint = colors.error) }, enabled = !busy,
+                                onClick = { showMenu = false; onDelete() })
+                        }
                     }
                 }
             }
-            var hasOverflow by remember(quote.text) { mutableStateOf(false) }
-            Text(quote.text, fontFamily = FontFamily.Serif, fontSize = 18.sp, lineHeight = 27.sp,
-                maxLines = if (expanded) Int.MAX_VALUE else 5, overflow = TextOverflow.Ellipsis,
-                onTextLayout = { if (!expanded) hasOverflow = it.hasVisualOverflow })
             Text(
-                listOfNotNull(book.title, book.author?.takeIf { it.isNotBlank() }).joinToString(" · "),
-                style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
+                quote.text,
+                fontFamily = FontFamily.Serif,
+                fontSize = 16.sp,
+                lineHeight = 23.sp,
+                maxLines = if (expanded) Int.MAX_VALUE else 5,
+                overflow = TextOverflow.Ellipsis,
+                onTextLayout = { if (!expanded) hasOverflow = it.hasVisualOverflow },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(
+                        enabled = canToggleExpand,
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { expanded = !expanded },
             )
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalArrangement = Arrangement.spacedBy(0.dp),
-            ) {
-                if (hasOverflow || expanded) TextButton(
-                    onClick = { expanded = !expanded },
-                    contentPadding = PaddingValues(horizontal = 4.dp),
-                    colors = ButtonDefaults.textButtonColors(contentColor = colors.onSurface),
-                ) {
-                    Text(stringResource(if (expanded) R.string.quotes_bookmarks_show_less else R.string.quotes_bookmarks_read_more))
-                    Spacer(Modifier.width(4.dp))
-                    Icon(if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null, Modifier.size(18.dp))
-                }
-                if (editor == null && quote.note.isNullOrBlank()) TextButton(
-                    onClick = onEdit, enabled = !busy, contentPadding = PaddingValues(horizontal = 4.dp),
-                ) {
-                    Icon(Icons.Rounded.EditNote, null, Modifier.size(20.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.quotes_bookmarks_add_thoughts))
+            if (canToggleExpand) {
+                CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                    TextButton(
+                        onClick = { expanded = !expanded },
+                        modifier = Modifier.heightIn(min = 28.dp),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                        colors = ButtonDefaults.textButtonColors(contentColor = colors.onSurfaceVariant),
+                    ) {
+                        Text(
+                            stringResource(if (expanded) R.string.quotes_bookmarks_show_less else R.string.quotes_bookmarks_read_more),
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Icon(if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null, Modifier.size(16.dp))
+                    }
                 }
             }
             if (quote.startItem < 0 || quote.startChar < 0) {
@@ -473,17 +571,28 @@ private fun QuoteCard(
             when {
                 editor != null -> ThoughtEditor(editor, onThoughtChange, onSave, onCancel)
                 !quote.note.isNullOrBlank() -> Surface(
-                    shape = RoundedCornerShape(18.dp), color = colors.surfaceContainerLow,
+                    shape = RoundedCornerShape(12.dp), color = colors.surfaceContainerLow,
                 ) {
-                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.quotes_bookmarks_my_thoughts), style = MaterialTheme.typography.labelLarge,
-                                color = colors.onSurfaceVariant, modifier = Modifier.weight(1f))
-                            IconButton(onClick = onEdit, enabled = !busy) {
-                                Icon(Icons.Rounded.EditNote, stringResource(R.string.quotes_bookmarks_edit_thoughts), tint = colors.primary)
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(R.string.quotes_bookmarks_my_thoughts),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = colors.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                IconButton(onClick = onEdit, enabled = !busy, modifier = Modifier.size(28.dp)) {
+                                    Icon(
+                                        Icons.Rounded.EditNote,
+                                        stringResource(R.string.quotes_bookmarks_edit_thoughts),
+                                        Modifier.size(18.dp),
+                                        tint = colors.primary,
+                                    )
+                                }
                             }
                         }
-                        Text(quote.note, style = MaterialTheme.typography.bodyLarge)
+                        Text(quote.note, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
@@ -499,7 +608,7 @@ private fun ThoughtEditor(editor: QuoteThoughtEditor, onChange: (String) -> Unit
             value = editor.text, onValueChange = onChange, label = { Text(stringResource(R.string.quotes_bookmarks_my_thoughts)) },
             placeholder = { Text(stringResource(R.string.quotes_bookmarks_thought_hint)) },
             modifier = Modifier.fillMaxWidth(), minLines = 3, maxLines = 8,
-            enabled = !editor.saving, isError = editor.failed, shape = RoundedCornerShape(16.dp),
+            enabled = !editor.saving, isError = editor.failed, shape = RoundedCornerShape(14.dp),
             supportingText = if (editor.failed) {{ Text(stringResource(R.string.quotes_bookmarks_thought_error)) }} else null,
         )
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -517,33 +626,37 @@ private fun ThoughtEditor(editor: QuoteThoughtEditor, onChange: (String) -> Unit
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BookmarkCard(
-    entry: SavedBookmark, coverOf: (Book) -> File?, busy: Boolean,
+    entry: SavedBookmark, busy: Boolean,
     onOpen: () -> Unit, onBookInfo: () -> Unit, onDelete: () -> Unit,
 ) {
     val (book, bookmark) = entry
     val colors = MaterialTheme.colorScheme
     var showMenu by remember { mutableStateOf(false) }
     val canOpen = book.fileName != null && !bookmark.orphaned && bookmark.flatIndex >= 0
-    Card(onClick = { if (canOpen) onOpen() else onBookInfo() }, shape = RoundedCornerShape(20.dp),
+    Card(onClick = { if (canOpen) onOpen() else onBookInfo() }, shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerLowest)) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                AnnotationBookCover(book, coverOf, width = 34.dp, height = 48.dp)
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(stringResource(R.string.reader_chapter_n, bookmark.chapterIndex + 1),
-                        style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    Text(listOfNotNull(book.title, book.author?.takeIf { it.isNotBlank() }).joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-                Box {
-                    IconButton(onClick = { showMenu = true }) { Icon(Icons.Rounded.MoreVert, stringResource(R.string.quotes_bookmarks_actions)) }
-                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = colors.floatingSurface) {
-                        DropdownMenuItem(text = { Text(stringResource(R.string.reader_font_delete), color = colors.error) }, enabled = !busy,
-                            leadingIcon = { Icon(Icons.Rounded.DeleteOutline, null, tint = colors.error) },
-                            onClick = { showMenu = false; onDelete() })
+        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Bookmark, null, Modifier.size(16.dp), tint = colors.primary)
+                    Text(
+                        stringResource(R.string.reader_chapter_n, bookmark.chapterIndex + 1),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.onSurfaceVariant,
+                        modifier = Modifier.weight(1f).padding(start = 6.dp),
+                    )
+                    Box {
+                        IconButton(onClick = { showMenu = true }, modifier = Modifier.size(30.dp)) {
+                            Icon(Icons.Rounded.MoreVert, stringResource(R.string.quotes_bookmarks_actions), Modifier.size(18.dp))
+                        }
+                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = colors.floatingSurface) {
+                            DropdownMenuItem(text = { Text(stringResource(R.string.reader_font_delete), color = colors.error) }, enabled = !busy,
+                                leadingIcon = { Icon(Icons.Rounded.DeleteOutline, null, tint = colors.error) },
+                                onClick = { showMenu = false; onDelete() })
+                        }
                     }
                 }
             }

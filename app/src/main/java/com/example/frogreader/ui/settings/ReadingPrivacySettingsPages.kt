@@ -95,7 +95,7 @@ internal fun ReadingSettingsPage(
         title = stringResource(R.string.settings_reading_title),
         onBack = onBack,
     ) {
-        SettingsSectionLabel(stringResource(R.string.settings_while_reading))
+        SettingsSectionLabel(stringResource(R.string.settings_reader_panels_section))
         SettingsCard {
             ReaderChromeStyleSettingsRow(
                 settings = settings,
@@ -104,6 +104,78 @@ internal fun ReadingSettingsPage(
                 },
             )
             SettingsDivider()
+            ReaderPanelBehaviorSettingsRows(settings, onUpdate)
+        }
+
+        Spacer(Modifier.height(24.dp))
+        SettingsSectionLabel(stringResource(R.string.settings_controls_gestures_section))
+        SettingsCard {
+            SettingsSwitchRow(
+                icon = Icons.AutoMirrored.Rounded.VolumeUp,
+                title = stringResource(R.string.settings_volume_keys),
+                subtitle = stringResource(R.string.settings_volume_keys_subtitle),
+                checked = settings.volumeKeyPaging,
+                onCheckedChange = { checked ->
+                    onUpdate { it.copy(volumeKeyPaging = checked) }
+                },
+            )
+            SettingsDivider()
+            SettingsSwitchRow(
+                icon = Icons.Rounded.Brightness6,
+                title = stringResource(R.string.settings_reader_brightness_swipe),
+                subtitle = stringResource(R.string.settings_reader_brightness_swipe_subtitle),
+                checked = settings.brightnessSwipeEnabled,
+                onCheckedChange = { checked ->
+                    onUpdate { it.copy(brightnessSwipeEnabled = checked) }
+                },
+            )
+            SettingsDivider()
+            SettingsSwitchRow(
+                icon = Icons.Rounded.Vibration,
+                title = stringResource(R.string.settings_haptics),
+                subtitle = stringResource(R.string.settings_haptics_subtitle),
+                checked = settings.haptics,
+                onCheckedChange = { checked ->
+                    onUpdate { it.copy(haptics = checked) }
+                },
+            )
+        }
+
+        Spacer(Modifier.height(24.dp))
+        SettingsSectionLabel(stringResource(R.string.settings_selected_text_section))
+        SettingsCard {
+            ExternalTextAction.entries.forEachIndexed { index, action ->
+                val apps = rememberExternalTextApps(action)
+                val choice = settings.defaultApp(action)
+                val selectedApp = apps?.let { resolveExternalTextApp(it, choice) }
+                val selectedLabel = if (selectedApp != null) {
+                    if (selectedApp.label == selectedApp.actionLabel) selectedApp.label else stringResource(
+                        R.string.external_text_app_and_action,
+                        selectedApp.label,
+                        selectedApp.actionLabel,
+                    )
+                } else stringResource(
+                    when {
+                        choice == EXTERNAL_TEXT_ASK_EVERY_TIME -> R.string.external_text_ask_every_time
+                        choice == null -> R.string.external_text_not_selected
+                        apps == null -> R.string.external_text_loading
+                        else -> R.string.external_text_unavailable
+                    },
+                )
+                if (index > 0) {
+                    SettingsDivider()
+                }
+                ExternalTextActionSettingsRow(
+                    action = action,
+                    selectedLabel = selectedLabel,
+                    onClick = { choosingAction = action },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+        SettingsSectionLabel(stringResource(R.string.settings_screen_startup_section))
+        SettingsCard {
             SettingsControlRow(
                 icon = Icons.AutoMirrored.Rounded.Login,
                 title = stringResource(R.string.settings_startup_title),
@@ -125,69 +197,6 @@ internal fun ReadingSettingsPage(
                 checked = settings.keepScreenOn,
                 onCheckedChange = { checked ->
                     onUpdate { it.copy(keepScreenOn = checked) }
-                },
-            )
-            SettingsDivider()
-            SettingsSwitchRow(
-                icon = Icons.AutoMirrored.Rounded.VolumeUp,
-                title = stringResource(R.string.settings_volume_keys),
-                subtitle = stringResource(R.string.settings_volume_keys_subtitle),
-                checked = settings.volumeKeyPaging,
-                onCheckedChange = { checked ->
-                    onUpdate { it.copy(volumeKeyPaging = checked) }
-                },
-            )
-        }
-
-        Spacer(Modifier.height(24.dp))
-        SettingsSectionLabel(stringResource(R.string.settings_reading_behavior))
-        SettingsCard {
-            ReaderPanelBehaviorSettingsRows(settings, onUpdate)
-            SettingsDivider()
-            SettingsSwitchRow(
-                icon = Icons.Rounded.Timer,
-                title = stringResource(R.string.settings_auto_hide_return),
-                subtitle = stringResource(R.string.settings_auto_hide_return_subtitle),
-                checked = settings.autoHideReturnButton,
-                onCheckedChange = { checked -> onUpdate { it.copy(autoHideReturnButton = checked) } },
-            )
-            ExternalTextAction.entries.forEach { action ->
-                val apps = rememberExternalTextApps(action)
-                val choice = settings.defaultApp(action)
-                val selectedApp = apps?.let { resolveExternalTextApp(it, choice) }
-                val selectedLabel = if (selectedApp != null) {
-                    if (selectedApp.label == selectedApp.actionLabel) selectedApp.label else stringResource(
-                        R.string.external_text_app_and_action,
-                        selectedApp.label,
-                        selectedApp.actionLabel,
-                    )
-                } else stringResource(
-                    when {
-                        choice == EXTERNAL_TEXT_ASK_EVERY_TIME -> R.string.external_text_ask_every_time
-                        choice == null -> R.string.external_text_not_selected
-                        apps == null -> R.string.external_text_loading
-                        else -> R.string.external_text_unavailable
-                    },
-                )
-                SettingsDivider()
-                ExternalTextActionSettingsRow(
-                    action = action,
-                    selectedLabel = selectedLabel,
-                    onClick = { choosingAction = action },
-                )
-            }
-        }
-
-        Spacer(Modifier.height(24.dp))
-        SettingsSectionLabel(stringResource(R.string.settings_section_feedback))
-        SettingsCard {
-            SettingsSwitchRow(
-                icon = Icons.Rounded.Vibration,
-                title = stringResource(R.string.settings_haptics),
-                subtitle = stringResource(R.string.settings_haptics_subtitle),
-                checked = settings.haptics,
-                onCheckedChange = { checked ->
-                    onUpdate { it.copy(haptics = checked) }
                 },
             )
         }
@@ -235,14 +244,6 @@ internal fun ReaderPanelBehaviorSettingsRows(
     onUpdate: ((AppSettings) -> AppSettings) -> Unit,
 ) {
     SettingsSwitchRow(
-        icon = Icons.Rounded.Brightness6,
-        title = stringResource(R.string.settings_reader_brightness_swipe),
-        subtitle = stringResource(R.string.settings_reader_brightness_swipe_subtitle),
-        checked = settings.brightnessSwipeEnabled,
-        onCheckedChange = { checked -> onUpdate { it.copy(brightnessSwipeEnabled = checked) } },
-    )
-    SettingsDivider()
-    SettingsSwitchRow(
         icon = Icons.Rounded.DragHandle,
         title = stringResource(R.string.settings_reader_collapsed_handle),
         subtitle = stringResource(R.string.settings_reader_collapsed_handle_subtitle),
@@ -256,6 +257,14 @@ internal fun ReaderPanelBehaviorSettingsRows(
         subtitle = stringResource(R.string.settings_reader_expand_on_swipe_subtitle),
         checked = settings.expandReaderPanelsOnSwipe,
         onCheckedChange = { checked -> onUpdate { it.copy(expandReaderPanelsOnSwipe = checked) } },
+    )
+    SettingsDivider()
+    SettingsSwitchRow(
+        icon = Icons.Rounded.Timer,
+        title = stringResource(R.string.settings_auto_hide_return),
+        subtitle = stringResource(R.string.settings_auto_hide_return_subtitle),
+        checked = settings.autoHideReturnButton,
+        onCheckedChange = { checked -> onUpdate { it.copy(autoHideReturnButton = checked) } },
     )
 }
 

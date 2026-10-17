@@ -1,7 +1,7 @@
 # Releasing FrogReader
 
-The current milestone is **BETA 1**, tag `beta-1`, `versionName = BETA 1`,
-`versionCode = 4`. The source is licensed under GPL-3.0-only.
+The current milestone is **BETA 2**, tag `beta-2`, `versionName = BETA 2`,
+`versionCode = 6`. The source is licensed under GPL-3.0-only.
 
 ## Prepare and verify
 
@@ -12,7 +12,7 @@ The current milestone is **BETA 1**, tag `beta-1`, `versionName = BETA 1`,
 3. Review every staged path. Keep signing material, local books, generated
    reports and APKs out of Git. Check `git diff --cached --check`.
 4. Run `./gradlew test :app:assembleDebug :app:assembleRelease :app:lintDebug
-   :app:lintRelease --max-workers=2`. For the maintainer's BETA 1 distribution,
+   :app:lintRelease --max-workers=2`. For the maintainer's BETA 2 distribution,
    append `-PlegacyReleaseSigning=true` so the APK uses the verified legacy key.
    On macOS, set
    `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"`.
@@ -40,14 +40,14 @@ To sign, configure these environment variables outside Git:
 No signing password or keystore belongs in source control. An incomplete
 external signing configuration fails instead of silently using another key.
 
-Alpha releases used the maintainer's local Android debug certificate. BETA 1
+Alpha releases used the maintainer's local Android debug certificate. BETA 2
 keeps that exact certificate to preserve in-place updates from Alpha 3. For
 this legacy distribution only, the maintainer explicitly builds with
 `-PlegacyReleaseSigning=true`. This does not make the release APK debuggable;
 R8 optimization remains enabled. A different machine's debug key is not a
 compatible replacement.
 
-The Alpha 3 / BETA 1 certificate SHA-256 is:
+The Alpha 3 / BETA 2 certificate SHA-256 is:
 
 ```text
 a93ff3d583a37246449213a267e9e4f4f4d78adb878e0202fb5b3abdf5458603
@@ -60,7 +60,7 @@ migration plan breaks updates for existing installations. See
 
 ## Distribution
 
-Use the release title **Frog Reader BETA 1** and asset `FrogReader-BETA-1.apk`.
+Use the release title **Frog Reader BETA 2** and asset `FrogReader-BETA-2.apk`.
 Include installation requirements, notable changes, known limitations,
 verification actually performed, GPL-3.0-only licensing and a link to the exact
 source tag. GitHub provides source archives for that tag. Keep old release tags

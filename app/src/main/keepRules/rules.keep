@@ -36,3 +36,5 @@
     *** Companion;
     kotlinx.serialization.KSerializer serializer(...);
 }
+-keep class com.example.frogreader.data.model.FirstLaunchState { *; }
+-keep class com.example.frogreader.data.model.FirstLaunchState$$serializer { *; }

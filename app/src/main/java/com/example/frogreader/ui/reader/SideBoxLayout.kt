@@ -610,8 +610,11 @@ fun SideBoxComposite(
                     searchHighlight = searchHighlight,
                 )
             } else {
+                val imagePath = sideBox.imagePath
                 AsyncImage(
-                    model = sideBox.imagePath?.let { File(it) },
+                    model = imagePath?.let {
+                        rememberReaderImageRequest(it, sideBox.boxWidthPx, sideBox.boxHeightPx)
+                    },
                     contentDescription = element.block?.floatImage?.altText,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.imageInvertFilter(invertImages),
@@ -894,7 +897,7 @@ private fun PublisherFloatLeaf(
                         .height(with(density) { imageHeightPx.toDp() }),
                 ) {
                     AsyncImage(
-                        model = File(element.path),
+                        model = rememberReaderImageRequest(element.path, displayImageWidthPx, imageHeightPx),
                         contentDescription = element.altText,
                         contentScale = ContentScale.Fit,
                         modifier = Modifier

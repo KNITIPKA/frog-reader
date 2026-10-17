@@ -67,7 +67,7 @@ internal fun lastOpenedDiagnosticBook(books: List<Book>): Book? =
     books.filter { it.lastOpenedAtMillis != null }.maxByOrNull { it.lastOpenedAtMillis!! }
 
 internal fun diagnosticReaderSettings(book: Book?): ReaderSettings =
-    book?.readerSettings ?: ReaderSettings()
+    book?.readerSettings ?: ReaderSettings.defaultFor(book?.format)
 
 /** Called on demand, with disk/DataStore reads off the UI thread; never parses or hashes a book. */
 internal suspend fun collectAppDiagnosticInfo(context: Context, app: InstalledAppInfo): String {

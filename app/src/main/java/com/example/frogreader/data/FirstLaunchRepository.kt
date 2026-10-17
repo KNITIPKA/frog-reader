@@ -42,7 +42,7 @@ internal fun AppSettings.withWelcomeChoices(draft: AppSettings): AppSettings = c
 internal class FirstLaunchRepository(
     stateFile: File,
     private val showOnEveryLaunch: Boolean = false,
-    private val hasExistingData: suspend () -> Boolean,
+    private val hasExistingData: suspend () -> Boolean = { false },
 ) {
     private val mutex = Mutex()
     private val store = AtomicJsonFile(

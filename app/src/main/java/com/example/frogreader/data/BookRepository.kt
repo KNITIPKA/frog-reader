@@ -1475,7 +1475,7 @@ open class BookRepository(private val context: Context? = null) {
                         lastOpenedAtMillis = now,
                         // Check inside the store transaction so first-open bookkeeping
                         // cannot overwrite an edit already saved by the reader.
-                        readerSettings = book.readerSettings ?: ReaderSettings(),
+                        readerSettings = book.readerSettings ?: ReaderSettings.defaultFor(book.format),
                         // Opening a book is what moves it off the want-to-read
                         // list. A book already finished or abandoned keeps that
                         // status until the user says otherwise.

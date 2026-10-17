@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
 import coil3.request.ImageRequest
+import coil3.size.Precision
+import coil3.size.Scale
 import com.example.frogreader.R
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.ui.theme.CoverCaptionInk
@@ -59,15 +61,19 @@ internal fun BookCover(
     if (coverFile != null) {
         val platform = LocalPlatformContext.current
         // Cover nodes are thrown away and rebuilt constantly — on every scroll
-        // and on every grid/list swap. Pinning the memory-cache key to the file
-        // path (a new cover always gets a new name) lets the rebuilt node paint
-        // the cached bitmap on its FIRST frame; without it Coil treats each new
-        // node as a fresh load and the tile flashes empty.
+        // and on every grid/list swap. Pinning the memory-cache key and bounded
+        // decode size with INEXACT precision lets both Grid and List nodes paint
+        // the cached bitmap synchronously on their FIRST frame without suspending
+        // for layout constraints or re-decoding when switching between modes.
         val request = remember(platform, coverFile) {
+            val width = coverDecodeWidthPx(platform)
             ImageRequest.Builder(platform)
                 .data(coverFile)
                 .memoryCacheKey(coverFile.path)
                 .placeholderMemoryCacheKey(coverFile.path)
+                .size(width, width * 3 / 2)
+                .scale(Scale.FILL)
+                .precision(Precision.INEXACT)
                 .build()
         }
         AsyncImage(
@@ -93,12 +99,15 @@ private fun FallbackCover(
     padding: Dp,
     alignBottom: Boolean = false,
 ) {
-    val (top, bottom) = remember(book.title) { plateColors(book.title) }
+    val brush = remember(book.title) {
+        val (top, bottom) = plateColors(book.title)
+        Brush.linearGradient(listOf(top, bottom))
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.linearGradient(listOf(top, bottom))),
+            .background(brush),
         contentAlignment = if (alignBottom) Alignment.BottomStart else Alignment.Center,
     ) {
         if (titleSize.value > 0f) {

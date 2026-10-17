@@ -64,3 +64,11 @@ internal fun sortedQuotes(quotes: List<Quote>, newestFirst: Boolean): List<Quote
         .thenBy { if (it.startItem >= 0) it.startItem else Int.MAX_VALUE }
         .thenBy { it.startChar }.thenBy { it.createdAtMillis }.thenBy { it.id })
 
+internal fun formatQuoteForCopy(quoteText: String, bookTitle: String, bookAuthor: String?): String {
+    val cleanQuote = quoteText.trimEnd()
+    val cleanTitle = bookTitle.trim()
+    val cleanAuthor = bookAuthor?.trim()?.takeIf { it.isNotEmpty() }
+    val attribution = listOfNotNull(cleanTitle.takeIf { it.isNotEmpty() }, cleanAuthor).joinToString(" · ")
+    return if (attribution.isEmpty()) cleanQuote else "$cleanQuote\n\n— $attribution"
+}
+

@@ -7,6 +7,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -112,20 +113,17 @@ internal fun FrogSegmentedControl(
         // leaving an optimistic selection on screen indefinitely.
         pending = null
     }
-    val pill = dragPill ?: if (initialized && target != null) motion.value else target ?: Rect.Zero
-    val currentPill by rememberUpdatedState(pill)
-
     fun renderedPill(drawSize: Size): Rect {
-        if (pill.width > 0f && pill.height > 0f) return pill
+        val current = dragPill ?: if (initialized && target != null) motion.value else target ?: Rect.Zero
+        if (current.width > 0f && current.height > 0f) return current
         // Drawing already has measured bounds on the first frame, before the
         // size callback can recompose animation state (also true in previews).
         return segmentSlots(drawSize.width.toInt(), actualWeights, gapPx, rtl)
             .firstOrNull { it.index == effectiveIndex }?.rect(drawSize.height) ?: Rect.Zero
     }
 
-    fun finishDrag(commit: Boolean, pointerX: Float) {
+    fun finishDrag(destination: Int?) {
         val released = dragPill ?: return
-        val destination = if (commit) segmentUnderPill(slots, released, pointerX) else null
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             motion.snapTo(released)
             initialized = true
@@ -146,22 +144,20 @@ internal fun FrogSegmentedControl(
                     // Read Main after the child selectable has seen its down.
                     // Its consumed down must not be mistaken for a cancelled drag.
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    val grabbed = currentPill
+                    val grabbed = renderedPill(Size(size.width.toFloat(), size.height.toFloat()))
                     if (grabbed.width <= 0f || !grabbed.contains(down.position)) return@awaitEachGesture
                     val gesture = SegmentPillDrag(slots, grabbed, down.position, viewConfiguration.touchSlop)
                     var started = false
                     var finished = false
-                    var pointerX = down.position.x
                     try {
                         while (true) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id }
                             if (change == null) {
-                                finishDrag(false, pointerX)
+                                finishDrag(null)
                                 finished = true
                                 break
                             }
-                            pointerX = change.position.x
                             val update = gesture.update(
                                 change.position, change.pressed, change.isConsumed,
                                 otherPointerPressed = event.changes.any { it.id != down.id && it.pressed },
@@ -172,17 +168,38 @@ internal fun FrogSegmentedControl(
                             }
                             if (update.consume) change.consume()
                             if (update.finished) {
-                                finishDrag(update.selection != null, pointerX)
+                                finishDrag(update.selection)
                                 finished = true
                                 break
                             }
                         }
                     } finally {
-                        if (started && !finished) finishDrag(false, pointerX)
+                        if (started && !finished) finishDrag(null)
                     }
                 }
             },
         ) {
+            SegmentContentRow(
+                actualWeights, gapPx, rtl,
+                Modifier.fillMaxWidth().height(IntrinsicSize.Min).onSizeChanged { size = it },
+            ) { index ->
+                val interactionSource = remember { MutableInteractionSource() }
+                Box(
+                    Modifier.heightIn(min = minItemHeight)
+                        .clip(RoundedCornerShape(indicatorRadius))
+                        // A bounded ripple paints a second capsule over the moving selection,
+                        // leaving a visible trail on taps and drags.
+                        .selectable(
+                            selected = index == selectedIndex,
+                            enabled = enabled,
+                            role = Role.RadioButton,
+                            interactionSource = interactionSource,
+                            indication = null,
+                            onClick = { currentOnSelect(index) },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) { content(index, false, contentColor) }
+            }
             Canvas(Modifier.matchParentSize()) {
                 val visiblePill = renderedPill(this.size)
                 if (visiblePill.width > 0f && visiblePill.height > 0f) {
@@ -191,22 +208,6 @@ internal fun FrogSegmentedControl(
                         drawRoundRect(indicatorBorder, visiblePill.topLeft, visiblePill.size, CornerRadius(radiusPx), style = Stroke(1.dp.toPx()))
                     }
                 }
-            }
-            SegmentContentRow(
-                actualWeights, gapPx, rtl,
-                Modifier.fillMaxWidth().height(IntrinsicSize.Min).onSizeChanged { size = it },
-            ) { index ->
-                Box(
-                    Modifier.heightIn(min = minItemHeight)
-                        .clip(RoundedCornerShape(indicatorRadius))
-                        .selectable(
-                            selected = index == selectedIndex,
-                            enabled = enabled,
-                            role = Role.RadioButton,
-                            onClick = { currentOnSelect(index) },
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) { content(index, index == selectedIndex, contentColor) }
             }
             // Clip the selected ink to the *moving* capsule. Text stays readable
             // throughout travel, including when the pill covers parts of two labels.
@@ -220,7 +221,7 @@ internal fun FrogSegmentedControl(
                 },
             ) { index ->
                 Box(contentAlignment = Alignment.Center) {
-                    content(index, index == selectedIndex, selectedContentColor)
+                    content(index, true, selectedContentColor)
                 }
             }
         }

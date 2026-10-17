@@ -91,7 +91,7 @@ private fun AdvancedImageSample(title: String, asset: String, model: ContentElem
             }
         }.asImageBitmap()
     }
-    val appearance = publisherImageAppearance(model, true, colors.background, colors.text, true)
+    val appearance = publisherImageAppearance(model, true, colors.background, colors.text, false)
     Column(Modifier.padding(4.dp)) {
         Text(title, color = colors.text)
         Canvas(Modifier.size(168.dp, 220.dp)

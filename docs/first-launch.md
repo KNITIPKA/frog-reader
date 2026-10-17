@@ -26,7 +26,7 @@ installations, including settings that were never explicitly saved. Its internal
 marker does not count as prior use when deciding whether to show Welcome.
 
 The welcome release badge comes from `version.properties` through the generated
-`welcome_release_label` string. The current label is BETA 1. Changing the release
+`welcome_release_label` string. The current label is BETA 2. Changing the release
 name updates Welcome, Settings and About together; it does not replay onboarding.
 
 `WelcomeHeader` reserves an empty trailing area for future SVG artwork. Replace
@@ -37,9 +37,7 @@ reachable in landscape, on short screens and with enlarged text.
 Completion is an atomic, device-local `welcome_state.json` under
 `Context.noBackupFilesDir`, separate from serialized preferences and backup data.
 A new installation records pending before any choices are persisted. Pending
-onboarding resumes after interruption. Installations that already have settings,
-reader files, saved appearance hints or Android package update history are marked
-complete without showing Welcome. Updating the version never resets that state.
+onboarding resumes after interruption. Updating the version never resets that state.
 
 The activity reads preferences and checks the marker before resolving startup
 navigation. It waits for Continue before handling file-manager or widget
@@ -48,11 +46,9 @@ ahead of Welcome. Continue writes only the six welcome-owned preference fields
 in one DataStore edit and then completes the marker. Failed persistence leaves
 the screen and draft available for retry.
 
-Debug builds show Welcome on every new app launch, starting from saved preferences,
-including automatic appearance choices. Opening the app through its launcher icon
-also replays it when its task is still in memory. Continue dismisses it for that
-launch; rotation, restoring the current task and ordinary background resume retain
-navigation. Release builds keep the first-launch marker behavior described above.
+Both release and debug builds use the same first-launch marker behavior: Welcome
+is shown on the first launch after installation and dismissed permanently once
+Continue completes.
 The Continue button has no arrow and Welcome has no Skip action.
 
 Native debug previews live in `ui/onboarding/WelcomePreviews.kt`: all three

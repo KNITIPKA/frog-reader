@@ -50,7 +50,7 @@ private fun PanelOptionsPreview(theme: AppTheme, enabled: Boolean = false) {
             Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
                 .verticalScroll(rememberScrollState()).padding(16.dp),
         ) {
-            SettingsSectionLabel(stringResource(R.string.settings_reading_behavior))
+            SettingsSectionLabel(stringResource(R.string.settings_reader_panels_section))
             SettingsCard {
                 ReaderPanelBehaviorSettingsRows(settings) { settings = it(settings) }
             }

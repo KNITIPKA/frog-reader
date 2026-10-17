@@ -1,5 +1,34 @@
 # Changelog
 
+## BETA 2 — 2026-10-17
+
+Second beta release, covering reader performance optimizations, typography improvements, custom fonts, context menu overhaul, quotes management, and UI polish since the `beta-1` tag. The Android release label is **BETA 2**, version code **6**, retaining Android 8.0+ support.
+
+### Reader experience, context menu and quotes
+
+- Redesigned the text selection context menu (`QuoteToolbar`) as a pointer-directed floating bubble with quick quote color pickers and organized action cards (Copy, Quote, Translate, Dictionary, Search).
+- Overhauled the **Quotes & Bookmarks** screen with a collapsible book header using nested scroll connection, search filtering, and updated passage card layouts.
+- Added dedicated reading defaults for plain text (`.txt`) and Markdown (`.md`) files: Sans typography, 15 sp font size, 1.5 line height, 14 dp margins, continuous scroll mode, without justification or hyphenation.
+- Fixed dark-mode image **Auto Invert** logic to properly respect publisher dark-mode rules, author dark backgrounds, and reader theme states.
+- Implemented an asynchronous SVG raster disk cache with coalesced background decodes and scroll-aware prefetching (ahead and behind the viewport) for both scroll and paged reading modes.
+
+### Typography and custom fonts
+
+- Added an in-app custom font manager: import, preview, apply, and delete custom OTF, TTF, and WOFF2 fonts with Unicode range discovery and glyph coverage checks.
+- Bundled Liberation fonts (Liberation Sans, Liberation Serif, Liberation Mono) alongside Literata and IBM Plex Sans.
+- Added support for font family typography resolution, numeric font weights, and native font variation settings.
+- Added press-and-hold stepper repetition with progressive acceleration for font size, line spacing, and side margins.
+- Expanded side margins to granular 2 dp adjustments ranging from 8 to 48 dp.
+
+### Settings, controls and application polish
+
+- Reorganized the application settings screen into clear functional groups: **Panels and menus**, **Controls and gestures**, **Selected text**, and **Screen and startup**.
+- Added custom page counter styles (**Page only**, **Page / Total**, and **Chapter**) with visual preview cards in reader settings.
+- Added external text actions with in-app default application selectors for translation, dictionary lookups, and web search.
+- Added animated segmented controls with touch-drag capsule previews across reader panels and settings.
+- Added reader panel drag handles and swipe-to-expand preferences.
+- Optimized library shelf and tile arrival animations with conditional graphics layers.
+
 ## BETA 1 — 2026-10-11
 
 First public beta, covering the changes since the `alpha-3` tag. The Android
