@@ -11,6 +11,7 @@ import com.example.frogreader.data.model.LinkedDocument
 import com.example.frogreader.data.model.LinkedDocumentTarget
 import com.example.frogreader.data.model.NoteDocument
 import com.example.frogreader.data.model.PrimaryWritingMode
+import com.example.frogreader.data.model.PublisherBoxSpan
 import com.example.frogreader.data.model.PublisherCapability
 import com.example.frogreader.data.model.PublisherPublication
 import com.example.frogreader.data.model.PublisherResource
@@ -61,6 +62,28 @@ object EpubParser {
         val title: String?,
         val capabilities: Set<PublisherCapability>,
     )
+
+    /**
+     * A TOC chapter can span hundreds of small spine documents. Append each
+     * document once instead of copying the entire preceding chapter on every
+     * merge, then publish stable lists after the reading order is complete.
+     */
+    private class ChapterBuilder(
+        val title: String?,
+        elements: List<ContentElement>,
+        val depth: Int = 0,
+        publisherBoxes: List<PublisherBoxSpan> = emptyList(),
+    ) {
+        val elements = elements.toMutableList()
+        val publisherBoxes = publisherBoxes.toMutableList()
+
+        fun build(): Chapter = Chapter(
+            title = title,
+            elements = elements.toList(),
+            depth = depth,
+            publisherBoxes = publisherBoxes.toList(),
+        )
+    }
 
     /** Expanded CSS bytes shared by every chapter during one EPUB open. */
     private class EpubCssBudget(private val limits: ReaderResourceLimits) {
@@ -229,10 +252,18 @@ object EpubParser {
     fun parseContent(file: File, imagesDir: File): BookContent =
         parseContent(file, imagesDir, ReaderResourceLimits.DEFAULT)
 
+    /**
+     * Optionally publishes one stable prefix after the saved source element
+     * and a small following reading buffer have been mapped. The callback
+     * runs synchronously during this same parse; remaining spine documents
+     * and the complete publication descriptor still belong to the result.
+     */
     internal fun parseContent(
         file: File,
         imagesDir: File,
         limits: ReaderResourceLimits,
+        onPreview: ((BookContent) -> Unit)? = null,
+        previewElementIndex: Int = 0,
     ): BookContent {
         ZipFile(file).use { zip ->
             val budget = ArchiveResourceBudget(zip, limits)
@@ -253,7 +284,7 @@ object EpubParser {
                 it.attr("name").equals("FB2EPUB.version", ignoreCase = true)
             }
 
-            val chapters = mutableListOf<Chapter>()
+            val chapterBuilders = mutableListOf<ChapterBuilder>()
             val linkedDocuments = linkedMapOf<String, LinkedDocument>()
             val extractedImages = mutableMapOf<String, String>()
             val inlineSvgs = mutableMapOf<String, String>()
@@ -294,6 +325,87 @@ object EpubParser {
                 .map { resolvePath(opfDir, it.item.href) }
                 .toSet()
             val processedLinkedPaths = mutableSetOf<String>()
+            // Builders and global target maps keep growing after a preview.
+            // Copy their collections before publishing either native snapshot.
+            fun contentSnapshot(publisherPublication: PublisherPublication? = null): BookContent {
+                val chapters = chapterBuilders.map(ChapterBuilder::build)
+
+                // Anchors that are not footnotes still work as jump targets, so a
+                // Contents page linking to "chapter.xhtml#start" navigates too.
+                val navTargets = fileLocations + anchorLocations
+
+                val notes = buildNotes(
+                    chapters = chapters,
+                    anchorLocations = anchorLocations,
+                    linkTargets = noteTargets,
+                    exactDocuments = exactNoteDocuments,
+                ).toMutableMap()
+                // Notes often live in a `linear="no"` endnotes document. Extract
+                // them with the same rules as linear notes without smuggling that
+                // document into normal pagination.
+                for ((documentId, document) in linkedDocuments) {
+                    val localAnchors = linkedLocations.mapNotNull { (key, target) ->
+                        if (target.documentId == documentId) key to (0 to target.elementIndex) else null
+                    }.toMap()
+                    notes += buildNotes(
+                        chapters = listOf(
+                            Chapter(
+                                title = document.title,
+                                elements = document.elements,
+                                publisherBoxes = document.publisherBoxes,
+                            ),
+                        ),
+                        anchorLocations = localAnchors,
+                        linkTargets = noteTargets,
+                        exactDocuments = exactNoteDocuments,
+                    )
+                }
+
+                val navigation = toc.entries.mapNotNull { entry ->
+                    val key = entry.targetKey
+                    val main = navTargets[key]
+                    val linked = linkedLocations[key]
+                    val target = when {
+                        main != null -> BookNavigationTarget.ReadingOrder(
+                            chapterIndex = main.first,
+                            elementIndex = main.second,
+                        )
+
+                        linked != null -> BookNavigationTarget.Linked(
+                            documentId = linked.documentId,
+                            elementIndex = linked.elementIndex,
+                        )
+
+                        else -> null
+                    } ?: return@mapNotNull null
+                    BookNavigationEntry(entry.title, entry.depth, target)
+                }
+
+                return BookContent(
+                    chapters = chapters,
+                    notes = notes,
+                    linkTargets = navTargets.filterKeys { it in linkTargets },
+                    fonts = fonts.values.toList(),
+                    language = metadataLanguage ?: LanguageTag.detectFromChapters(chapters),
+                    linkedDocuments = linkedDocuments.toMap(),
+                    linkedDocumentTargets = linkedLocations.filterKeys { it in linkTargets },
+                    navigation = navigation,
+                    publisherPublication = publisherPublication,
+                    pageProgression = packageRendition.pageProgression,
+                )
+            }
+
+            var previewPublished = false
+            var parsedLinearElements = 0L
+            val previewThreshold = previewElementIndex.coerceAtLeast(0).toLong() + 32L
+            fun maybePublishPreview(addedElements: Int) {
+                if (onPreview == null || previewPublished) return
+                parsedLinearElements += addedElements
+                if (parsedLinearElements < previewThreshold) return
+                previewPublished = true
+                onPreview(contentSnapshot())
+            }
+
             for (spineItem in spine) {
                 val item = spineItem.item
                 val chapterPath = resolvePath(opfDir, item.href)
@@ -343,13 +455,14 @@ object EpubParser {
                     )
                     val image = ContentElement.Image(path = imagePath, altText = svgAlt)
                     if (linear) {
-                        val chapterIndex = chapters.size
-                        chapters += Chapter(
+                        val chapterIndex = chapterBuilders.size
+                        chapterBuilders += ChapterBuilder(
                             title = tocEntry?.title,
                             elements = listOf(image),
                             depth = tocEntry?.depth ?: 0,
                         )
                         fileLocations.putIfAbsent(chapterPath, chapterIndex to 0)
+                        maybePublishPreview(1)
                     } else {
                         linkedDocuments[chapterPath] = LinkedDocument(
                             id = chapterPath,
@@ -508,32 +621,30 @@ object EpubParser {
                     val end = boundaries.getOrNull(position + 1)?.first ?: elements.size
                     if (start >= end) continue
                     val tocEntry = boundary.second
-                    val merge = tocEntry == null && titlesByPath.isNotEmpty() && chapters.isNotEmpty()
+                    val merge = tocEntry == null && titlesByPath.isNotEmpty() && chapterBuilders.isNotEmpty()
                     val chapterIndex: Int
                     val elementBase: Int
                     if (merge) {
-                        val previous = chapters.removeAt(chapters.lastIndex)
+                        val previous = chapterBuilders.last()
                         elementBase = previous.elements.size
-                        chapters += Chapter(
-                            title = previous.title,
-                            elements = previous.elements + elements.subList(start, end),
-                            depth = previous.depth,
-                            publisherBoxes = previous.publisherBoxes + slicePublisherBoxSpans(
+                        previous.elements.addAll(elements.subList(start, end))
+                        previous.publisherBoxes.addAll(
+                            slicePublisherBoxSpans(
                                 spans = mapper.publisherBoxes,
                                 startElement = start,
                                 endElementExclusive = end,
                                 destinationOffset = elementBase,
                             ),
                         )
-                        chapterIndex = chapters.lastIndex
+                        chapterIndex = chapterBuilders.lastIndex
                     } else {
                         val segment = elements.subList(start, end)
                         val title = tocEntry?.title
                             ?: segment.firstOrNull { it is ContentElement.Heading }
                                 ?.let { (it as ContentElement.Heading).text }
-                        chapterIndex = chapters.size
+                        chapterIndex = chapterBuilders.size
                         elementBase = 0
-                        chapters += Chapter(
+                        chapterBuilders += ChapterBuilder(
                             title = title,
                             elements = segment,
                             depth = tocEntry?.depth ?: 0,
@@ -564,68 +675,10 @@ object EpubParser {
                         first.chapterIndex to first.elementBase,
                     )
                 }
+                maybePublishPreview(elements.size)
             }
 
-            // Anchors that are not footnotes still work as jump targets, so a
-            // Contents page linking to "chapter.xhtml#start" navigates too.
-            val navTargets = fileLocations + anchorLocations
-
-            val notes = buildNotes(
-                chapters = chapters,
-                anchorLocations = anchorLocations,
-                linkTargets = noteTargets,
-                exactDocuments = exactNoteDocuments,
-            ).toMutableMap()
-            // Notes often live in a `linear="no"` endnotes document. Extract
-            // them with the same rules as linear notes without smuggling that
-            // document into normal pagination.
-            for ((documentId, document) in linkedDocuments) {
-                val localAnchors = linkedLocations.mapNotNull { (key, target) ->
-                    if (target.documentId == documentId) key to (0 to target.elementIndex) else null
-                }.toMap()
-                notes += buildNotes(
-                    chapters = listOf(
-                        Chapter(
-                            title = document.title,
-                            elements = document.elements,
-                            publisherBoxes = document.publisherBoxes,
-                        ),
-                    ),
-                    anchorLocations = localAnchors,
-                    linkTargets = noteTargets,
-                    exactDocuments = exactNoteDocuments,
-                )
-            }
-
-            val navigation = toc.entries.mapNotNull { entry ->
-                val key = entry.targetKey
-                val main = navTargets[key]
-                val linked = linkedLocations[key]
-                val target = when {
-                    main != null -> BookNavigationTarget.ReadingOrder(
-                        chapterIndex = main.first,
-                        elementIndex = main.second,
-                    )
-
-                    linked != null -> BookNavigationTarget.Linked(
-                        documentId = linked.documentId,
-                        elementIndex = linked.elementIndex,
-                    )
-
-                    else -> null
-                } ?: return@mapNotNull null
-                BookNavigationEntry(entry.title, entry.depth, target)
-            }
-
-            return BookContent(
-                chapters = chapters,
-                notes = notes,
-                linkTargets = navTargets.filterKeys { it in linkTargets },
-                fonts = fonts.values.toList(),
-                language = metadataLanguage ?: LanguageTag.detectFromChapters(chapters),
-                linkedDocuments = linkedDocuments,
-                linkedDocumentTargets = linkedLocations.filterKeys { it in linkTargets },
-                navigation = navigation,
+            return contentSnapshot(
                 publisherPublication = buildPublisherPublication(
                     zip = zip,
                     opfPath = opfPath,
@@ -638,7 +691,6 @@ object EpubParser {
                     encryption = encryption,
                     limits = limits,
                 ),
-                pageProgression = packageRendition.pageProgression,
             )
         }
     }
@@ -1319,7 +1371,7 @@ object EpubParser {
         for (face in resolver.fontFaces) {
             val entryPath = resolvePath(face.baseDir, face.src)
             val family = face.family.trim().lowercase()
-            val key = "${entryPath.length}:$entryPath${family.length}:$family:${face.bold}:${face.italic}"
+            val key = "${entryPath.length}:$entryPath${family.length}:$family:${face.weightMin}:${face.weightMax}:${face.italic}:${face.stretchMin}:${face.stretchMax}:${face.unicodeRange.orEmpty()}"
             if (key in out) continue
             val target = File(imagesDir, fontFileName(entryPath))
 
@@ -1333,6 +1385,12 @@ object EpubParser {
                     path = target.absolutePath,
                     bold = face.bold,
                     italic = face.italic,
+                    weight = face.weight,
+                    weightMin = face.weightMin,
+                    weightMax = face.weightMax,
+                    stretchMin = face.stretchMin,
+                    stretchMax = face.stretchMax,
+                    unicodeRange = face.unicodeRange,
                 )
                 continue
             }
@@ -1389,6 +1447,12 @@ object EpubParser {
                 path = target.absolutePath,
                 bold = face.bold,
                 italic = face.italic,
+                weight = face.weight,
+                weightMin = face.weightMin,
+                weightMax = face.weightMax,
+                stretchMin = face.stretchMin,
+                stretchMax = face.stretchMax,
+                unicodeRange = face.unicodeRange,
             )
         }
     }

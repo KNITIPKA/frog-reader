@@ -1,6 +1,8 @@
 package com.example.frogreader.ui.reader
 
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
+import com.example.frogreader.data.PageMargins
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.PageTurnAnimation
 import com.example.frogreader.data.model.BookFont
@@ -11,6 +13,51 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 class PaginationSpecKeyTest {
+
+    @Test
+    fun `Auto manual and family membership have distinct pagination identities`() {
+        fun key(auto: Boolean, paths: List<String>) = PaginationSpec(
+            contentWidthPx = 800, contentHeightPx = 1_200, density = Density(2f), fontSize = 18f,
+            settings = ReaderSettings(customFontPath = "/fonts/regular.ttf", customFontAuto = auto,
+                customFontFamilyPaths = paths),
+        ).key
+        val regular = listOf("/fonts/regular.ttf")
+        val complete = regular + "/fonts/italic.ttf"
+        assertNotEquals(key(false, regular), key(true, regular))
+        assertNotEquals(key(true, regular), key(true, complete))
+        assertEquals(key(true, complete), key(true, complete.reversed() + complete.first()))
+    }
+
+    @Test
+    fun `instances from one font file have different page cache keys`() {
+        fun key(axes: Map<String, Float>) = PaginationSpec(
+            contentWidthPx = 800, contentHeightPx = 1_200, density = Density(2f), fontSize = 18f,
+            settings = ReaderSettings(customFontPath = "/fonts/variable.ttf", customFontAxes = axes),
+        ).key
+        assertNotEquals(key(mapOf("wght" to 400f, "wdth" to 100f)), key(mapOf("wght" to 700f, "wdth" to 100f)))
+        assertNotEquals(key(mapOf("wght" to 400f, "wdth" to 100f)), key(mapOf("wght" to 400f, "wdth" to 75f)))
+        assertEquals(key(mapOf("wdth" to 75f, "wght" to 700f)), key(mapOf("wght" to 700f, "wdth" to 75f)))
+    }
+
+    @Test
+    fun `numeric margins invalidate cached pages through the measured column width`() {
+        val density = Density(2f)
+        fun key(settings: ReaderSettings): String = with(density) {
+            PaginationSpec(
+                contentWidthPx = (360.dp - ReaderMetrics.horizontalPadding(settings) * 2).roundToPx(),
+                contentHeightPx = 1_200,
+                density = density,
+                fontSize = 18f,
+                settings = settings,
+            ).key
+        }
+
+        assertNotEquals(key(ReaderSettings(pageMarginDp = 8)), key(ReaderSettings(pageMarginDp = 48)))
+        assertEquals(
+            key(ReaderSettings(pageMargins = PageMargins.NORMAL)),
+            key(ReaderSettings(pageMarginDp = 20)),
+        )
+    }
 
     @Test
     fun `counter visibility and mode preserve measured pages`() {

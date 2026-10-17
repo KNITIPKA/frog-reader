@@ -31,6 +31,8 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -160,6 +162,7 @@ private fun snippetFor(
  * the reading theme so it feels like part of the book, not a separate app
  * screen.
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ReaderSearchOverlay(
     visible: Boolean,
@@ -175,6 +178,7 @@ fun ReaderSearchOverlay(
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     topPadding: androidx.compose.ui.unit.Dp = 0.dp,
+    contentComplete: Boolean = true,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     var backProgress by remember { mutableFloatStateOf(0f) }
@@ -211,6 +215,18 @@ fun ReaderSearchOverlay(
                 .padding(top = topPadding),
         ) {
             val trimmed = query.trim()
+            if (!contentComplete && trimmed.length >= 2) Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                LoadingIndicator(Modifier.size(24.dp), color = colors.accent)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = stringResource(R.string.reader_search_loading_book),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = colors.secondaryText,
+                )
+            }
             // Precompute the page of every match in one ordered merge pass:
             // matches and pages are both sorted by (item, char).
             val matchPages = remember(results, pages) {
@@ -263,7 +279,7 @@ fun ReaderSearchOverlay(
                 val current = results
                 when {
                     current != null && current.query == trimmed && current.matches.isEmpty() -> {
-                        if (pageQuery == null) {
+                        if (pageQuery == null && contentComplete) {
                             item(key = "empty") {
                                 SearchHint(
                                     text = stringResource(R.string.reader_search_empty, trimmed),

@@ -3,21 +3,18 @@ package com.example.frogreader.ui.reader
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -59,22 +56,27 @@ import androidx.compose.material.icons.rounded.InvertColors
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Smartphone
 import androidx.compose.material.icons.rounded.Superscript
-import androidx.compose.material.icons.rounded.Tag
 import androidx.compose.material.icons.rounded.TextFields
+import androidx.compose.material.icons.rounded.UnfoldLess
+import androidx.compose.material.icons.rounded.UnfoldMore
 import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
@@ -85,6 +87,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -108,26 +111,40 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontSynthesis
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.frogreader.R
+import com.example.frogreader.ui.components.FrogSegmentedControl
 import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.model.ReaderChromeStyle
 import com.example.frogreader.data.AppTheme
-import com.example.frogreader.data.PageMargins
 import com.example.frogreader.data.ReaderFont
+import com.example.frogreader.data.groupCustomFonts
+import com.example.frogreader.data.storeBookFontFamily
+import com.example.frogreader.ui.theme.customFontPreviewFamily
+import com.example.frogreader.data.selectCustomFont
+import com.example.frogreader.data.selectCustomFontFamily
+import com.example.frogreader.data.refreshCustomFontFamily
+import com.example.frogreader.data.removeCustomFontFiles
 import com.example.frogreader.data.model.Book
-import com.example.frogreader.data.model.EmbeddedFont
 import com.example.frogreader.data.model.PublisherStyle
 import com.example.frogreader.data.model.Quote
 import com.example.frogreader.ui.theme.customFontFamily
+import com.example.frogreader.ui.theme.bundledFontFamilyForCss
+import com.example.frogreader.ui.theme.publisherFontFamily
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.ReadingMode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -143,7 +160,7 @@ fun ReaderPanelsContent(
     book: Book?,
     currentChapter: Int,
     chapterStartPages: List<Int>?,
-    /** Lets the whole tab header drag the panel like the handle does. */
+    /** Optional styling for the fixed tab header. */
     modifier: Modifier = Modifier,
     onChapterClick: (ReaderNavigationTarget) -> Unit,
     onBookmarkClick: (Int) -> Unit,
@@ -165,31 +182,39 @@ fun ReaderPanelsContent(
     // Match the reader surface even while the app-wide theme is transitioning.
     MaterialTheme(colorScheme = colorScheme) {
         Column(Modifier.fillMaxSize()) {
-            PrimaryTabRow(
-                selectedTabIndex = tab,
-                containerColor = colorScheme.surfaceContainerLow,
-                contentColor = colorScheme.primary,
-                divider = {},
-                modifier = modifier.clip(RoundedCornerShape(16.dp)),
-            ) {
-                Tab(
-                    selected = tab == 0,
-                    onClick = { tab = 0 },
-                    unselectedContentColor = colorScheme.onSurfaceVariant,
-                    text = { Text(stringResource(R.string.reader_contents)) },
-                )
-                Tab(
-                    selected = tab == 1,
-                    onClick = { tab = 1 },
-                    unselectedContentColor = colorScheme.onSurfaceVariant,
-                    text = { Text(stringResource(R.string.reader_bookmarks)) },
-                )
-                Tab(
-                    selected = tab == 2,
-                    onClick = { tab = 2 },
-                    unselectedContentColor = colorScheme.onSurfaceVariant,
-                    text = { Text(stringResource(R.string.reader_quotes)) },
-                )
+            val tabs: @Composable () -> Unit = {
+                listOf(R.string.reader_contents, R.string.reader_bookmarks, R.string.reader_quotes)
+                    .forEachIndexed { index, label ->
+                        Tab(
+                            selected = tab == index,
+                            onClick = { tab = index },
+                            unselectedContentColor = colorScheme.onSurfaceVariant,
+                            text = { Text(stringResource(label), maxLines = 1) },
+                        )
+                    }
+            }
+            val fontScale = LocalDensity.current.fontScale
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                if (maxWidth < 280.dp || fontScale > 1.25f) {
+                    PrimaryScrollableTabRow(
+                        selectedTabIndex = tab,
+                        containerColor = colorScheme.surfaceContainerLow,
+                        contentColor = colorScheme.primary,
+                        edgePadding = 0.dp,
+                        divider = {},
+                        modifier = modifier.clip(RoundedCornerShape(16.dp)),
+                        tabs = tabs,
+                    )
+                } else {
+                    PrimaryTabRow(
+                        selectedTabIndex = tab,
+                        containerColor = colorScheme.surfaceContainerLow,
+                        contentColor = colorScheme.primary,
+                        divider = {},
+                        modifier = modifier.clip(RoundedCornerShape(16.dp)),
+                        tabs = tabs,
+                    )
+                }
             }
 
             Box(Modifier.weight(1f)) {
@@ -212,6 +237,7 @@ fun ReaderPanelsContent(
  * expand/collapse their subtree with the chevron; every row still jumps to
  * its chapter, and the right edge shows the page it starts on.
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ContentsTab(
     ready: ReaderState.Ready,
@@ -270,17 +296,29 @@ private fun ContentsTab(
         }
     }
 
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(top = 8.dp)
             .clip(RoundedCornerShape(20.dp))
             .background(scheme.surfaceContainerLow),
     ) {
+        if (!ready.contentComplete) Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LoadingIndicator(Modifier.size(24.dp), color = scheme.primary)
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = stringResource(R.string.reader_loading_chapters),
+                style = MaterialTheme.typography.labelLarge,
+                color = scheme.onSurfaceVariant,
+            )
+        }
         LazyColumn(
             state = listState,
             contentPadding = PaddingValues(8.dp),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxWidth().weight(1f),
         ) {
             itemsIndexed(
                 items = visibleIndices,
@@ -596,6 +634,8 @@ fun ReaderSettingsControls(
     onPeekHeight: ((Int) -> Unit)? = null,
     /** What the open book's own formatting asks for, when it asks at all. */
     publisherStyle: PublisherStyle? = null,
+    /** Live book page numbers for page counter preview cards. */
+    pageCounterInfo: PageCounterInfo? = null,
 ) {
     val haptics = LocalHapticFeedback.current
     val context = LocalContext.current
@@ -607,15 +647,16 @@ fun ReaderSettingsControls(
     val shownHyphenation = book?.hyphenation ?: settings.hyphenation
     val shownLineHeight = book?.lineHeight ?: settings.lineHeight
     val shownDropCaps = settings.dropCaps || book?.dropCaps == true
-    val bookFontFamily = remember(book?.fontPath, book?.fontCss) {
-        book?.fontPath?.let { customFontFamily(it) }
-            ?: when (book?.fontCss) {
+    val shownAutoInvert = book?.autoInvertImages ?: appSettings.autoInvertImages
+    val bookFontFamily = remember(book?.fontPath, book?.fontCss, book?.fontFaces) {
+        book?.fontPath?.let { publisherFontFamily(book.fontFaces) ?: customFontFamily(it) }
+            ?: book?.fontCss?.let { css -> bundledFontFamilyForCss(css) ?: when (css) {
                 "serif" -> androidx.compose.ui.text.font.FontFamily.Serif
                 "sans-serif" -> androidx.compose.ui.text.font.FontFamily.SansSerif
                 "monospace" -> androidx.compose.ui.text.font.FontFamily.Monospace
                 "cursive" -> androidx.compose.ui.text.font.FontFamily.Cursive
                 else -> null
-            }
+            } }
     }
 
     /**
@@ -628,37 +669,49 @@ fun ReaderSettingsControls(
      * [keepFont] is false when the edit IS the font — no point copying the
      * book's face into the library just to replace it in the same breath.
      */
-    fun bakeBook(dictated: Boolean, keepFont: Boolean = true): (ReaderSettings) -> ReaderSettings {
+    fun bakeBook(
+        dictated: Boolean,
+        keepFont: Boolean = true,
+    ): (ReaderSettings) -> ReaderSettings {
         val style = book?.takeIf { dictated } ?: return { it }
         // The font file is copied here, on the tap, not inside the settings
         // transform (which may run again on a write conflict).
-        val fontPath = style.fontPath
-            ?.takeIf { keepFont }
-            ?.let { storeBookFont(context, it, style.fontName) }
+        val storedBookFamily = style.fontPath?.takeIf { keepFont }?.let { path ->
+            groupCustomFonts((style.fontFaces.map { java.io.File(it.path) } + java.io.File(path)).distinct())
+                .firstOrNull { it.contains(path) }
+                ?.let { storeBookFontFamily(java.io.File(context.filesDir, "fonts"), it) }
+        }
         // Keep a book's generic category when leaving publisher formatting.
         // Sans adopts the reader's bundled IBM Plex Sans default.
         val genericFont = style.fontCss
             ?.takeIf { keepFont && style.fontPath == null }
             ?.let {
-                when (it) {
-                    "serif" -> ReaderFont.SERIF
-                    "sans-serif" -> ReaderFont.SANS
+                val bundled = bundledFontFamilyForCss(it)
+                when {
+                    bundled === com.example.frogreader.ui.theme.LiterataFamily -> ReaderFont.LITERATA
+                    bundled === com.example.frogreader.ui.theme.IBMPlexSansFamily -> ReaderFont.SANS
+                    it == "serif" -> ReaderFont.SERIF
+                    it == "sans-serif" -> ReaderFont.SANS
                     else -> null // monospace/cursive have no reader equivalent
                 }
             }
         return { current ->
-            var out = current.copy(bookStyles = false)
-            style.justify?.let { out = out.copy(justify = it) }
-            style.lineHeight?.let { out = out.copy(lineHeight = it) }
-            style.hyphenation?.let { out = out.copy(hyphenation = it) }
-            if (style.dropCaps) out = out.copy(dropCaps = true)
-            when {
-                fontPath != null ->
-                    out = out.copy(font = ReaderFont.CUSTOM, customFontPath = fontPath)
+            // Rapid held steps build on the latest edit even before the
+            // composition has observed that publisher formatting was left.
+            if (!current.bookStyles) current else {
+                var out = current.copy(bookStyles = false)
+                style.justify?.let { out = out.copy(justify = it) }
+                style.lineHeight?.let { out = out.copy(lineHeight = it) }
+                style.hyphenation?.let { out = out.copy(hyphenation = it) }
+                if (style.dropCaps) out = out.copy(dropCaps = true)
+                when {
+                    storedBookFamily != null -> out = out.selectCustomFontFamily(storedBookFamily)
+                        .copy(customFontAxes = style.fontTypography?.variationAxes.orEmpty())
 
-                genericFont != null -> out = out.copy(font = genericFont)
+                    genericFont != null -> out = out.copy(font = genericFont)
+                }
+                out
             }
-            out
         }
     }
 
@@ -667,29 +720,50 @@ fun ReaderSettingsControls(
 
         // Theme
         val themes = AppTheme.entries
-        ChipRow(
-            // Same names the settings sheet uses; the reader had its own
-            // "Light / Beige / Dark" wording for the very same three themes.
-            options = listOf(
-                stringResource(R.string.theme_light),
-                stringResource(R.string.theme_beige),
-                stringResource(R.string.theme_midnight),
-            ),
-            selectedIndex = themes.indexOf(appSettings.theme),
-            colors = colors,
-            onSelect = { index ->
-                onUpdateApp { it.copy(theme = themes[index], followSystemTheme = false) }
-            },
-            leading = { index ->
-                Box(
-                    Modifier
-                        .size(18.dp)
-                        .clip(CircleShape)
-                        .background(readerColors(themes[index]).background)
-                        .border(1.dp, colors.onChrome.copy(alpha = 0.25f), CircleShape),
-                )
-            },
+        val themeLabels = listOf(
+            stringResource(R.string.theme_light),
+            stringResource(R.string.theme_beige),
+            stringResource(R.string.theme_midnight),
         )
+        val themeSwatch: @Composable (Int) -> Unit = { index ->
+            Box(
+                Modifier
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(readerColors(themes[index]).background)
+                    .border(1.dp, colors.onChrome.copy(alpha = 0.25f), CircleShape),
+            )
+        }
+        val fontScale = LocalDensity.current.fontScale
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth < 280.dp || fontScale > 1.25f) {
+                Column(
+                    Modifier.clip(RoundedCornerShape(26.dp)).background(colors.control),
+                ) {
+                    themes.forEachIndexed { index, theme ->
+                        ChipRow(
+                            options = listOf(themeLabels[index]),
+                            selectedIndex = if (theme == appSettings.theme) 0 else -1,
+                            colors = colors,
+                            onSelect = {
+                                onUpdateApp { it.copy(theme = theme, followSystemTheme = false) }
+                            },
+                            leading = { themeSwatch(index) },
+                        )
+                    }
+                }
+            } else {
+                ChipRow(
+                    options = themeLabels,
+                    selectedIndex = themes.indexOf(appSettings.theme),
+                    colors = colors,
+                    onSelect = { index ->
+                        onUpdateApp { it.copy(theme = themes[index], followSystemTheme = false) }
+                    },
+                    leading = themeSwatch,
+                )
+            }
+        }
 
         Spacer(Modifier.height(20.dp))
 
@@ -785,17 +859,22 @@ fun ReaderSettingsControls(
         Spacer(Modifier.height(18.dp))
 
         // Line spacing and font size: compact steppers, side by side.
-        Row {
-            Column(Modifier.weight(1f)) {
+        ReaderControlPair(
+            first = {
                 PanelSectionLabel(stringResource(R.string.reader_line_height), colors)
                 StepperGroup(
                     value = "×%.1f".format(shownLineHeight),
                     colors = colors,
+                    decreaseEnabled = shownLineHeight > 1.2f,
+                    increaseEnabled = shownLineHeight < 2.0f,
+                    decreaseDescription = stringResource(R.string.reader_decrease_line_spacing),
+                    increaseDescription = stringResource(R.string.reader_increase_line_spacing),
                     onDecrease = {
                         val bake = bakeBook(book?.lineHeight != null)
                         onUpdate {
-                            bake(it).copy(
-                                lineHeight = (((shownLineHeight - 0.1f) * 10).roundToInt() / 10f)
+                            val current = bake(it)
+                            current.copy(
+                                lineHeight = (((current.lineHeight - 0.1f) * 10).roundToInt() / 10f)
                                     .coerceAtLeast(1.2f),
                             )
                         }
@@ -803,8 +882,9 @@ fun ReaderSettingsControls(
                     onIncrease = {
                         val bake = bakeBook(book?.lineHeight != null)
                         onUpdate {
-                            bake(it).copy(
-                                lineHeight = (((shownLineHeight + 0.1f) * 10).roundToInt() / 10f)
+                            val current = bake(it)
+                            current.copy(
+                                lineHeight = (((current.lineHeight + 0.1f) * 10).roundToInt() / 10f)
                                     .coerceAtMost(2.0f),
                             )
                         }
@@ -826,9 +906,8 @@ fun ReaderSettingsControls(
                         )
                     },
                 )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
+            },
+            second = {
                 PanelSectionLabel(stringResource(R.string.reader_font_size), colors)
                 StepperGroup(
                     value = stringResource(
@@ -836,6 +915,10 @@ fun ReaderSettingsControls(
                         settings.fontSizeSp.roundToInt(),
                     ),
                     colors = colors,
+                    decreaseEnabled = settings.fontSizeSp > 12f,
+                    increaseEnabled = settings.fontSizeSp < 32f,
+                    decreaseDescription = stringResource(R.string.reader_decrease_font_size),
+                    increaseDescription = stringResource(R.string.reader_increase_font_size),
                     onDecrease = {
                         onUpdate { it.copy(fontSizeSp = (it.fontSizeSp - 1f).coerceAtLeast(12f)) }
                     },
@@ -859,36 +942,64 @@ fun ReaderSettingsControls(
                         )
                     },
                 )
-            }
-        }
+            },
+        )
 
         Spacer(Modifier.height(18.dp))
 
         // Side margins and reading mode, side by side. The bottom of this
         // row is the "peek" height the half-open panel snaps to.
-        Row(
+        ReaderControlPair(
             modifier = Modifier.onPlaced { coords ->
                 onPeekHeight?.invoke(
                     (coords.positionInParent().y + coords.size.height).roundToInt(),
                 )
             },
-        ) {
-            Column(Modifier.weight(1.15f)) {
+            first = {
                 PanelSectionLabel(stringResource(R.string.reader_section_margins), colors)
-                val marginOptions = PageMargins.entries
-                ChipRow(
-                    options = listOf(
-                        stringResource(R.string.reader_margins_narrow),
-                        stringResource(R.string.reader_margins_normal),
-                        stringResource(R.string.reader_margins_wide),
-                    ),
-                    selectedIndex = marginOptions.indexOf(settings.pageMargins),
+                StepperGroup(
+                    value = stringResource(R.string.reader_margins_dp, settings.sideMarginDp),
                     colors = colors,
-                    onSelect = { index -> onUpdate { it.copy(pageMargins = marginOptions[index]) } },
+                    repeatOnHold = true,
+                    decreaseEnabled = settings.sideMarginDp > ReaderSettings.MIN_SIDE_MARGIN_DP,
+                    increaseEnabled = settings.sideMarginDp < ReaderSettings.MAX_SIDE_MARGIN_DP,
+                    decreaseDescription = stringResource(R.string.reader_decrease_side_margins),
+                    increaseDescription = stringResource(R.string.reader_increase_side_margins),
+                    onDecrease = {
+                        onUpdate {
+                            it.copy(
+                                pageMarginDp = (it.sideMarginDp - ReaderSettings.SIDE_MARGIN_STEP_DP)
+                                    .coerceAtLeast(ReaderSettings.MIN_SIDE_MARGIN_DP),
+                            )
+                        }
+                    },
+                    onIncrease = {
+                        onUpdate {
+                            it.copy(
+                                pageMarginDp = (it.sideMarginDp + ReaderSettings.SIDE_MARGIN_STEP_DP)
+                                    .coerceAtMost(ReaderSettings.MAX_SIDE_MARGIN_DP),
+                            )
+                        }
+                    },
+                    decrease = {
+                        Icon(
+                            Icons.Rounded.UnfoldMore,
+                            contentDescription = null,
+                            tint = colors.onChrome,
+                            modifier = Modifier.size(20.dp).rotate(90f),
+                        )
+                    },
+                    increase = {
+                        Icon(
+                            Icons.Rounded.UnfoldLess,
+                            contentDescription = null,
+                            tint = colors.onChrome,
+                            modifier = Modifier.size(20.dp).rotate(90f),
+                        )
+                    },
                 )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(0.85f)) {
+            },
+            second = {
                 PanelSectionLabel(stringResource(R.string.reader_mode), colors)
                 val modes = ReadingMode.entries
                 ChipRow(
@@ -900,8 +1011,8 @@ fun ReaderSettingsControls(
                     colors = colors,
                     onSelect = { index -> onUpdate { it.copy(readingMode = modes[index]) } },
                 )
-            }
-        }
+            },
+        )
 
         // Page-turn animation only applies to paged mode.
         if (settings.readingMode == ReadingMode.PAGES) {
@@ -923,39 +1034,41 @@ fun ReaderSettingsControls(
         PanelSectionLabel(stringResource(R.string.reader_font), colors)
         var showFontDialog by remember { mutableStateOf(false) }
         var fontsVersion by remember { mutableIntStateOf(0) }
+        val fontScope = rememberCoroutineScope()
         val fontPicker = androidx.activity.compose.rememberLauncherForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-        ) { uri ->
-            if (uri != null) {
-                val stored = storeCustomFont(context, uri)
-                if (stored != null) {
-                    fontsVersion++
-                    onUpdate { it.copy(font = ReaderFont.CUSTOM, customFontPath = stored) }
+            androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
+        ) { uris ->
+            if (uris.isNotEmpty()) {
+                fontScope.launch {
+                    val imported = withContext(Dispatchers.IO) {
+                        uris.mapNotNull { storeCustomFont(context, it) }
+                    }
+                    if (imported.isNotEmpty()) {
+                        com.example.frogreader.ui.theme.forgetCustomFontFiles(imported)
+                        val groups = withContext(Dispatchers.IO) {
+                            groupCustomFonts(java.io.File(context.filesDir, "fonts").listFiles().orEmpty().toList())
+                        }
+                        onUpdate { it.refreshCustomFontFamily(groups) }
+                        fontsVersion++
+                        showFontDialog = true
+                    }
+                    if (imported.size < uris.size) {
+                        android.widget.Toast.makeText(
+                            context,
+                            R.string.reader_fonts_import_failed,
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
                 }
             }
         }
-        // With publisher's formatting the book's own face takes the Custom
-        // slot: its real name, drawn in itself, so the choice is visible.
         val bookFontName = book?.fontName
-        ChipRow(
-            options = listOf(
-                stringResource(R.string.reader_font_literata),
-                stringResource(R.string.reader_font_sans),
-                bookFontName ?: stringResource(R.string.reader_font_custom),
-            ),
-            optionFontFamilies = listOf(
-                com.example.frogreader.ui.theme.LiterataFamily,
-                com.example.frogreader.ui.theme.IBMPlexSansFamily,
-                bookFontFamily,
-            ),
-            labelMaxLines = 2,
-            selectedIndex = when {
-                bookFontName != null -> 2
-                settings.font == ReaderFont.SANS -> 1
-                settings.font == ReaderFont.CUSTOM -> 2
-                else -> 0 // Literata (and the legacy Serif choice)
-            },
+        ReaderFontPicker(
+            settings = settings,
             colors = colors,
+            bookFontName = bookFontName,
+            bookFontPath = book?.fontPath,
+            bookFontFamily = bookFontFamily,
             onSelect = { index ->
                 val bake = bakeBook(bookFontName != null, keepFont = false)
                 when (index) {
@@ -977,21 +1090,48 @@ fun ReaderSettingsControls(
         if (showFontDialog) {
             CustomFontsDialog(
                 colors = colors,
-                bookFonts = book?.embeddedFonts.orEmpty(),
+                bookFonts = publisherStyle?.embeddedFonts.orEmpty(),
                 bodyFontPath = book?.fontPath,
+                bodyFontAuto = book?.fontPath != null,
                 onPickBookFont = { font ->
-                    // Adopting a face from the book makes it the reader's own.
-                    val stored = storeBookFont(context, font.path, font.name)
                     val bake = bakeBook(bookFontName != null, keepFont = false)
-                    if (stored != null) {
-                        onUpdate {
-                            bake(it).copy(font = ReaderFont.CUSTOM, customFontPath = stored)
+                    fontScope.launch {
+                        val adopted = withContext(Dispatchers.IO) {
+                            val group = groupCustomFonts(publisherStyle?.embeddedFonts.orEmpty().map { java.io.File(it.path) })
+                                .firstOrNull { it.contains(font.path) }
+                            group?.let {
+                                val index = it.faces.indexOfFirst { face -> face.key == font.key }
+                                storeBookFontFamily(java.io.File(context.filesDir, "fonts"), it)?.let { stored ->
+                                    stored.faces.getOrNull(index)?.let { selected -> selected to stored }
+                                }
+                            }
+                        }
+                        if (adopted != null) {
+                            onUpdate {
+                                bake(it).selectCustomFont(adopted.first).refreshCustomFontFamily(listOf(adopted.second))
+                            }
+                            fontsVersion++
+                            showFontDialog = false
                         }
                     }
-                    showFontDialog = false
+                },
+                onPickBookFamily = { group ->
+                    val bake = bakeBook(bookFontName != null, keepFont = false)
+                    fontScope.launch {
+                        val adopted = withContext(Dispatchers.IO) {
+                            storeBookFontFamily(java.io.File(context.filesDir, "fonts"), group)
+                        }
+                        if (adopted != null) {
+                            onUpdate { bake(it).selectCustomFontFamily(adopted) }
+                            fontsVersion++
+                            showFontDialog = false
+                        }
+                    }
                 },
                 selectedPath = settings.customFontPath
-                    ?.takeIf { settings.font == ReaderFont.CUSTOM },
+                    ?.takeIf { settings.font == ReaderFont.CUSTOM && bookFontName == null },
+                selectedAxes = settings.customFontAxes,
+                selectedAuto = settings.customFontAuto,
                 fontsVersion = fontsVersion,
                 onAdd = {
                     fontPicker.launch(
@@ -1004,26 +1144,26 @@ fun ReaderSettingsControls(
                         ),
                     )
                 },
-                onPick = { path ->
+                onPick = { face ->
                     val bake = bakeBook(bookFontName != null, keepFont = false)
-                    onUpdate { bake(it).copy(font = ReaderFont.CUSTOM, customFontPath = path) }
+                    fontScope.launch {
+                        val groups = withContext(Dispatchers.IO) {
+                            groupCustomFonts(java.io.File(context.filesDir, "fonts").listFiles().orEmpty().toList())
+                        }
+                        onUpdate { bake(it).selectCustomFont(face).refreshCustomFontFamily(groups) }
+                        showFontDialog = false
+                    }
+                },
+                onPickAuto = { group ->
+                    val bake = bakeBook(bookFontName != null, keepFont = false)
+                    onUpdate { bake(it).selectCustomFontFamily(group) }
                     showFontDialog = false
                 },
-                onDelete = { path ->
-                    java.io.File(path).delete()
+                onDelete = { paths ->
+                    val deleted = paths.filter { java.io.File(it).delete() }
+                    com.example.frogreader.ui.theme.forgetCustomFontFiles(deleted)
                     fontsVersion++
-                    if (settings.customFontPath == path) {
-                        onUpdate {
-                            it.copy(
-                                font = if (it.font == ReaderFont.CUSTOM) {
-                                    ReaderFont.LITERATA
-                                } else {
-                                    it.font
-                                },
-                                customFontPath = null,
-                            )
-                        }
-                    }
+                    onUpdate { it.removeCustomFontFiles(deleted) }
                 },
                 onDismiss = { showFontDialog = false },
             )
@@ -1099,14 +1239,20 @@ fun ReaderSettingsControls(
                 title = stringResource(R.string.reader_invert_images),
                 subtitle = stringResource(R.string.reader_invert_images_subtitle),
                 colors = colors,
-                checked = appSettings.autoInvertImages,
-                onCheckedChange = { onUpdateApp { s -> s.copy(autoInvertImages = it) } },
+                checked = shownAutoInvert,
+                fromBook = book?.autoInvertImages != null,
+                onCheckedChange = { value ->
+                    val bake = bakeBook(book?.autoInvertImages != null)
+                    onUpdate { s -> bake(s) }
+                    onUpdateApp { s -> s.copy(autoInvertImages = value) }
+                },
             )
         }
 
         Spacer(Modifier.height(20.dp))
 
         // Pages & navigation
+        val isPagedMode = settings.readingMode == ReadingMode.PAGES
         PanelSectionLabel(
             stringResource(R.string.reader_section_pages_nav),
             colors,
@@ -1118,6 +1264,7 @@ fun ReaderSettingsControls(
                 title = stringResource(R.string.reader_chapter_new_page),
                 colors = colors,
                 checked = settings.startChaptersOnNewPage,
+                enabled = isPagedMode,
                 onCheckedChange = { onUpdate { s -> s.copy(startChaptersOnNewPage = it) } },
             )
             PanelDivider(colors)
@@ -1129,34 +1276,10 @@ fun ReaderSettingsControls(
                 checked = settings.hideFootnotes,
                 onCheckedChange = { onUpdate { s -> s.copy(hideFootnotes = it) } },
             )
-            PanelDivider(colors)
-            SettingToggleRow(
-                icon = Icons.Rounded.Tag,
-                title = stringResource(R.string.reader_show_page_counter),
-                colors = colors,
-                checked = settings.showPageCounter,
-                onCheckedChange = { onUpdate { s -> s.copy(showPageCounter = it) } },
-            )
-            AnimatedVisibility(
-                visible = settings.showPageCounter,
-                enter = expandVertically(tween(220), expandFrom = Alignment.Top) + fadeIn(tween(180)),
-                exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Top) + fadeOut(tween(120)),
-            ) {
-                Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
-                    ChipRow(
-                        options = listOf(
-                            stringResource(R.string.reader_counter_page_number),
-                            stringResource(R.string.reader_counter_chapter_left),
-                        ),
-                        selectedIndex = if (settings.showChapterPagesLeft) 1 else 0,
-                        colors = colors,
-                        labelMaxLines = 3,
-                        enabled = settings.showPageCounter,
-                        onSelect = { index -> onUpdate { it.copy(showChapterPagesLeft = index == 1) } },
-                    )
-                }
-            }
         }
+
+        Spacer(Modifier.height(12.dp))
+        ReaderPageCounterSettings(settings, colors, pageCounterInfo, onUpdate)
 
         Spacer(Modifier.height(20.dp))
 
@@ -1211,291 +1334,87 @@ fun ReaderSettingsControls(
     }
 }
 
-/**
- * Moves the book's own face into the reader's font library, so a face that
- * arrived with publisher's formatting survives leaving that mode — and then
- * shows up in the fonts list like any font added by hand.
- */
-private fun storeBookFont(
-    context: android.content.Context,
-    sourcePath: String,
-    displayName: String?,
-): String? = runCatching {
-    val bytes = java.io.File(sourcePath).readBytes()
-    if (bytes.size <= 4) return null
-    val head = bytes.copyOfRange(0, 4)
-    val extension = when {
-        head.contentEquals("OTTO".toByteArray()) -> "otf"
-        head.contentEquals("ttcf".toByteArray()) -> "ttc"
-        head.contentEquals("true".toByteArray()) -> "ttf"
-        head[0].toInt() == 0x00 && head[1].toInt() == 0x01 &&
-            head[2].toInt() == 0x00 && head[3].toInt() == 0x00 -> "ttf"
-        else -> return null // not an sfnt font after all
+/** Preview the real regular face without adding selection weight to the typeface. */
+@Composable
+internal fun ReaderFontPicker(
+    settings: ReaderSettings,
+    colors: ReaderColors,
+    bookFontName: String? = null,
+    bookFontPath: String? = null,
+    bookFontFamily: androidx.compose.ui.text.font.FontFamily? = null,
+    onSelect: (Int) -> Unit,
+) {
+    val labelFamily = remember(bookFontPath, bookFontName, bookFontFamily) {
+        if (bookFontPath != null && bookFontName != null) {
+            customFontPreviewFamily(bookFontPath, 400, false, previewText = bookFontName) ?: bookFontFamily
+        } else bookFontFamily
     }
-    val base = (displayName ?: java.io.File(sourcePath).nameWithoutExtension)
-        .replace(Regex("""[\\/:*?"<>|]"""), "_")
-        .trim()
-        .take(60)
-        .ifBlank { "book-font" }
+    ChipRow(
+        options = listOf(
+            stringResource(R.string.reader_font_literata),
+            stringResource(R.string.reader_font_sans),
+            bookFontName ?: stringResource(R.string.reader_font_custom),
+        ),
+        optionFontFamilies = listOf(
+            com.example.frogreader.ui.theme.LiterataFamily,
+            com.example.frogreader.ui.theme.IBMPlexSansFamily,
+            labelFamily,
+        ),
+        labelMaxLines = 2,
+        selectedIndex = when {
+            bookFontName != null -> 2
+            settings.font == ReaderFont.SANS -> 1
+            settings.font == ReaderFont.CUSTOM -> 2
+            else -> 0
+        },
+        colors = colors,
+        onSelect = onSelect,
+    )
+}
 
-    val dir = java.io.File(context.filesDir, "fonts").apply { mkdirs() }
-    var target = java.io.File(dir, "$base.$extension")
-    var counter = 2
-    while (target.exists() && !target.readBytes().contentEquals(bytes)) {
-        target = java.io.File(dir, "${base}_$counter.$extension")
-        counter++
-    }
-    if (!target.exists()) target.writeBytes(bytes)
-    target.absolutePath
-}.getOrNull()
-
-/**
- * Copies a user-picked font into the app's font library, keeping its file
- * name (that name IS the label in the fonts dialog). Returns the stored
- * path, or null when the file is not a real TTF/OTF font.
- */
+/** Copy selected files into the library; family names come from their OpenType metadata. */
 private fun storeCustomFont(context: android.content.Context, uri: android.net.Uri): String? =
     runCatching {
         val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
             ?: return null
-        // TTF/OTF/TTC magic bytes — reject anything else outright.
-        val ok = bytes.size > 4 && (
-            (bytes[0].toInt() == 0x00 && bytes[1].toInt() == 0x01 &&
-                bytes[2].toInt() == 0x00 && bytes[3].toInt() == 0x00) ||
-                bytes.copyOfRange(0, 4).contentEquals("OTTO".toByteArray()) ||
-                bytes.copyOfRange(0, 4).contentEquals("true".toByteArray()) ||
-                bytes.copyOfRange(0, 4).contentEquals("ttcf".toByteArray())
-            )
-        if (!ok) return null
-
-        val display = runCatching {
+        val displayName = runCatching {
             context.contentResolver.query(
                 uri,
                 arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
-                null,
-                null,
-                null,
+                null, null, null,
             )?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-        }.getOrNull()
-            ?: uri.lastPathSegment?.substringAfterLast('/')
-            ?: "font"
-        val base = display.substringBeforeLast('.')
-            .replace(Regex("[\\\\/:*?\"<>|]"), "_")
-            .trim()
-            .take(60)
-            .ifBlank { "font" }
-        val extension = display.substringAfterLast('.', "ttf").lowercase()
-            .takeIf { it in setOf("ttf", "otf", "ttc") } ?: "ttf"
-
-        val dir = java.io.File(context.filesDir, "fonts").apply { mkdirs() }
-        var target = java.io.File(dir, "$base.$extension")
-        var counter = 2
-        while (target.exists() && !target.readBytes().contentEquals(bytes)) {
-            target = java.io.File(dir, "${base}_$counter.$extension")
-            counter++
-        }
-        if (!target.exists()) target.writeBytes(bytes)
-        target.absolutePath
+        }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "font"
+        com.example.frogreader.data.storeFontFile(
+            java.io.File(context.filesDir, "fonts"), bytes, displayName,
+        )
     }.getOrNull()
 
-/**
- * The user's font library: "Add font" on top, then every stored font drawn
- * in its own face. Tap picks a font for reading; long-press offers Delete.
- */
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+/** Keep the paired controls compact until text or window width needs a full row. */
 @Composable
-private fun CustomFontsDialog(
-    colors: ReaderColors,
-    /** Typefaces shipped inside the open book (publisher's mode). */
-    bookFonts: List<EmbeddedFont> = emptyList(),
-    /** Which of them the book's body text is actually set in, if any. */
-    bodyFontPath: String? = null,
-    onPickBookFont: (EmbeddedFont) -> Unit = {},
-    selectedPath: String?,
-    fontsVersion: Int,
-    onAdd: () -> Unit,
-    onPick: (String) -> Unit,
-    onDelete: (String) -> Unit,
-    onDismiss: () -> Unit,
+private fun ReaderControlPair(
+    modifier: Modifier = Modifier,
+    first: @Composable ColumnScope.() -> Unit,
+    second: @Composable ColumnScope.() -> Unit,
 ) {
-    val context = LocalContext.current
-    val haptics = LocalHapticFeedback.current
-    val fonts = remember(fontsVersion) {
-        java.io.File(context.filesDir, "fonts").listFiles()
-            ?.filter { it.isFile }
-            ?.sortedBy { it.name.lowercase() }
-            .orEmpty()
-    }
-
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        androidx.compose.material3.Surface(
-            color = colors.chrome,
-            contentColor = colors.onChrome,
-            shape = RoundedCornerShape(28.dp),
-        ) {
-            Column(Modifier.padding(20.dp)) {
-                Text(
-                    text = stringResource(R.string.reader_fonts_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(14.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(colors.accent)
-                        .clickable {
-                            haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                            onAdd()
-                        }
-                        .padding(vertical = 13.dp),
-                ) {
-                    Icon(
-                        Icons.Rounded.Add,
-                        contentDescription = null,
-                        tint = colors.onAccent,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = stringResource(R.string.reader_font_add),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = colors.onAccent,
-                    )
-                }
-
-                // Every typeface the book ships. The one the body is set in
-                // is marked; the others are display faces the book uses on a
-                // few paragraphs — tapping any of them adopts it for good.
-                if (bookFonts.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = stringResource(R.string.reader_fonts_in_book),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = colors.onChromeVariant,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    for (font in bookFonts) {
-                        val isBodyFace = font.path == bodyFontPath
-                        val family = remember(font.path) { customFontFamily(font.path) }
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 6.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(
-                                    colors.accent.copy(alpha = if (isBodyFace) 0.16f else 0.06f),
-                                )
-                                .clickable {
-                                    haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                                    onPickBookFont(font)
-                                }
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                        ) {
-                            Text(
-                                text = font.name,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontFamily = family,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            if (isBodyFace) {
-                                Text(
-                                    text = stringResource(R.string.reader_font_from_book),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = colors.accent,
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(10.dp))
-
-                if (fonts.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.reader_fonts_empty),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.onChromeVariant,
-                        modifier = Modifier.padding(vertical = 14.dp, horizontal = 4.dp),
-                    )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.heightIn(max = 340.dp),
-                    ) {
-                        items(fonts, key = { it.absolutePath }) { file ->
-                            var menuOpen by remember { mutableStateOf(false) }
-                            Box {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .combinedClickable(
-                                            onClick = { onPick(file.absolutePath) },
-                                            onLongClick = {
-                                                haptics.performHapticFeedback(
-                                                    HapticFeedbackType.LongPress,
-                                                )
-                                                menuOpen = true
-                                            },
-                                        )
-                                        .padding(vertical = 13.dp, horizontal = 10.dp),
-                                ) {
-                                    Text(
-                                        text = file.nameWithoutExtension,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontFamily = com.example.frogreader.ui.theme
-                                            .customFontFamily(file.absolutePath),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    if (file.absolutePath == selectedPath) {
-                                        Spacer(Modifier.width(8.dp))
-                                        Icon(
-                                            Icons.Rounded.Check,
-                                            contentDescription = null,
-                                            tint = colors.accent,
-                                        )
-                                    }
-                                }
-                                androidx.compose.material3.DropdownMenu(
-                                    containerColor = colors.chrome,
-                                    tonalElevation = 0.dp,
-                                    expanded = menuOpen,
-                                    onDismissRequest = { menuOpen = false },
-                                ) {
-                                    androidx.compose.material3.DropdownMenuItem(
-                                        text = {
-                                            Text(stringResource(R.string.reader_font_delete))
-                                        },
-                                        leadingIcon = {
-                                            Icon(Icons.Rounded.Delete, contentDescription = null)
-                                        },
-                                        onClick = {
-                                            menuOpen = false
-                                            onDelete(file.absolutePath)
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+    val fontScale = LocalDensity.current.fontScale
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        if (maxWidth < 280.dp * fontScale.coerceAtLeast(1f) || fontScale > 1.25f) {
+            Column {
+                Column(Modifier.fillMaxWidth(), content = first)
+                Spacer(Modifier.height(18.dp))
+                Column(Modifier.fillMaxWidth(), content = second)
+            }
+        } else {
+            Row {
+                Column(Modifier.weight(1f), content = first)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f), content = second)
             }
         }
     }
 }
 
-/**
- * A compact stepper: [decrease] and [increase] buttons around a bold value.
- */
+/** A compact stepper: named buttons around a bold value, with real disabled bounds. */
 @Composable
 private fun StepperGroup(
     value: String,
@@ -1504,8 +1423,12 @@ private fun StepperGroup(
     onIncrease: () -> Unit,
     decrease: @Composable () -> Unit,
     increase: @Composable () -> Unit,
+    decreaseEnabled: Boolean = true,
+    increaseEnabled: Boolean = true,
+    decreaseDescription: String? = null,
+    increaseDescription: String? = null,
+    repeatOnHold: Boolean = true,
 ) {
-    val haptics = LocalHapticFeedback.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -1514,36 +1437,31 @@ private fun StepperGroup(
             .background(colors.control)
             .padding(5.dp),
     ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(width = 46.dp, height = 42.dp)
-                .clip(RoundedCornerShape(15.dp))
-                .background(colors.controlButton)
-                .clickable {
-                    haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
-                    onDecrease()
-                },
-        ) { decrease() }
+        ReaderStepperButton(
+            colors = colors,
+            enabled = decreaseEnabled,
+            description = decreaseDescription,
+            repeatOnHold = repeatOnHold,
+            onStep = onDecrease,
+            content = decrease,
+        )
         Text(
             text = value,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
+            color = colors.onChrome,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             maxLines = 1,
             modifier = Modifier.weight(1f),
         )
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(width = 46.dp, height = 42.dp)
-                .clip(RoundedCornerShape(15.dp))
-                .background(colors.controlButton)
-                .clickable {
-                    haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
-                    onIncrease()
-                },
-        ) { increase() }
+        ReaderStepperButton(
+            colors = colors,
+            enabled = increaseEnabled,
+            description = increaseDescription,
+            repeatOnHold = repeatOnHold,
+            onStep = onIncrease,
+            content = increase,
+        )
     }
 }
 
@@ -1560,52 +1478,52 @@ private fun ChipRow(
     /** Longer font names wrap without changing the other settings rows. */
     labelMaxLines: Int = 1,
     enabled: Boolean = true,
+    equalWeights: Boolean = true,
+    customWeights: List<Float>? = null,
 ) {
     val haptics = LocalHapticFeedback.current
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(if (labelMaxLines > 1) Modifier.height(IntrinsicSize.Min) else Modifier)
-            .clip(RoundedCornerShape(26.dp))
-            .background(colors.control)
-            .padding(4.dp),
-    ) {
-        options.forEachIndexed { index, label ->
-            val selected = index == selectedIndex
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-                modifier = Modifier
-                    .weight(1f)
-                    .then(if (labelMaxLines > 1) Modifier.fillMaxHeight() else Modifier)
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(if (selected) colors.selectedControl else Color.Transparent)
-                    .border(
-                        1.dp,
-                        if (selected) colors.selectedControlBorder else Color.Transparent,
-                        RoundedCornerShape(22.dp),
-                    )
-                    .semantics { this.selected = selected }
-                    .clickable(enabled = enabled) {
-                        haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                        onSelect(index)
-                    }
-                    .padding(vertical = 10.dp, horizontal = 4.dp),
-            ) {
-                if (leading != null) {
-                    leading(index)
-                    Spacer(Modifier.width(6.dp))
-                }
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontFamily = optionFontFamilies?.getOrNull(index),
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (selected) colors.onSelectedControl else colors.onChrome,
-                    maxLines = labelMaxLines,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
+    FrogSegmentedControl(
+        count = options.size,
+        selectedIndex = selectedIndex,
+        enabled = enabled,
+        weights = options.mapIndexed { index, label ->
+            customWeights?.getOrNull(index) ?: if (equalWeights) 1f else label.length.coerceAtLeast(4).toFloat()
+        },
+        containerColor = colors.control,
+        indicatorColor = colors.selectedControl,
+        contentColor = colors.onChrome,
+        selectedContentColor = colors.onSelectedControl,
+        indicatorBorder = colors.selectedControlBorder,
+        containerRadius = 26.dp,
+        indicatorRadius = 22.dp,
+        minItemHeight = 0.dp,
+        onSelect = { index ->
+            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+            onSelect(index)
+        },
+    ) { index, selected, foreground ->
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+        ) {
+            if (leading != null) {
+                leading(index)
+                Spacer(Modifier.width(6.dp))
             }
+            Text(
+                text = options[index],
+                style = if (optionFontFamilies != null) MaterialTheme.typography.labelLarge.copy(fontSynthesis = FontSynthesis.None)
+                    else MaterialTheme.typography.labelLarge,
+                fontFamily = optionFontFamilies?.getOrNull(index),
+                fontWeight = if (optionFontFamilies != null) FontWeight.Normal
+                    else if (selected) FontWeight.Bold else FontWeight.Medium,
+                fontStyle = FontStyle.Normal,
+                color = foreground,
+                maxLines = labelMaxLines,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
         }
     }
 }

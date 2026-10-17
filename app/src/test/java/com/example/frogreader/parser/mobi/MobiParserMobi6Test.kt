@@ -1,14 +1,19 @@
 package com.example.frogreader.parser.mobi
 
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.sp
 import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.FOOTNOTE_TAG
+import com.example.frogreader.data.model.INLINE_FONT_FAMILY_TAG
 import com.example.frogreader.data.model.LINK_TAG
 import com.example.frogreader.data.parser.mobi.Exth
 import com.example.frogreader.data.parser.mobi.MobiParser
+import com.example.frogreader.ui.reader.readerTypographyPlan
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -431,7 +436,18 @@ class MobiParserMobi6Test {
             text.text.substring(it.start, it.end) == "large code"
         }.item
         assertEquals(1.5f, largeCode.fontSize.value, 0.001f)
-        assertEquals(FontFamily.Monospace, largeCode.fontFamily)
+        val family = text.getStringAnnotations(INLINE_FONT_FAMILY_TAG, 0, text.length).single {
+            text.text.substring(it.start, it.end) == "large code"
+        }
+        assertEquals("monospace", family.item)
+        val style = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 20.sp)
+        val publisher = readerTypographyPlan(text, style, Density(2f), true)
+        assertEquals(FontFamily.Monospace, publisher.text.spanStyles.last {
+            family.start in it.start until it.end && it.item.fontFamily != null
+        }.item.fontFamily)
+        val reader = readerTypographyPlan(text, style, Density(2f), false)
+        assertTrue(reader.text.spanStyles.none { it.item.fontFamily != null })
+        assertEquals(FontFamily.SansSerif, reader.style.fontFamily)
         assertEquals(
             1.2f,
             text.spanStyles.single { text.text.substring(it.start, it.end) == "bigger" }

@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.frogreader.R
+import com.example.frogreader.ui.components.FrogSegmentedControl
 import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.StartupDestination
 import com.example.frogreader.data.effectiveTheme
@@ -238,34 +239,32 @@ private fun WelcomeStartupPicker(
     enabled: Boolean,
     onSelected: (StartupDestination) -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth().selectableGroup().clip(RoundedCornerShape(28.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer).padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        StartupDestination.entries.forEach { destination ->
-            val active = destination == selected
-            Box(
-                Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(24.dp))
-                    .background(
-                        if (active) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.surfaceContainer,
-                    )
-                    .selectable(active, enabled = enabled, role = Role.RadioButton) { onSelected(destination) }
-                    .padding(horizontal = 8.dp, vertical = 12.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    stringResource(
-                        if (destination == StartupDestination.LIBRARY) R.string.nav_library
-                        else R.string.settings_startup_last_book,
-                    ),
-                    color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    textAlign = TextAlign.Center,
-                )
-            }
-        }
+    val colors = MaterialTheme.colorScheme
+    FrogSegmentedControl(
+        count = StartupDestination.entries.size,
+        selectedIndex = StartupDestination.entries.indexOf(selected),
+        enabled = enabled,
+        containerColor = colors.surfaceContainer,
+        indicatorColor = colors.primary,
+        contentColor = colors.onSurface,
+        selectedContentColor = colors.onPrimary,
+        gap = 4.dp,
+        containerRadius = 28.dp,
+        indicatorRadius = 24.dp,
+        minItemHeight = 48.dp,
+        onSelect = { onSelected(StartupDestination.entries[it]) },
+    ) { index, _, foreground ->
+        val destination = StartupDestination.entries[index]
+        Text(
+            stringResource(
+                if (destination == StartupDestination.LIBRARY) R.string.nav_library
+                else R.string.settings_startup_last_book,
+            ),
+            color = foreground,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 12.dp),
+        )
     }
 }

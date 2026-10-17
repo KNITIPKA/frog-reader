@@ -115,6 +115,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import com.example.frogreader.R
+import com.example.frogreader.ui.components.FrogSegmentedControl
 import com.example.frogreader.data.LibraryViewMode
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.ui.theme.LocalFrogColors
@@ -223,6 +224,7 @@ fun LibraryScreen(
 ) {
     val entries by viewModel.entries.collectAsStateWithLifecycle()
     val books by viewModel.books.collectAsStateWithLifecycle()
+    val readingQueue by viewModel.readingQueue.collectAsStateWithLifecycle()
     val viewMode by viewModel.viewMode.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
 
@@ -372,6 +374,29 @@ fun LibraryScreen(
     LaunchedEffect(resources) {
         viewModel.messages.collect { message ->
             when (message) {
+                is LibraryMessage.ReadingQueueAdded -> {
+                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                    snackbarHostState.showSnackbar(
+                        resources.getString(
+                            if (message.alreadyQueued) R.string.library_reading_queue_already_added
+                            else R.string.library_reading_queue_added,
+                            message.title,
+                        ),
+                    )
+                }
+
+                is LibraryMessage.ReadingQueueRemoved -> {
+                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                    snackbarHostState.showSnackbar(
+                        resources.getString(R.string.reading_queue_deleted, message.title),
+                    )
+                }
+
+                LibraryMessage.ReadingQueueFailed -> {
+                    haptics.performHapticFeedback(HapticFeedbackType.Reject)
+                    snackbarHostState.showSnackbar(resources.getString(R.string.reading_queue_save_failed))
+                }
+
                 is LibraryMessage.Imported -> {
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     snackbarHostState.showSnackbar(
@@ -805,6 +830,8 @@ fun LibraryScreen(
                 ) {
                     LibraryItemMenu(
                         target = target,
+                        isInReadingQueue = target is MenuTarget.BookTarget &&
+                            readingQueue.any { it.attachment?.id == target.bookId },
                         canEdit = (target as? MenuTarget.BookTarget)?.bookId?.let(bookOf)?.format?.supportsMetadataEditing == true,
                         onSelect = {
                             val scope = when (target) {
@@ -821,6 +848,14 @@ fun LibraryScreen(
                             if (book != null) {
                                 addToShelfFor = AddToShelfRequest(listOf(book.bookId), book.shelfId)
                             }
+                            menuRequest = null
+                        },
+                        onAddToReadingQueue = {
+                            (target as? MenuTarget.BookTarget)?.bookId?.let(viewModel::addToReadingQueue)
+                            menuRequest = null
+                        },
+                        onRemoveFromReadingQueue = {
+                            (target as? MenuTarget.BookTarget)?.bookId?.let(viewModel::removeFromReadingQueue)
                             menuRequest = null
                         },
                         onAddBooks = {
@@ -1195,7 +1230,7 @@ private fun HeroCard(
                             Icon(
                                 imageVector = Icons.Rounded.MoreVert,
                                 contentDescription = stringResource(R.string.details_menu),
-                                tint = frog.ink2,
+                                tint = scheme.onSurfaceVariant,
                                 modifier = Modifier.size(19.dp),
                             )
                         }
@@ -1382,26 +1417,31 @@ private fun SectionRow(
                     onClick = onClearSelection,
                 )
             } else {
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(scheme.surfaceContainerHigh)
-                        .padding(3.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    ViewModeButton(
-                        selected = viewMode == LibraryViewMode.GRID,
-                        selectedIcon = Icons.Rounded.GridView,
-                        icon = Icons.Outlined.GridView,
-                        label = stringResource(R.string.view_mode_grid),
-                        onClick = { onViewMode(LibraryViewMode.GRID) },
-                    )
-                    ViewModeButton(
-                        selected = viewMode == LibraryViewMode.LIST,
-                        selectedIcon = Icons.Rounded.ViewAgenda,
-                        icon = Icons.Outlined.ViewAgenda,
-                        label = stringResource(R.string.view_mode_list),
-                        onClick = { onViewMode(LibraryViewMode.LIST) },
+                val modes = listOf(LibraryViewMode.GRID, LibraryViewMode.LIST)
+                FrogSegmentedControl(
+                    count = modes.size,
+                    selectedIndex = modes.indexOf(viewMode),
+                    onSelect = { onViewMode(modes[it]) },
+                    containerColor = scheme.surfaceContainerHigh,
+                    indicatorColor = scheme.surface,
+                    contentColor = scheme.onSurfaceVariant,
+                    selectedContentColor = scheme.primary,
+                    modifier = Modifier.width(68.dp),
+                    gap = 2.dp,
+                    padding = 3.dp,
+                    containerRadius = 16.dp,
+                    indicatorRadius = 13.dp,
+                    minItemHeight = 26.dp,
+                ) { index, active, foreground ->
+                    Icon(
+                        imageVector = if (index == 0) {
+                            if (active) Icons.Rounded.GridView else Icons.Outlined.GridView
+                        } else {
+                            if (active) Icons.Rounded.ViewAgenda else Icons.Outlined.ViewAgenda
+                        },
+                        contentDescription = stringResource(if (index == 0) R.string.view_mode_grid else R.string.view_mode_list),
+                        tint = foreground,
+                        modifier = Modifier.size(17.dp),
                     )
                 }
             }
@@ -1497,37 +1537,6 @@ private fun SelectionActionLabel(icon: ImageVector, label: String, tint: Color) 
             fontWeight = FontWeight.Medium,
             color = tint,
             maxLines = 1,
-        )
-    }
-}
-
-@Composable
-private fun ViewModeButton(
-    selected: Boolean,
-    selectedIcon: ImageVector,
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .size(width = 30.dp, height = 26.dp)
-            .clip(RoundedCornerShape(13.dp))
-            .background(
-                if (selected) MaterialTheme.colorScheme.surface else Color.Transparent,
-            )
-            .clickable(enabled = !selected, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            imageVector = if (selected) selectedIcon else icon,
-            contentDescription = label,
-            tint = if (selected) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-            modifier = Modifier.size(17.dp),
         )
     }
 }

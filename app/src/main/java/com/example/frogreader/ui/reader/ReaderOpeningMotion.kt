@@ -22,6 +22,9 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /** One handoff from the persistent loader to the already laid-out reading page. */
 @Stable
@@ -32,6 +35,13 @@ internal class ReaderOpeningMotion(initiallyFinished: Boolean = false) {
         private set
     var finished by mutableStateOf(initiallyFinished)
         private set
+    var loaderVisible by mutableStateOf(false)
+        private set
+
+    suspend fun showLoaderAfterDelay() {
+        delay(180)
+        if (!contentReady && !finished) loaderVisible = true
+    }
 
     fun onContentReady() {
         contentReady = true
@@ -39,8 +49,13 @@ internal class ReaderOpeningMotion(initiallyFinished: Boolean = false) {
 
     suspend fun play() {
         if (!contentReady || finished) return
-        loaderScale.animateTo(0f, tween(240, easing = FastOutSlowInEasing))
-        reveal.animateTo(1f, tween(620, easing = FastOutSlowInEasing))
+        // A ready page appears immediately. The loader leaves during the same
+        // short handoff, rather than adding a second wait before readable text.
+        coroutineScope {
+            launch { loaderScale.animateTo(0f, tween(100, easing = FastOutSlowInEasing)) }
+            launch { reveal.animateTo(1f, tween(160, easing = FastOutSlowInEasing)) }
+        }
+        loaderVisible = false
         finished = true
     }
 }
@@ -49,6 +64,7 @@ internal class ReaderOpeningMotion(initiallyFinished: Boolean = false) {
 internal fun rememberReaderOpeningMotion(bookId: String): ReaderOpeningMotion {
     var entranceStarted by rememberSaveable(bookId) { mutableStateOf(false) }
     val motion = remember(bookId) { ReaderOpeningMotion(initiallyFinished = entranceStarted) }
+    LaunchedEffect(motion) { motion.showLoaderAfterDelay() }
     LaunchedEffect(motion, motion.contentReady) {
         if (!motion.contentReady || motion.finished) return@LaunchedEffect
         // Anchor restoration and the first page layout finish before the handoff.
@@ -63,7 +79,7 @@ internal fun rememberReaderOpeningMotion(bookId: String): ReaderOpeningMotion {
 internal fun Modifier.readerOpeningReveal(motion: ReaderOpeningMotion): Modifier = graphicsLayer {
     val progress = motion.reveal.value
     transformOrigin = TransformOrigin.Center
-    scaleX = 0.62f + 0.38f * progress
+    scaleX = 0.985f + 0.015f * progress
     scaleY = scaleX
     alpha = progress
 }
@@ -85,7 +101,7 @@ internal fun ReaderOpeningOverlay(motion: ReaderOpeningMotion) {
             },
         contentAlignment = Alignment.Center,
     ) {
-        LoadingIndicator(
+        if (motion.loaderVisible) LoadingIndicator(
             modifier = Modifier.graphicsLayer {
                 scaleX = motion.loaderScale.value
                 scaleY = motion.loaderScale.value

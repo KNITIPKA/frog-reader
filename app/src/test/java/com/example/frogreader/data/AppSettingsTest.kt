@@ -7,12 +7,48 @@ import org.junit.Test
 class AppSettingsTest {
 
     @Test
+    fun `all three page counter modes survive serialization`() {
+        val json = kotlinx.serialization.json.Json
+        val modes = listOf(ReaderSettings(), ReaderSettings(showTotalPageCount = true), ReaderSettings(showChapterPagesLeft = true))
+        modes.forEach { settings ->
+            assertEquals(settings, json.decodeFromString<ReaderSettings>(json.encodeToString(ReaderSettings.serializer(), settings)))
+        }
+    }
+
+    @Test
+    fun `reader panel options are opt in for new installs and older backups`() {
+        val restored = kotlinx.serialization.json.Json.decodeFromString<AppSettings>("{}")
+        listOf(AppSettings(), restored).forEach {
+            assertEquals(false, it.showCollapsedReaderHandle)
+            assertEquals(false, it.expandReaderPanelsOnSwipe)
+            assertEquals(false, it.brightnessSwipeEnabled)
+        }
+    }
+
+    @Test
+    fun `reader panel preferences are independent and survive backup serialization`() {
+        val json = kotlinx.serialization.json.Json
+        for (handle in listOf(false, true)) {
+            for (swipe in listOf(false, true)) {
+                val settings = AppSettings(
+                    showCollapsedReaderHandle = handle,
+                    expandReaderPanelsOnSwipe = swipe,
+                )
+                assertEquals(settings, json.decodeFromString<AppSettings>(
+                    json.encodeToString(AppSettings.serializer(), settings),
+                ))
+            }
+        }
+    }
+
+    @Test
     fun `new readers show a plain page number by default`() {
         val defaults = ReaderSettings()
         val restored = kotlinx.serialization.json.Json.decodeFromString<ReaderSettings>("{}")
         listOf(defaults, restored).forEach {
             assertEquals(true, it.showPageCounter)
             assertEquals(false, it.showChapterPagesLeft)
+            assertEquals(false, it.showTotalPageCount)
         }
     }
 
@@ -46,8 +82,45 @@ class AppSettingsTest {
         assertEquals(true, restored.autoHideReturnButton)
         assertEquals(ReaderChromeStyle.FLOATING, restored.readerChromeStyle)
         assertEquals(null, restored.defaultTranslator)
+        assertEquals(null, restored.defaultDictionary)
+        assertEquals(null, restored.defaultSearchApp)
         assertEquals("", restored.profileName)
         assertEquals(null, restored.profileAvatarBase64)
+    }
+
+    @Test
+    fun `old translator selection stays unchanged when dictionary and search are absent`() {
+        val translator = "translator.app/translator.app.ProcessText"
+        val restored = kotlinx.serialization.json.Json.decodeFromString<AppSettings>(
+            """{"defaultTranslator":"$translator"}""",
+        )
+
+        assertEquals(translator, restored.defaultTranslator)
+        assertEquals(null, restored.defaultDictionary)
+        assertEquals(null, restored.defaultSearchApp)
+    }
+
+    @Test
+    fun `external text choices and their individual resets survive serialization`() {
+        val json = kotlinx.serialization.json.Json
+        val selected = AppSettings(
+            defaultTranslator = "translator.app/translator.app.ProcessText",
+            defaultDictionary = "colordict:dictionary.app/dictionary.app.Lookup",
+            defaultSearchApp = "search:search.app/search.app.Search",
+        )
+        val states = listOf(
+            selected,
+            selected.copy(defaultTranslator = null),
+            selected.copy(defaultDictionary = null),
+            selected.copy(defaultSearchApp = null),
+            selected.copy(defaultDictionary = "process_text:dictionary.app/dictionary.app.ProcessText"),
+            AppSettings(),
+        )
+
+        states.forEach { settings ->
+            val encoded = json.encodeToString(AppSettings.serializer(), settings)
+            assertEquals(settings, json.decodeFromString<AppSettings>(encoded))
+        }
     }
 
     @Test
@@ -55,6 +128,7 @@ class AppSettingsTest {
         val json = kotlinx.serialization.json.Json
         val settings = AppSettings(
             autoHideReturnButton = false,
+            brightnessSwipeEnabled = true,
             readerChromeStyle = ReaderChromeStyle.REGULAR,
             defaultTranslator = "translator.app/translator.app.ProcessText",
             profileName = "Анастасия Мараховская",

@@ -15,6 +15,7 @@ import com.example.frogreader.data.ImportMode
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.parser.mobi.MobiDrmException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
@@ -41,6 +42,9 @@ sealed interface LibraryMessage {
     data object ImportCancelled : LibraryMessage
     data object ImportFailed : LibraryMessage
     data object ImportFailedDrm : LibraryMessage
+    data class ReadingQueueAdded(val title: String, val alreadyQueued: Boolean) : LibraryMessage
+    data class ReadingQueueRemoved(val title: String) : LibraryMessage
+    data object ReadingQueueFailed : LibraryMessage
 }
 
 class LibraryViewModel(
@@ -51,6 +55,7 @@ class LibraryViewModel(
 ) : ViewModel() {
 
     val books: StateFlow<List<Book>> = repository.books
+    val readingQueue = repository.readingQueue
 
     /**
      * The grid's single source of truth: loose books and shelves in one order.
@@ -316,6 +321,34 @@ class LibraryViewModel(
     fun deleteBook(book: Book) {
         coverCache.remove(book.id)
         viewModelScope.launch { repository.deleteBook(book.id) }
+    }
+
+    fun addToReadingQueue(bookId: String) {
+        viewModelScope.launch {
+            try {
+                val added = repository.addLibraryBookToReadingQueue(bookId)
+                val title = books.value.firstOrNull { it.id == bookId }?.title.orEmpty()
+                _messages.send(LibraryMessage.ReadingQueueAdded(title, alreadyQueued = !added))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _messages.send(LibraryMessage.ReadingQueueFailed)
+            }
+        }
+    }
+
+    fun removeFromReadingQueue(bookId: String) {
+        viewModelScope.launch {
+            try {
+                repository.removeLibraryBookFromReadingQueue(bookId)
+                val title = books.value.firstOrNull { it.id == bookId }?.title.orEmpty()
+                _messages.send(LibraryMessage.ReadingQueueRemoved(title))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _messages.send(LibraryMessage.ReadingQueueFailed)
+            }
+        }
     }
 
     fun deleteBooks(bookIds: Collection<String>) {

@@ -10,6 +10,8 @@ import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.SettingsRepository
+import com.example.frogreader.data.translation.ExternalTextAction
+import com.example.frogreader.data.restoreBookFontSiblings
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookContent
 import com.example.frogreader.data.model.Bookmark
@@ -35,6 +37,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
@@ -113,9 +116,11 @@ sealed interface ReaderState {
         val language: String? = null,
         /** Resolved logical page order; never DEFAULT inside the active reader. */
         val pageProgression: PageProgression = PageProgression.LTR,
+        /** False while an EPUB prefix is readable and its remaining documents are parsing. */
+        val contentComplete: Boolean = true,
     ) : ReaderState {
         fun chapterAt(flatIndex: Int): Int =
-            chapterStarts.indexOfLast { it <= flatIndex }.coerceAtLeast(0)
+            ReaderNavigationPolicy.chapterIndexAt(chapterStarts, flatIndex)
     }
 }
 
@@ -126,6 +131,14 @@ class ReaderViewModel(
     private val bookId: String,
     private val paginationCacheDir: File,
 ) : ViewModel() {
+
+    private val readerResources = repository.retainReaderResources(bookId)
+
+    override fun onCleared() {
+        readerResources?.close()
+        repository.trimReaderCaches()
+        super.onCleared()
+    }
 
     /** Live book from the library index (declared before [settings] uses it). */
     val book: StateFlow<Book?> = repository.books
@@ -147,8 +160,9 @@ class ReaderViewModel(
     /** Each book starts with code defaults; edits belong only to that book. */
     val settings: StateFlow<ReaderSettings> =
         kotlinx.coroutines.flow.combine(book, settingsWriter.pending) { current, pending ->
-            pending ?: current?.readerSettings ?: ReaderSettings()
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, book.value?.readerSettings ?: ReaderSettings())
+            (pending ?: current?.readerSettings ?: ReaderSettings()).withAutomaticTypography()
+        }.stateIn(viewModelScope, SharingStarted.Eagerly,
+            (book.value?.readerSettings ?: ReaderSettings()).withAutomaticTypography())
 
     val appSettings: StateFlow<AppSettings> = settingsRepository.appSettings
         .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
@@ -162,21 +176,30 @@ class ReaderViewModel(
      * background, the stale pages keep rendering with THESE settings — the
      * text changes exactly once, when the new layout lands.
      *
-     * [partial] marks the quick current-chapter pass: it appears within
-     * ~100 ms of a settings change so the reader restyles instantly; the
-     * full-book result replaces it with identical in-chapter page splits.
+     * [partial] marks the quick nearby-chapters pass, available on first
+     * open and after settings changes. The full-book result replaces it
+     * with identical in-chapter page splits.
      */
     class PaginationHolder(
         val key: String,
         val pages: List<BookPage>,
         val settings: ReaderSettings,
         val partial: Boolean = false,
+        internal val itemRange: IntRange? = null,
     )
 
     private val _pagination = MutableStateFlow<PaginationHolder?>(null)
     val pagination = _pagination.asStateFlow()
     private var paginationJob: Job? = null
     private var paginationKeyInFlight: String? = null
+    private val presentedPagination = MutableStateFlow<PaginationHolder?>(null)
+    private var openingTrace = ReaderLoadTrace()
+
+    internal fun recordOpeningSurfaceReady() = openingTrace.surfaceReady()
+
+    internal fun onPaginationPresented(holder: PaginationHolder) {
+        if (_pagination.value === holder) presentedPagination.value = holder
+    }
 
     /** Last known reading position (flat item index), shared by both modes. */
     var currentFlatIndex: Int = 0
@@ -224,14 +247,18 @@ class ReaderViewModel(
 
     /**
      * Recomputes pages in the background unless [key] is already available.
-     * [quick] (optional) paginates just the chapter being read; its result
-     * shows almost immediately while [full] finishes behind it.
+     * [quick] (optional) paginates nearby complete chapters; its result can
+     * be read while [full] finishes behind it. [quickRange] retains their
+     * source coordinates so cross-chapter seeks cannot clamp to a preview.
      */
     fun ensurePagination(
         key: String,
         settings: ReaderSettings,
         items: List<ReaderItem>,
         quick: (suspend () -> List<BookPage>)? = null,
+        quickRange: IntRange? = null,
+        awaitPreviewPresentation: Boolean = false,
+        contentComplete: Boolean = true,
         full: suspend () -> List<BookPage>,
     ) {
         if (paginationKeyInFlight == key) return
@@ -243,33 +270,69 @@ class ReaderViewModel(
         if (_pagination.value?.key == key && _pagination.value?.partial == false) return
         paginationKeyInFlight = key
         paginationJob = viewModelScope.launch(Dispatchers.Default) {
-            // Reopening the book with unchanged layout: pages come straight
-            // from disk, no measurement pass at all.
-            val cacheFile = PaginationCache.fileFor(paginationCacheDir, bookId)
-            val cached = PaginationCache.load(cacheFile, key, items)
-            if (!cached.isNullOrEmpty()) {
+            val paginationResources = repository.retainReaderResources(bookId)
+            try {
+                val cacheFile = PaginationCache.fileFor(paginationCacheDir, bookId)
+                // A full cache may contain tens of thousands of pages. Even a
+                // hit validates every source item, so show nearby pages before
+                // decoding/validating it and materialising the rest of Ready.
+                if (quick != null && _pagination.value?.key != key) {
+                    val started = System.nanoTime()
+                    val quickPages = closedPrefixPages(quick(), items, contentComplete)
+                    openingTrace.stage("preview", started, quickPages.size)
+                    if (quickPages.isNotEmpty()) {
+                        val preview = PaginationHolder(
+                            key, quickPages, settings, partial = true,
+                            itemRange = quickRange,
+                        )
+                        withContext(Dispatchers.Main.immediate) { _pagination.value = preview }
+                        // Cache validation can allocate the rest of a huge book.
+                        // Let the preview reach a frame before starting that work.
+                        if (awaitPreviewPresentation) presentedPagination.first { it === preview }
+                        // Keep extending the readable prefix after its first frame.
+                        // Three quick pages are a head start, not a navigation wall.
+                    }
+                }
+                val cacheStarted = System.nanoTime()
+                val cached = if (contentComplete) PaginationCache.load(cacheFile, key, items) else null
+                openingTrace.stage("page_cache", cacheStarted, cached?.size ?: 0)
+                if (!cached.isNullOrEmpty()) {
+                    withContext(Dispatchers.Main.immediate) {
+                        _pagination.value = PaginationHolder(key, cached, settings)
+                        paginationKeyInFlight = null
+                    }
+                    return@launch
+                }
+                val fullStarted = System.nanoTime()
+                val pages = closedPrefixPages(full(), items, contentComplete)
+                openingTrace.stage("full_pagination", fullStarted, pages.size)
+                // Publish on Main: a job cancelled mid-compute never gets here,
+                // and the bookkeeping above stays single-threaded.
                 withContext(Dispatchers.Main.immediate) {
-                    _pagination.value = PaginationHolder(key, cached, settings)
+                    _pagination.value = PaginationHolder(key, pages, settings,
+                        partial = !contentComplete, itemRange = items.indices.takeUnless { contentComplete })
                     paginationKeyInFlight = null
                 }
-                return@launch
-            }
-            if (quick != null && _pagination.value?.key != key) {
-                val quickPages = quick()
-                withContext(Dispatchers.Main.immediate) {
-                    _pagination.value = PaginationHolder(key, quickPages, settings, partial = true)
+                if (contentComplete) {
+                    PaginationCache.save(cacheFile, key, items, pages)
                 }
+            } finally {
+                // A cancelled screen can leave a native measure/atomic write
+                // finishing. Its resources stay pinned until that work exits.
+                paginationResources?.close()
+                repository.trimReaderCaches()
             }
-            val pages = full()
-            // Publish on Main: a job cancelled mid-compute never gets here,
-            // and the bookkeeping above stays single-threaded.
-            withContext(Dispatchers.Main.immediate) {
-                _pagination.value = PaginationHolder(key, pages, settings)
-                paginationKeyInFlight = null
-            }
-            PaginationCache.save(cacheFile, key, items, pages)
         }
     }
+
+    private fun closedPrefixPages(
+        pages: List<BookPage>, items: List<ReaderItem>, complete: Boolean,
+    ): List<BookPage> = if (!complete && pages.size > 1 &&
+        pages.last().parts.lastOrNull()?.itemIndex == items.lastIndex) {
+        // Appending a spine fragment can add text to the final open page.
+        // Keep it off the stable prefix so a queued turn cannot skip that text.
+        pages.dropLast(1)
+    } else pages
 
     // -------------------------------------------------------------- search
 
@@ -295,6 +358,8 @@ class ReaderViewModel(
 
     private var loadedBook: Book? = null
     private var loadedContent: BookContent? = null
+    private var loadedContentComplete = true
+    private var readyBuildGeneration = 0L
     private val _offerReread = MutableStateFlow(false)
     val offerReread = _offerReread.asStateFlow()
     private val _readingGeneration = MutableStateFlow(0)
@@ -325,6 +390,7 @@ class ReaderViewModel(
 
     fun load() {
         viewModelScope.launch {
+            openingTrace = ReaderLoadTrace()
             _state.value = ReaderState.Loading
             val book = repository.bookById(bookId)
             if (book == null) {
@@ -339,25 +405,56 @@ class ReaderViewModel(
             _finishSaved.value = viewingPreviousReading
             _offerReread.value = viewingPreviousReading
             clearNavigationHistory()
-            runCatching { repository.loadContent(book) }
-                .onSuccess { content ->
+            val parseStarted = System.nanoTime()
+            var firstContent = true
+            suspend fun acceptContent(content: BookContent, complete: Boolean) {
+                    val first = firstContent
+                    firstContent = false
                     loadedBook = book
                     loadedContent = content
+                    loadedContentComplete = complete
+                    // Older EPUB adoptions copied only the selected subset.
+                    // Restore its genuine siblings before first pagination;
+                    // never replace a preference edited while IO was running.
+                    val fontSettings = settingsWriter.pending.value ?: settings.value
+                    val repairedFontSettings = withContext(Dispatchers.IO) {
+                        fontSettings.restoreBookFontSiblings(repository.fontLibraryDirectory, content.fonts)
+                    }
+                    if (repairedFontSettings != fontSettings) {
+                        settingsWriter.update(settings.value) { current ->
+                            if (current == fontSettings) repairedFontSettings else current
+                        }
+                    }
                     // Guarantee the start stamp precedes every time and finish write,
                     // while keeping its fsync off the reader's first rendered frame.
-                    if (!viewingPreviousReading) enqueueReadingWrite {
+                    if (first && !viewingPreviousReading) enqueueReadingWrite {
                         repository.markStarted(bookId)
                         currentReadingLogId = repository.bookById(bookId)?.activeReadingLogId
                     }
-                    rebuildReady()
+                    val readyStarted = System.nanoTime()
+                    rebuildReady(resetNavigation = first)
+                    openingTrace.stage("prepare_reader", readyStarted, content.totalElements)
                     // Only now. It is fire-and-forget on a scope that outlives
                     // this screen, but starting it first put a full index
                     // rewrite — fsync, .bak copy, widget rebuild — onto the IO
                     // pool that the book itself was about to be read from, and
                     // the open simply queued behind it.
-                    repository.noteOpened(bookId)
+                    if (first) repository.noteOpened(bookId)
+            }
+            runCatching {
+                repository.loadContentProgressively(book) { preview ->
+                    openingTrace.stage("parse_preview", parseStarted, preview.totalElements)
+                    acceptContent(preview, complete = false)
                 }
-                .onFailure { _state.value = ReaderState.Error }
+            }
+                .onSuccess { content ->
+                    openingTrace.stage("parse", parseStarted, content.totalElements)
+                    acceptContent(content, complete = true)
+                }
+                .onFailure { error ->
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    _state.value = ReaderState.Error
+                }
         }
     }
 
@@ -365,34 +462,44 @@ class ReaderViewModel(
      * Builds the Ready state, applying footnote display settings.
      *
      * The bookkeeping stays on Main so this VM's plain `var`s keep their
-     * single-threaded invariant; the walk over every element of the book, the
-     * font stats and `publisherStyleOf`'s second pass go to Default. It is only
-     * tens of milliseconds, but they used to land on the very frame the reader
-     * was trying to draw.
+     * single-threaded invariant. Font statistics, publisher-style summaries
+     * and preparation of the current chapter go to Default. Distant chapter
+     * items remain lazy until the reader, search or pagination needs them.
      */
-    private suspend fun rebuildReady() {
+    private suspend fun rebuildReady(resetNavigation: Boolean = true) {
         val book = loadedBook ?: return
         val content = loadedContent ?: return
+        val contentComplete = loadedContentComplete
         val readerSettings = settings.value
+        val initialFlatIndex = currentFlatIndex
+        val generation = ++readyBuildGeneration
         withContext(Dispatchers.Main.immediate) {
             // Item texts are about to change — cached match offsets go stale.
             searchJob?.cancel()
             _searchResults.value = null
             // Character anchors in the jump stack belong to the old item
             // stream (notably when hide-footnotes rewrites inline text).
-            clearNavigationHistory()
+            if (resetNavigation) clearNavigationHistory()
         }
         val next = withContext(Dispatchers.Default) {
-            buildReady(book, content, readerSettings.hideFootnotes, readerSettings.bookStyles)
+            buildReady(book, content, readerSettings.hideFootnotes, initialFlatIndex, contentComplete)
         }
-        withContext(Dispatchers.Main.immediate) { _state.value = next }
+        withContext(Dispatchers.Main.immediate) {
+            // A setting change can prepare an older prefix concurrently with
+            // the complete publication. Never let that late result replace it.
+            if (generation == readyBuildGeneration && content === loadedContent &&
+                contentComplete == loadedContentComplete &&
+                readerSettings.hideFootnotes == settings.value.hideFootnotes
+            ) _state.value = next
+        }
     }
 
     private fun buildReady(
         book: Book,
         content: BookContent,
         hideFootnotes: Boolean,
-        bookStyles: Boolean,
+        initialFlatIndex: Int,
+        contentComplete: Boolean,
     ): ReaderState {
         // A cover is chrome around the reading order, not a substitute for
         // one.  In particular an EPUB whose entire spine is linear="no" must
@@ -400,20 +507,16 @@ class ReaderViewModel(
         // chapter/progress coordinate space would be undefined.
         if (!content.hasSequentialContent()) return ReaderState.Error
 
-        val items = mutableListOf<ReaderItem>()
-
         // Title page: the cover opens the book before the text.
-        repository.coverFileFor(book)?.let { cover: File ->
-            items += ReaderItem(0, ContentElement.Image(cover.absolutePath))
+        val coverItem = repository.coverFileFor(book)?.let { cover: File ->
+            ReaderItem(0, ContentElement.Image(cover.absolutePath))
         }
 
-        val chapterStarts = mutableListOf<Int>()
-        val chapterTitles = mutableListOf<String?>()
-        val chapterDepths = mutableListOf<Int>()
+        val chapterTitles = content.chapters.map { it.title }
+        val chapterDepths = content.chapters.map { it.depth }
         val bookFonts = loadBookFonts(content)
         fun adjustedText(text: androidx.compose.ui.text.AnnotatedString) =
-            (if (hideFootnotes) text.withoutFootnotes() else text.withFootnoteRefStyle())
-                .withBookFonts(bookFonts, enabled = bookStyles)
+            if (hideFootnotes) text.withoutFootnotes() else text.withFootnoteRefStyle()
         fun adjusted(element: ContentElement): ContentElement = when (element) {
             is ContentElement.Paragraph -> element.copy(text = adjustedText(element.text))
             is ContentElement.Heading -> element.copy(
@@ -442,37 +545,9 @@ class ReaderViewModel(
             )
             else -> element
         }
-        content.chapters.forEachIndexed { index, chapter ->
-            chapterStarts += items.size
-            chapterTitles += chapter.title
-            chapterDepths += chapter.depth
-            val adjustedElements = chapter.elements.map(::adjusted)
-            val plan = planPublisherChapter(adjustedElements, chapter.publisherBoxes)
-            val itemOffset = items.size
-            adjustedElements.forEachIndexed { elementIndex, element ->
-                val plannedFloat = plan.floatByTarget[elementIndex]
-                items += ReaderItem(
-                    chapterIndex = index,
-                    element = element,
-                    publisherBoxes = plan.boxesByElement[elementIndex],
-                    publisherFloat = plannedFloat?.let { float ->
-                        ReaderPublisherFloat(
-                            side = float.side,
-                            style = float.style,
-                            contents = float.contents.map { content ->
-                                ReaderPublisherFloatContent(
-                                    sourceItemIndex = itemOffset + content.sourceElementIndex,
-                                    element = content.element,
-                                    publisherBoxes = content.publisherBoxes,
-                                )
-                            },
-                        )
-                    },
-                    suppressedByPublisherFloat = elementIndex in plan.suppressedElements,
-                    publisherClearBefore = plan.clearBefore[elementIndex],
-                )
-            }
-        }
+        val items = ReaderChapterItems(content.chapters, coverItem, ::adjusted)
+        val chapterStarts = items.chapterStarts
+        items.prepareAt(initialFlatIndex)
 
         val linkedDocuments = content.linkedDocuments.mapValues { (_, document) ->
             val adjustedElements = document.elements.map(::adjusted)
@@ -554,7 +629,7 @@ class ReaderViewModel(
                 notes = if (hideFootnotes) {
                     emptyMap()
                 } else {
-                    content.notes.mapValues { (_, note) ->
+                    LazyMappedValuesMap(content.notes) { _, note ->
                         NoteDocument(
                             elements = note.elements.map(::adjusted),
                             publisherBoxes = note.publisherBoxes,
@@ -581,6 +656,7 @@ class ReaderViewModel(
                     content.pageProgression,
                     content.language,
                 ),
+                contentComplete = contentComplete,
                 publisherStyle = com.example.frogreader.data.model.publisherStyleOf(content),
             )
         }
@@ -589,43 +665,30 @@ class ReaderViewModel(
     /** Groups the book's extracted font faces into loadable font families. */
     private fun loadBookFonts(
         content: BookContent,
-    ): Map<String, androidx.compose.ui.text.font.FontFamily> =
-        content.fonts
-            .filter { File(it.path).exists() }
-            .groupBy { it.family }
-            .mapNotNull { (family, faces) ->
-                runCatching {
-                    family to androidx.compose.ui.text.font.FontFamily(
-                        faces.map { face ->
-                            androidx.compose.ui.text.font.Font(
-                                file = File(face.path),
-                                weight = if (face.bold) {
-                                    androidx.compose.ui.text.font.FontWeight.Bold
-                                } else {
-                                    androidx.compose.ui.text.font.FontWeight.Normal
-                                },
-                                style = if (face.italic) {
-                                    androidx.compose.ui.text.font.FontStyle.Italic
-                                } else {
-                                    androidx.compose.ui.text.font.FontStyle.Normal
-                                },
-                            )
-                        },
-                    )
-                }.getOrNull()
-            }
-            .toMap()
+    ): Map<String, androidx.compose.ui.text.font.FontFamily> {
+        val availableFaces = content.fonts.filter { File(it.path).isFile }
+        if (availableFaces.isEmpty()) return emptyMap()
+        return availableFaces.groupBy { it.family }.mapNotNull { (family, faces) ->
+            com.example.frogreader.ui.theme.publisherFontFamily(faces)?.let { family to it }
+        }.toMap()
+    }
 
     fun updateSettings(transform: (ReaderSettings) -> ReaderSettings) {
-        settingsWriter.update(settings.value, transform)
+        settingsWriter.update(settings.value) { transform(it).withAutomaticTypography() }
     }
 
     fun updateAppSettings(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch { settingsRepository.updateApp(transform) }
     }
 
-    suspend fun setDefaultTranslator(component: String) {
-        settingsRepository.updateApp { it.copy(defaultTranslator = component) }
+    suspend fun setDefaultTextApp(action: ExternalTextAction, id: String) {
+        settingsRepository.updateApp {
+            when (action) {
+                ExternalTextAction.TRANSLATE -> it.copy(defaultTranslator = id)
+                ExternalTextAction.DEFINE -> it.copy(defaultDictionary = id)
+                ExternalTextAction.SEARCH -> it.copy(defaultSearchApp = id)
+            }
+        }
     }
 
     fun saveProgress(firstVisibleIndex: Int, scrollOffset: Int, charOffset: Int = 0) {
@@ -634,7 +697,9 @@ class ReaderViewModel(
         if (_offerReread.value || _restartingReading.value) return
         val ready = _state.value as? ReaderState.Ready ?: return
         observeVisiblePosition(firstVisibleIndex, scrollOffset, charOffset)
-        val fraction = if (ready.items.size <= 1) {
+        val fraction = if (!ready.contentComplete) {
+            this.book.value?.progress?.fraction ?: ready.book.progress.fraction
+        } else if (ready.items.size <= 1) {
             0f
         } else {
             (firstVisibleIndex.toFloat() / (ready.items.size - 1)).coerceIn(0f, 1f)
@@ -760,6 +825,11 @@ class ReaderViewModel(
     }
 
     fun observeCompletionPosition(lastPage: Boolean, completion: Boolean) {
+        if ((_state.value as? ReaderState.Ready)?.contentComplete == false) {
+            _lastPageVisible.value = false
+            _completionVisible.value = false
+            return
+        }
         _lastPageVisible.value = lastPage
         _completionVisible.value = completion
         if (completion) markFinished()
@@ -987,10 +1057,11 @@ class ReaderViewModel(
                     navigationSession.configureExpiry(returnTimeoutMillis.takeIf { enabled })
                 }
         }
-        // Rebuild shared text for footnote visibility and authored inline fonts.
+        // Font choices are resolved at measurement/drawing time; only footnote
+        // visibility rewrites the shared source text.
         viewModelScope.launch {
             settings
-                .map { it.hideFootnotes to it.bookStyles }
+                .map { it.hideFootnotes }
                 .distinctUntilChanged()
                 .collect { if (loadedContent != null) rebuildReady() }
         }

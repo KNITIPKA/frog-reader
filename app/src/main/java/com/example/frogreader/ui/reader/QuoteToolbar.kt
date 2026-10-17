@@ -21,6 +21,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.FormatQuote
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.Icon
 import androidx.compose.material3.DropdownMenu
@@ -66,7 +68,7 @@ private val TOOLBAR_INSET = 8.dp
 private const val APPEAR_FROM = 0.86f
 
 /**
- * Floating quote, delete, translate and copy actions above the selection.
+ * Floating quote, delete, external text and copy actions above the selection.
  *
  * It rides on the reader's own selection, not on `LocalTextToolbar`: the
  * platform's toolbar callback only exists while Compose owns the selection,
@@ -99,6 +101,8 @@ fun SelectionToolbar(
     onQuote: (QuoteColor) -> Unit,
     onTranslate: () -> Unit,
     onCopy: () -> Unit,
+    onDefine: () -> Unit,
+    onExternalSearch: () -> Unit,
 ) {
     if (!controller.active || controller.dragging) return
 
@@ -212,7 +216,8 @@ fun SelectionToolbar(
                     )
                 },
         ) {
-            SelectionToolbarActions(colors, selectedQuotes, availableColors, onRemoveQuotes, onQuote, onTranslate, onCopy)
+            SelectionToolbarActions(colors, selectedQuotes, availableColors, onRemoveQuotes, onQuote,
+                onTranslate, onCopy, onDefine, onExternalSearch)
         }
     }
 }
@@ -227,12 +232,14 @@ internal fun SelectionToolbarActions(
     onQuote: (QuoteColor) -> Unit,
     onTranslate: () -> Unit,
     onCopy: () -> Unit,
+    onDefine: () -> Unit,
+    onExternalSearch: () -> Unit,
 ) {
-    // Keep every action visible, including when deletion adds a fourth one.
-    // A wide scrolling pill used to clip Copy and, with large text, even Quote.
+    // Wrap all actions, including deletion, within the reader's safe width. This also keeps
+    // large-text labels reachable without a horizontally scrolling or clipped action strip.
     FlowRow(
         modifier = Modifier.padding(horizontal = 4.dp),
-        maxItemsInEachRow = if (selectedQuotes.isNotEmpty()) 2 else 3,
+        maxItemsInEachRow = 3,
         horizontalArrangement = Arrangement.Center,
     ) {
         if (selectedQuotes.isNotEmpty()) {
@@ -271,6 +278,16 @@ internal fun SelectionToolbarActions(
             label = stringResource(R.string.selection_translate),
             icon = { Icon(Icons.Rounded.Translate, contentDescription = null) },
             onClick = onTranslate,
+        )
+        ToolbarAction(
+            label = stringResource(R.string.selection_define),
+            icon = { Icon(Icons.AutoMirrored.Rounded.MenuBook, contentDescription = null) },
+            onClick = onDefine,
+        )
+        ToolbarAction(
+            label = stringResource(R.string.selection_search),
+            icon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+            onClick = onExternalSearch,
         )
         ToolbarAction(
             label = stringResource(R.string.selection_copy),

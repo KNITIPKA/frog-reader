@@ -1,4 +1,8 @@
+@file:kotlinx.serialization.UseSerializers(ParsedAnnotatedStringSerializer::class)
+
 package com.example.frogreader.data.model
+
+import kotlinx.serialization.Serializable
 
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -58,6 +62,7 @@ const val INLINE_IMAGE_ALT_TAG = "inlineImageAlt"
 const val INLINE_IMAGE_CHAR = "\uFFFC"
 
 /** Fully parsed book, produced when the reader opens a book. */
+@Serializable
 class BookContent(
     val chapters: List<Chapter>,
     /**
@@ -110,6 +115,7 @@ class BookContent(
      */
     val pageProgression: PageProgression = PageProgression.DEFAULT,
 ) {
+    @kotlinx.serialization.Transient
     val totalElements: Int = chapters.sumOf { it.elements.size }
 }
 
@@ -120,6 +126,7 @@ class BookContent(
  * poems, tables, block/inline images, links and publisher styles. A note is a
  * transient surface only; it has no chapter/progress coordinates of its own.
  */
+@Serializable
 data class NoteDocument(
     val elements: List<ContentElement>,
     /** Publisher boxes over [elements]; they never consume note coordinates. */
@@ -140,6 +147,7 @@ data class NoteDocument(
 }
 
 /** A renderable document outside the normal reading order. */
+@Serializable
 class LinkedDocument(
     /** Stable parser-defined identity, normally the canonical package path. */
     val id: String,
@@ -150,12 +158,14 @@ class LinkedDocument(
 )
 
 /** Destination of a hyperlink into a non-linear [LinkedDocument]. */
+@Serializable
 data class LinkedDocumentTarget(
     val documentId: String,
     val elementIndex: Int,
 )
 
 /** One author-defined navigation row (EPUB nav/NCX, or an equivalent TOC). */
+@Serializable
 class BookNavigationEntry(
     val title: String,
     val depth: Int,
@@ -163,12 +173,15 @@ class BookNavigationEntry(
 )
 
 /** A TOC destination without sentinel indices or mixed coordinate spaces. */
+@Serializable
 sealed interface BookNavigationTarget {
+    @Serializable
     data class ReadingOrder(
         val chapterIndex: Int,
         val elementIndex: Int,
     ) : BookNavigationTarget
 
+    @Serializable
     data class Linked(
         val documentId: String,
         val elementIndex: Int,
@@ -176,14 +189,26 @@ sealed interface BookNavigationTarget {
 }
 
 /** One embedded font file: a face of [family] extracted to [path]. */
+@Serializable
 data class BookFont(
     /** Normalized (lowercased) family name as the book's CSS calls it. */
     val family: String,
     val path: String,
     val bold: Boolean,
     val italic: Boolean,
+    /** Actual CSS face weight; the legacy flag remains compatible with older callers. */
+    val weight: Int = if (bold) 700 else 400,
+    /** A variable @font-face descriptor can offer a continuous range. */
+    val weightMin: Int = weight,
+    val weightMax: Int = weight,
+    /** CSS face-width descriptor (percent); a range can describe variable widths. */
+    val stretchMin: Float = 100f,
+    val stretchMax: Float = stretchMin,
+    /** CSS character coverage; null means the descriptor allows all Unicode code points. */
+    val unicodeRange: String? = null,
 )
 
+@Serializable
 class Chapter(
     val title: String?,
     val elements: List<ContentElement>,
@@ -197,14 +222,17 @@ class Chapter(
     val publisherBoxes: List<PublisherBoxSpan> = emptyList(),
 )
 
+@Serializable
 sealed interface ContentElement {
     /** Regular text paragraph; [style] tweaks rendering, [block] refines it. */
+    @Serializable
     data class Paragraph(
         val text: AnnotatedString,
         val style: ParagraphStyle = ParagraphStyle.NORMAL,
         val block: BlockStyle? = null,
     ) : ContentElement
 
+    @Serializable
     data class Heading(
         /** Inline formatting is part of a heading, not decoration around it. */
         val styledText: AnnotatedString,
@@ -229,6 +257,7 @@ sealed interface ContentElement {
      * blowing those up to the full column width wastes half a page.
      * Both null = the reader's default (fit the column width).
      */
+    @Serializable
     data class Image(
         val path: String,
         val widthFrac: Float? = null,
@@ -252,12 +281,15 @@ sealed interface ContentElement {
         val darkModeBackgroundCurrentColor: Boolean = false,
     ) : ContentElement
 
+    @Serializable
     data object Divider : ContentElement
 
     /** Deliberate vertical gap (FB2 `<empty-line/>`, EPUB spacing blocks). */
+    @Serializable
     data class Spacer(val heightEm: Float = 1f) : ContentElement
 
     /** A real table grid; pagination may break it between rows. */
+    @Serializable
     data class Table(
         val rows: List<TableRow>,
         val block: BlockStyle? = null,
@@ -276,6 +308,7 @@ sealed interface ContentElement {
     }
 }
 
+@Serializable
 enum class PublisherRowLayout { NATURAL, SPACE_BETWEEN, SPACE_AROUND }
 
 /**
@@ -299,12 +332,14 @@ fun ContentElement.previewText(): String? = when (this) {
     else -> null
 }
 
+@Serializable
 class TableRow(
     val cells: List<TableCell>,
     /** Header rows repeat when the table continues on the next page. */
     val isHeader: Boolean,
 )
 
+@Serializable
 class TableCell(
     val text: AnnotatedString,
     val colSpan: Int = 1,
@@ -329,6 +364,7 @@ class TableCell(
 )
 
 /** Geometry and text style for an admitted responsive table-cell variant. */
+@Serializable
 data class TableCellStyle(
     val block: BlockStyle? = null,
     val publisherBox: PublisherBoxStyle? = null,
@@ -337,6 +373,7 @@ data class TableCellStyle(
     val publisherBorderSpecified: Boolean = false,
 )
 
+@Serializable
 enum class ParagraphStyle { NORMAL, QUOTE, POEM }
 
 /**
@@ -345,9 +382,11 @@ enum class ParagraphStyle { NORMAL, QUOTE, POEM }
  * START/END are logical and follow the paragraph's bidi direction; LEFT/RIGHT
  * are physical CSS/legacy alignments and must not flip in an RTL paragraph.
  */
+@Serializable
 enum class BlockAlign { START, CENTER, END, JUSTIFY, LEFT, RIGHT }
 
 /** Base direction requested by the publication. AUTO uses the first strong character. */
+@Serializable
 enum class BookTextDirection { LTR, RTL, AUTO }
 
 /**
@@ -358,6 +397,7 @@ enum class BookTextDirection { LTR, RTL, AUTO }
  * source/layout offset map; search, quotes and clipboard therefore continue
  * to use the exact author text without invisible control characters.
  */
+@Serializable
 enum class InlineBidiMode {
     ISOLATE_AUTO,
     ISOLATE_LTR,
@@ -390,6 +430,7 @@ const val INLINE_FONT_FAMILY_TAG = "frogreader:font-family"
  * START/JUSTIFY alignment of body text) — by default the user's typography
  * settings win over the book for those.
  */
+@Serializable
 data class BlockStyle(
     val align: BlockAlign? = null,
     val italic: Boolean? = null,
@@ -451,6 +492,10 @@ data class BlockStyle(
     val backgroundColorArgb: Int? = null,
     /** OpenType features shared by native text measurement and rendering. */
     val fontFeatureSettings: String? = null,
+    /** Numeric CSS weight, retained for both measurement and rendering. */
+    val fontWeight: Int? = null,
+    /** Inherited publisher variable-font axes, width and optical sizing. */
+    val fontTypography: FontTypography? = null,
 ) {
     val isDefault: Boolean
         get() = this == DEFAULT
@@ -465,6 +510,7 @@ data class BlockStyle(
  * mode the text wraps beside it, otherwise it renders as a block image
  * above the paragraph. The element stream itself never depends on settings.
  */
+@Serializable
 data class FloatImage(
     /** Absolute path of the extracted image file. */
     val path: String,
@@ -482,6 +528,7 @@ data class FloatImage(
  * (float:left or a noticeably enlarged font); rendering it is gated
  * behind the "publisher's formatting" toggle.
  */
+@Serializable
 data class FirstLetterStyle(
     /** Font size of the cap relative to the paragraph's font. */
     val scale: Float,
@@ -504,6 +551,10 @@ data class FirstLetterStyle(
      * first grapheme for `::first-letter`.
      */
     val sourceTextLength: Int? = null,
+    val fontWeight: Int? = null,
+    /** Inherited publisher variable-font axes, width and optical sizing. */
+    val fontTypography: FontTypography? = null,
+    val fontFeatureSettings: String? = null,
 )
 
 /**

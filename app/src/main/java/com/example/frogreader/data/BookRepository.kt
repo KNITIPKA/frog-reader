@@ -41,22 +41,32 @@ import com.example.frogreader.data.model.toUserData
 import com.example.frogreader.data.model.withUserData
 import androidx.glance.appwidget.updateAll
 import com.example.frogreader.data.parser.BookParsers
+import com.example.frogreader.data.parser.EpubParser
+import com.example.frogreader.data.parser.ReaderResourceLimits
 import com.example.frogreader.widget.ContinueReadingWidget
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.io.Closeable
 import java.util.UUID
+import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
 class LibraryIndexCorruptedException(
@@ -77,6 +87,16 @@ private const val STAGING_LIFETIME_MILLIS = 30L * 60 * 1000
 
 /** The title a book gets when neither the file nor its name offers one. */
 private const val UNTITLED = "Untitled"
+
+/** Compression must yield CPU time to the page the user is currently reading. */
+private val readerContentCacheDispatcher by lazy {
+    Executors.newSingleThreadExecutor { task ->
+        Thread({
+            runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) }
+            task.run()
+        }, "ReaderContentCache").apply { isDaemon = true }
+    }.asCoroutineDispatcher()
+}
 
 /**
  * Flattens a title or an author down to what two people would agree is "the
@@ -127,6 +147,7 @@ open class BookRepository(private val context: Context? = null) {
     @Volatile private var isIndexCorrupted = false
 
     private val filesRoot: File get() = context?.filesDir ?: File("build/tmp/test_files")
+    internal val fontLibraryDirectory: File get() = File(filesRoot, "fonts")
 
     private val indexStore by lazy {
         AtomicJsonFile(
@@ -163,6 +184,28 @@ open class BookRepository(private val context: Context? = null) {
     private val booksDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "books") }
     private val coversDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "covers") }
     private val imagesDir by lazy { File(context?.filesDir ?: File("build/tmp/test_files"), "images") }
+    private val readerCacheBudget by lazy { ReaderCacheBudget(filesRoot) }
+    private val parsedContentCache by lazy { ParsedContentCache(File(filesRoot, "reader-content")) }
+
+    /** A live reader must keep the images/fonts behind its immutable model. */
+    fun retainReaderResources(bookId: String): Closeable = readerCacheBudget.pin(bookId).also {
+        bookkeeping.launch { readerCacheBudget.touch(bookId) }
+    }
+
+    internal fun trimReaderCaches() {
+        bookkeeping.launch { trimReaderCachesNow() }
+    }
+
+    private fun trimReaderCachesNow() {
+        val result = readerCacheBudget.trim()
+        if (result.afterBytes > readerCacheBudget.limits.totalBytes ||
+            result.contentBytes > readerCacheBudget.limits.contentBytes) {
+            // Keeping one parsed book warm must not pin oversized resources
+            // forever. A genuinely live reader/parser has its own pin.
+            releaseContentCache()
+            readerCacheBudget.trim()
+        }
+    }
 
     /** The three documents as last read or written, guarded by [indexLock]. */
     private data class Stored(
@@ -436,6 +479,34 @@ open class BookRepository(private val context: Context? = null) {
         BackupDocument(mergeBooks(current), current.index.shelves, current.user.readingQueue, current.user.readingLog)
     }
 
+    /** Queue the existing file without moving the book or changing its reading state. */
+    suspend fun addLibraryBookToReadingQueue(bookId: String): Boolean {
+        var added = false
+        updateStored { before ->
+            val book = mergeBooks(before).firstOrNull { it.id == bookId }
+                ?: throw IOException("Library book no longer exists.")
+            if (before.user.readingQueue.any { it.attachment?.id == bookId }) before else {
+                val entry = ReadingQueueEntry(
+                    id = UUID.randomUUID().toString(),
+                    title = book.title.trim().take(ReadingQueueEntry.TITLE_LIMIT),
+                    author = book.author.orEmpty().trim().take(ReadingQueueEntry.AUTHOR_LIMIT),
+                    createdAtMillis = System.currentTimeMillis(),
+                    attachment = book,
+                )
+                added = true
+                before.copy(user = before.user.copy(readingQueue = before.user.readingQueue + entry))
+            }
+        }
+        return added
+    }
+
+    /** Remove only this library book's queue entries, preserving the book and its file. */
+    suspend fun removeLibraryBookFromReadingQueue(bookId: String) = updateStored { before ->
+        before.copy(user = before.user.copy(
+            readingQueue = before.user.readingQueue.filterNot { it.attachment?.id == bookId },
+        ))
+    }
+
     suspend fun saveReadingQueueEntry(
         id: String?, title: String, author: String, note: String,
         attachment: Book? = null,
@@ -530,11 +601,13 @@ open class BookRepository(private val context: Context? = null) {
             val entry = before.user.readingQueue.firstOrNull { it.id == id }
                 ?: throw IOException("Reading Queue entry no longer exists.")
             val attached = entry.attachment ?: throw IOException("Attach a book file first.")
-            check(bookFileFor(attached) != null) { "The attached file is missing." }
             val library = mergeBooks(before)
             // Exact file matches share the existing book and preserve its reading position.
             val existing = library.firstOrNull { it.id == attached.id ||
                 (attached.contentHash != null && it.contentHash == attached.contentHash) }
+            check(bookFileFor(existing ?: attached) != null || bookFileFor(attached) != null) {
+                "The attached file is missing."
+            }
             val notes = listOfNotNull(existing?.readingQueueNote, entry.note.takeIf { it.isNotBlank() })
                 .distinct().joinToString("\n\n").ifBlank { null }
             val book = (existing ?: attached.copy(title = entry.title,
@@ -649,6 +722,10 @@ open class BookRepository(private val context: Context? = null) {
         }
         val changed = split(books, from)
         return changed.copy(user = changed.user.copy(readingLog = entries))
+    }
+
+    private fun referencedQueueFiles(): Set<String> = synchronized(indexLock) {
+        stored().user.readingQueue.mapNotNullTo(HashSet()) { it.attachment?.fileName }
     }
 
     /** Covers retained by current records or the recoverable user-data generation. */
@@ -871,7 +948,8 @@ open class BookRepository(private val context: Context? = null) {
         }
 
         // Only now: until the index write landed, these were the live files.
-        existing.fileName?.takeIf { it != stored.name }?.let { File(booksDir, it).delete() }
+        existing.fileName?.takeIf { it != stored.name && it !in referencedQueueFiles() }
+            ?.let { File(booksDir, it).delete() }
         if (newCover != null) {
             existing.coverFileName?.takeIf { it != newCover && it !in referencedCovers() }?.let { File(coversDir, it).delete() }
         }
@@ -992,8 +1070,7 @@ open class BookRepository(private val context: Context? = null) {
      */
     private fun purgeDerived(bookId: String) {
         if (cachedContentId == bookId) releaseContentCache()
-        File(imagesDir, bookId).deleteRecursively()
-        context?.let { File(File(it.filesDir, "pagination"), "$bookId.json").delete() }
+        readerCacheBudget.remove(bookId, force = true)
     }
 
     /**
@@ -1142,7 +1219,7 @@ open class BookRepository(private val context: Context? = null) {
         val book = _books.value.firstOrNull { it.id == bookId } ?: return@withContext
         if (cachedContentId == bookId) releaseContentCache()
         updateIndex { books -> books.filterNot { it.id == bookId } }
-        book.fileName?.let { File(booksDir, it).delete() }
+        book.fileName?.takeIf { it !in referencedQueueFiles() }?.let { File(booksDir, it).delete() }
         book.coverFileName?.takeIf { it !in referencedCovers() }?.let { File(coversDir, it).delete() }
         purgeDerived(bookId)
     }
@@ -1164,9 +1241,15 @@ open class BookRepository(private val context: Context? = null) {
     private var cachedContentId: String? = null
     private var cachedContent: BookContent? = null
     private var cachedContentFileName: String? = null
+    private var cachedContentResources: Closeable? = null
+    private val contentCacheWrites = HashMap<String, kotlinx.coroutines.Job>()
 
     /** Parses already running, so a second asker joins instead of repeating. */
     private val inFlight = HashMap<String, Deferred<BookContent>>()
+    private val contentPreviews = HashMap<String, MutableStateFlow<BookContent?>>()
+
+    /** Deterministic parser gate for repository concurrency tests. */
+    internal var contentParserForTests: ((File, BookFormat, File, Int, (BookContent) -> Unit) -> BookContent)? = null
 
     open suspend fun loadContent(book: Book): BookContent {
         synchronized(contentLock) {
@@ -1182,30 +1265,167 @@ open class BookRepository(private val context: Context? = null) {
         // anyway. It finishes, caches, and the next tap is instant.
         val parseKey = "${book.id}/${book.fileName}"
         val parse = synchronized(contentLock) {
-            inFlight.getOrPut(parseKey) {
-                bookkeeping.async { parseAndCache(book) }
+            inFlight[parseKey] ?: run {
+                val preview = contentPreviews.getOrPut(parseKey) { MutableStateFlow(null) }
+                val started = bookkeeping.async(start = CoroutineStart.LAZY) {
+                    parseAndCache(book) { partial ->
+                        // A replaced/deleted source must never surface under
+                        // the book's new file, even while its old parse finishes.
+                        if (isCurrentContentSource(book)) preview.value = partial
+                    }
+                }
+                inFlight[parseKey] = started
+                started.invokeOnCompletion {
+                    synchronized(contentLock) {
+                        if (inFlight[parseKey] === started) {
+                            inFlight.remove(parseKey)
+                            contentPreviews.remove(parseKey, preview)
+                        }
+                    }
+                }
+                started
             }
         }
-        try {
-            return parse.await()
-        } finally {
-            synchronized(contentLock) { inFlight.remove(parseKey, parse) }
+        parse.start()
+        // Removing the shared parse belongs to completion, not an awaiter's
+        // finally block: cancelling one screen must not start a second parse.
+        return parse.await()
+    }
+
+    /**
+     * Receives a stable readable EPUB prefix while the same shared parse
+     * continues to its complete result. The callback belongs to the caller's
+     * scope; cancelling it leaves parsing/preloading and the final cache alive.
+     * Calling the virtual [loadContent] also preserves specialised repositories.
+     */
+    open suspend fun loadContentProgressively(
+        book: Book,
+        onPreview: suspend (BookContent) -> Unit,
+    ): BookContent {
+        if (book.format != BookFormat.EPUB) return loadContent(book)
+        val parseKey = "${book.id}/${book.fileName}"
+        val preview = synchronized(contentLock) {
+            contentPreviews.getOrPut(parseKey) { MutableStateFlow(null) }
+        }
+        return coroutineScope {
+            val observer = launch(start = CoroutineStart.UNDISPATCHED) {
+                preview.filterNotNull().collect { partial ->
+                    if (isCurrentContentSource(book)) onPreview(partial)
+                }
+            }
+            try {
+                loadContent(book)
+            } finally {
+                withContext(NonCancellable) {
+                    observer.cancelAndJoin()
+                    synchronized(contentLock) {
+                        if (inFlight[parseKey] == null) contentPreviews.remove(parseKey, preview)
+                    }
+                }
+            }
         }
     }
 
-    private fun parseAndCache(book: Book): BookContent {
+    private fun isCurrentContentSource(book: Book): Boolean =
+        books.value.firstOrNull { it.id == book.id }?.fileName == book.fileName
+
+    private fun parseAndCache(book: Book, onPreview: (BookContent) -> Unit): BookContent {
+        readerCacheBudget.pin(book.id).use {
+            return parseAndCachePinned(book, onPreview)
+        }
+    }
+
+    private fun parseAndCachePinned(book: Book, onPreview: (BookContent) -> Unit): BookContent {
         val name = book.fileName ?: throw IOException("This book has no file attached yet")
         val file = File(booksDir, name)
         if (!file.exists()) throw IOException("Book file is missing")
-        val content = BookParsers.parseContent(file, book.format, File(File(imagesDir, book.id), file.nameWithoutExtension))
+        // LRU maintenance can be walking thousands of old extracted assets.
+        // The pin already protects this open; recency IO must not queue its text.
+        bookkeeping.launch { readerCacheBudget.touch(book.id) }
+        val extracted = File(File(imagesDir, book.id), file.nameWithoutExtension)
+        val previewElementIndex = (book.progress.elementIndex - if (coverFileFor(book) == null) 0 else 1)
+            .coerceAtLeast(0)
+        // A cache is disposable. Source/version/resource checks belong to its
+        // codec; any failed check falls through to the original parser.
+        val diskPrefix = if (contentParserForTests == null) parsedContentCache.loadPreview(book.id, file) else null
+        if (diskPrefix != null && diskPrefix.content.totalElements > previewElementIndex) {
+            onPreview(diskPrefix.content)
+        }
+        // Restoring a huge complete snapshot also takes work. A separately
+        // bounded prefix reaches the reader before decoding that snapshot.
+        val disk = if (contentParserForTests != null) null
+            else if (diskPrefix != null && !parsedContentCache.entryFile(book.id).isFile) diskPrefix
+            else parsedContentCache.load(book.id, file)
+        if (disk?.complete == false && diskPrefix == null && disk.content.totalElements > previewElementIndex) {
+            onPreview(disk.content)
+        }
+        fun publishPreview(partial: BookContent) {
+            // The disk prefix can be farther ahead than the parser's first
+            // checkpoint. Never replace visible text with a shorter prefix.
+            if (disk?.complete == false && partial.totalElements <= disk.content.totalElements) return
+            onPreview(partial)
+            if (contentParserForTests == null) {
+                val snapshot = openingContentSnapshot(partial, previewElementIndex)
+                if (disk?.complete != false || snapshot.totalElements > disk.content.totalElements) {
+                    scheduleContentCacheWrite(book, file, snapshot, complete = false)
+                }
+            }
+        }
+        val content = disk?.takeIf { it.complete }?.content
+            ?: contentParserForTests?.invoke(file, book.format, extracted, previewElementIndex, ::publishPreview)
+            ?: if (book.format == BookFormat.EPUB) {
+                EpubParser.parseContent(
+                    file, extracted, ReaderResourceLimits.DEFAULT,
+                    onPreview = ::publishPreview, previewElementIndex = previewElementIndex,
+                )
+            } else {
+                BookParsers.parseContent(file, book.format, extracted)
+            }
         synchronized(contentLock) {
             if (books.value.firstOrNull { it.id == book.id }?.fileName == book.fileName) {
+                cachedContentResources?.close()
+                cachedContentResources = readerCacheBudget.pin(book.id)
                 cachedContentId = book.id
                 cachedContentFileName = book.fileName
                 cachedContent = content
             }
         }
+        if (disk?.complete != true && contentParserForTests == null) {
+            scheduleContentCacheWrite(book, file, content, complete = true)
+        }
+        trimReaderCaches()
         return content
+    }
+
+    /** Writes never delay the readable result, and newer snapshots win. */
+    private fun scheduleContentCacheWrite(book: Book, source: File, content: BookContent, complete: Boolean) {
+        val pin = readerCacheBudget.pin(book.id)
+        synchronized(contentLock) {
+            val previous = contentCacheWrites[book.id]
+            val writer = bookkeeping.launch(readerContentCacheDispatcher, start = CoroutineStart.LAZY) {
+                try {
+                    previous?.join()
+                    if (isCurrentContentSource(book)) {
+                        parsedContentCache.save(book.id, source, content, complete)
+                    }
+                } finally {
+                    pin.close()
+                    trimReaderCachesNow()
+                }
+            }
+            contentCacheWrites[book.id] = writer
+            writer.invokeOnCompletion {
+                synchronized(contentLock) {
+                    if (contentCacheWrites[book.id] === writer) contentCacheWrites.remove(book.id)
+                }
+            }
+            writer.start()
+        }
+    }
+
+    internal suspend fun awaitContentCacheWrites() {
+        val writers = synchronized(contentLock) { contentCacheWrites.values.toList() }
+        writers.forEach { it.join() }
     }
 
     private val contentLock = Any()
@@ -1216,6 +1436,8 @@ open class BookRepository(private val context: Context? = null) {
             cachedContentId = null
             cachedContentFileName = null
             cachedContent = null
+            cachedContentResources?.close()
+            cachedContentResources = null
         }
     }
 
@@ -1561,16 +1783,7 @@ open class BookRepository(private val context: Context? = null) {
         // A corrupt library.json reads as an empty list — don't wipe the
         // (regenerable, but expensive) caches on that failure mode.
         if (isIndexCorrupted || (indexStore.file.exists() && _books.value.isEmpty())) return@withContext
-        val ids = _books.value.mapTo(HashSet()) { it.id }
-        imagesDir.listFiles()?.forEach { dir ->
-            if (dir.isDirectory && dir.name !in ids) dir.deleteRecursively()
-        }
-        val c = context
-        if (c != null) {
-            File(c.filesDir, "pagination").listFiles()?.forEach { file ->
-                if (file.extension == "json" && file.nameWithoutExtension !in ids) file.delete()
-            }
-        }
+        readerCacheBudget.trim(_books.value.mapTo(HashSet()) { it.id })
     }
 
     /** File metadata is read afresh so author boundaries are not guessed from a comma-separated label. */
@@ -1638,7 +1851,7 @@ open class BookRepository(private val context: Context? = null) {
                         val previous = if (indexStore.backupFile.exists())
                             json.decodeFromString(LibraryIndex.serializer(), indexStore.backupFile.readText()).books else emptyList()
                         val records = stored().index.books + previous
-                        val keptBooks = records.mapNotNull { it.fileName }.toSet()
+                        val keptBooks = records.mapNotNull { it.fileName }.toSet() + referencedQueueFiles()
                         val keptCovers = records.mapNotNull { it.coverFileName }.toSet() + referencedCovers()
                         booksDir.listFiles()?.filter { it.name.startsWith("$bookId-edit-") && it.name !in keptBooks }?.forEach { it.delete() }
                         coversDir.listFiles()?.filter { it.name.startsWith("$bookId-edit-") && it.name !in keptCovers }?.forEach { it.delete() }

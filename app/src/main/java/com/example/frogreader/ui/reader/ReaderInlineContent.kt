@@ -53,7 +53,7 @@ private fun readerInlineEntries(
         entries += ReaderInlineEntry(math.start, math.end, math.id,
             InlineTextContent(math.placeholder) { math.Content() })
     }
-    for (ruby in rubyInlineLayouts(text, style, measurer, density, bookFonts.takeIf { publisherStyles }.orEmpty())) {
+    for (ruby in rubyInlineLayouts(text, style, measurer, density, bookFonts.takeIf { publisherStyles }.orEmpty(), publisherStyles)) {
         entries += ReaderInlineEntry(ruby.start, ruby.end, ruby.id,
             InlineTextContent(ruby.placeholder) { ruby.Content() })
     }
@@ -81,9 +81,11 @@ internal fun readerInlinePlaceholders(
     bookFonts: Map<String, FontFamily> = emptyMap(),
     maxWidthPx: Int? = null,
     publisherStyles: Boolean = true,
-): List<AnnotatedString.Range<Placeholder>> =
-    readerInlineEntries(text, style, measurer, density, bookFonts, maxWidthPx, publisherStyles)
+): List<AnnotatedString.Range<Placeholder>> {
+    val typography = readerTypographyPlan(text, style, density, publisherStyles, bookFonts)
+    return readerInlineEntries(typography.text, typography.style, measurer, density, bookFonts, maxWidthPx, publisherStyles)
         .map { AnnotatedString.Range(it.content.placeholder, it.start, it.end) }
+}
 
 /** The wrapper prevents individual measurement paths from forgetting inline geometry. */
 internal fun TextMeasurer.measureReader(
@@ -97,13 +99,14 @@ internal fun TextMeasurer.measureReader(
     bookFonts: Map<String, FontFamily> = emptyMap(),
     publisherStyles: Boolean = true,
 ): TextLayoutResult {
-    val entries = readerInlineEntries(text, style, this, density, bookFonts,
+    val typography = readerTypographyPlan(text, style, density, publisherStyles, bookFonts)
+    val entries = readerInlineEntries(typography.text, typography.style, this, density, bookFonts,
         constraints.maxWidth.takeIf { it != Constraints.Infinity }, publisherStyles)
     val ranges = entries.map { it.start to it.end }
-    val layoutStyle = readerInlineLayoutStyle(style,
+    val layoutStyle = readerInlineLayoutStyle(typography.style,
         entries.map { it.content.placeholder }, density, entries.any { it.end - it.start > 1 })
-    return measure(readerInlineLayoutText(text, ranges, entries.associate { (it.start to it.end) to it.id },
-        naturalMetrics = style.lineHeight != layoutStyle.lineHeight), layoutStyle, overflow, softWrap, maxLines,
+    return measure(readerInlineLayoutText(typography.text, ranges, entries.associate { (it.start to it.end) to it.id },
+        naturalMetrics = typography.style.lineHeight != layoutStyle.lineHeight), layoutStyle, overflow, softWrap, maxLines,
         placeholders = entries.map { AnnotatedString.Range(it.content.placeholder, it.start, it.end) },
         constraints = constraints)
 }
@@ -163,11 +166,12 @@ private fun readerInlineTextPlan(
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     return remember(text, style, measurer, density, bookFonts, maxWidthPx, publisherStyles, invertImages) {
-        val entries = readerInlineEntries(text, style, measurer, density, bookFonts, maxWidthPx, publisherStyles, invertImages)
-        val layoutStyle = readerInlineLayoutStyle(style, entries.map { it.content.placeholder }, density,
+        val typography = readerTypographyPlan(text, style, density, publisherStyles, bookFonts)
+        val entries = readerInlineEntries(typography.text, typography.style, measurer, density, bookFonts, maxWidthPx, publisherStyles, invertImages)
+        val layoutStyle = readerInlineLayoutStyle(typography.style, entries.map { it.content.placeholder }, density,
             entries.any { it.end - it.start > 1 })
-        ReaderInlineTextPlan(readerInlineLayoutText(text, entries.map { it.start to it.end },
-            entries.associate { (it.start to it.end) to it.id }, naturalMetrics = style.lineHeight != layoutStyle.lineHeight),
+        ReaderInlineTextPlan(readerInlineLayoutText(typography.text, entries.map { it.start to it.end },
+            entries.associate { (it.start to it.end) to it.id }, naturalMetrics = typography.style.lineHeight != layoutStyle.lineHeight),
             layoutStyle,
             entries.associate { it.id to it.content })
     }

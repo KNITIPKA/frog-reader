@@ -53,12 +53,13 @@ internal fun inlineTextBoxLayouts(
         if (mark.start !in 0 until text.length || mark.end !in (mark.start + 1)..text.length ||
             mark.end - mark.start != spec.sourceLength) continue
         val source = text.subSequence(mark.start, mark.end)
+        val typography = readerTypographyPlan(source, style.copy(textAlign = TextAlign.Start,
+            textIndent = TextIndent.None, lineHeight = TextUnit.Unspecified, lineHeightStyle = null), density, true)
         // Source/link/content IDs do not affect glyph geometry. Removing
         // them here lets repeated stars reuse the TextMeasurer's shape cache.
-        val fragment = AnnotatedString(source.text, source.spanStyles, source.paragraphStyles)
+        val fragment = AnnotatedString(typography.text.text, typography.text.spanStyles, typography.text.paragraphStyles)
         if ('\n' in fragment.text || fragment.text.codePointCount(0, fragment.length) > 2) continue
-        val shaped = measurer.measure(fragment, style.copy(textAlign = TextAlign.Start,
-            textIndent = TextIndent.None, lineHeight = TextUnit.Unspecified, lineHeightStyle = null), softWrap = false)
+        val shaped = measurer.measure(fragment, typography.style, softWrap = false)
         if (shaped.lineCount != 1) continue
         val widthPx = ceil(baseFontPx * spec.widthEm).coerceAtLeast(1f)
         // The box ends on the surrounding baseline; ordinary descenders

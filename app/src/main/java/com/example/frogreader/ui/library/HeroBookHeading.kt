@@ -19,7 +19,6 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
-import com.example.frogreader.ui.theme.LocalFrogColors
 import java.util.Locale
 import kotlin.math.abs
 
@@ -33,7 +32,8 @@ internal fun HeroBookHeading(title: String, author: String?, modifier: Modifier 
         fontWeight = FontWeight.SemiBold,
         lineHeight = 1.16.em,
         letterSpacing = (-0.3).sp,
-        color = LocalFrogColors.current.ink,
+        // This heading sits on the hero's neutral card, below the colored header.
+        color = MaterialTheme.colorScheme.onSurface,
     )
     val authorStyle = baseStyle.copy(
         fontSize = 12.5.sp,

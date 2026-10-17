@@ -23,8 +23,11 @@ import com.example.frogreader.data.model.BookTextDirection
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.HeadingDefaults
 import com.example.frogreader.data.model.ParagraphStyle
+import com.example.frogreader.data.model.FontTypography
 import com.example.frogreader.data.parser.LanguageTag
 import com.example.frogreader.ui.theme.fontFamilyFor
+import com.example.frogreader.ui.theme.resolveFontTypography
+import com.example.frogreader.ui.theme.bundledFontFamilyForCss
 
 /**
  * Single source of truth for reader text styles and spacing.
@@ -39,11 +42,11 @@ import com.example.frogreader.ui.theme.fontFamilyFor
 object ReaderMetrics {
 
     /** Base horizontal padding of the reading column (user setting). */
-    fun horizontalPadding(margins: PageMargins): Dp = when (margins) {
-        PageMargins.NARROW -> 10.dp
-        PageMargins.NORMAL -> 20.dp
-        PageMargins.WIDE -> 34.dp
-    }
+    fun horizontalPadding(settings: ReaderSettings): Dp = settings.sideMarginDp.dp
+
+    /** Resolve old presets through the same bounds as numeric settings. */
+    fun horizontalPadding(margins: PageMargins): Dp =
+        horizontalPadding(ReaderSettings(pageMargins = margins))
 
     val maxImageHeight = 520.dp
 
@@ -230,7 +233,8 @@ object ReaderMetrics {
                 )
             } else null,
             fontFamily = bookFamilyFor(block, settings, bookFonts)
-                ?: fontFamilyFor(settings.font, settings.customFontPath),
+                ?: fontFamilyFor(settings.font, settings.customFontPath, settings.customFontAxes,
+                    settings.customFontAuto, settings.customFontFamilyPaths),
             fontFeatureSettings = block?.fontFeatureSettings.takeIf { settings.bookStyles },
             hyphens = if (hyphenate) Hyphens.Auto else Hyphens.None,
             lineBreak = LineBreak.Paragraph,
@@ -243,7 +247,7 @@ object ReaderMetrics {
                 BookTextDirection.AUTO, null -> autoTextDirection(resolvedLanguage)
             },
         )
-        return when (element) {
+        val result = when (element) {
             is ContentElement.Paragraph -> paragraphStyle(
                 element, settings, fontSize, isParagraphStart, base,
             )
@@ -252,6 +256,7 @@ object ReaderMetrics {
 
             else -> base
         }
+        return applyTypography(result, settings, block?.fontTypography)
     }
 
     /** The book's own font for this block, when the toggle allows it. */
@@ -263,6 +268,7 @@ object ReaderMetrics {
         if (!settings.bookStyles) return null
         val name = block?.fontFamily ?: return null
         bookFonts[name]?.let { return it }
+        bundledFontFamilyForCss(name)?.let { return it }
         return when (name) {
             "serif" -> FontFamily.Serif
             "sans-serif" -> FontFamily.SansSerif
@@ -335,7 +341,8 @@ object ReaderMetrics {
             fontSize = (fontSize * scale).sp,
             lineHeight = (fontSize * scale * lineHeightMult(block, settings)).sp,
             fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
-            fontWeight = if (bold) FontWeight.Bold else null,
+            fontWeight = block?.fontWeight?.coerceIn(1, 1000)?.let(::FontWeight)
+                ?: if (bold) FontWeight.Bold else block?.bold?.let { FontWeight.Normal },
             textAlign = align,
             textIndent = if (isParagraphStart &&
                 (wantsIndent || authoredIndentEm != null && authoredIndentEm <= 0f &&
@@ -379,7 +386,8 @@ object ReaderMetrics {
         return base.copy(
             fontSize = (fontSize * scale).sp,
             lineHeight = (fontSize * scale * lineMult).sp,
-            fontWeight = if (block?.bold == false) FontWeight.Normal else FontWeight.Bold,
+            fontWeight = block?.fontWeight?.coerceIn(1, 1000)?.let(::FontWeight)
+                ?: if (block?.bold == false) FontWeight.Normal else FontWeight.Bold,
             fontStyle = if (block?.italic == true) FontStyle.Italic else FontStyle.Normal,
             textAlign = align,
             hyphens = Hyphens.None,
@@ -416,12 +424,12 @@ object ReaderMetrics {
         language: String?,
     ): TextStyle {
         val resolvedLanguage = cap?.language ?: language
-        return TextStyle(
+        return applyTypography(TextStyle(
             fontSize = capFontSizeSp.sp,
             lineHeight = capFontSizeSp.sp,
             fontFamily = if (settings.bookStyles) {
                 cap?.fontFamily?.let { family ->
-                    bookFonts[family] ?: when (family) {
+                    bookFonts[family] ?: bundledFontFamilyForCss(family) ?: when (family) {
                         "serif" -> FontFamily.Serif
                         "sans-serif", "sans" -> FontFamily.SansSerif
                         "monospace" -> FontFamily.Monospace
@@ -431,9 +439,12 @@ object ReaderMetrics {
                 }
             } else {
                 null
-            } ?: fontFamilyFor(settings.font, settings.customFontPath),
-            fontWeight = if (cap?.bold == true) FontWeight.Bold else null,
+            } ?: fontFamilyFor(settings.font, settings.customFontPath, settings.customFontAxes,
+                    settings.customFontAuto, settings.customFontFamilyPaths),
+            fontWeight = cap?.fontWeight?.coerceIn(1, 1000)?.let(::FontWeight)
+                ?: when (cap?.bold) { true -> FontWeight.Bold; false -> FontWeight.Normal; null -> null },
             fontStyle = if (cap?.italic == true) FontStyle.Italic else FontStyle.Normal,
+            fontFeatureSettings = cap?.fontFeatureSettings.takeIf { settings.bookStyles },
             localeList = resolvedLanguage?.let { LocaleList(it) },
             textDirection = when (cap?.direction) {
                 BookTextDirection.LTR -> TextDirection.Ltr
@@ -445,7 +456,7 @@ object ReaderMetrics {
                 alignment = LineHeightStyle.Alignment.Center,
                 trim = LineHeightStyle.Trim.Both,
             ),
-        )
+        ), settings, cap?.fontTypography)
     }
 
     /**
@@ -484,18 +495,21 @@ object ReaderMetrics {
             cellBlock?.fontFamily != null -> cellBlock
             else -> tableBlock
         }
+        val resolvedWeight = cellBlock?.fontWeight ?: tableBlock?.fontWeight
         val resolvedBold = cellBlock?.bold ?: tableBlock?.bold
         val resolvedItalic = cellBlock?.italic ?: tableBlock?.italic
         val resolvedLanguage = cellBlock?.language ?: tableBlock?.language ?: language
         val resolvedDirection = cellBlock?.direction ?: tableBlock?.direction
-        return TextStyle(
+        return applyTypography(TextStyle(
             fontSize = resolvedSize.sp,
             lineHeight = (resolvedSize * resolvedLineHeight).sp,
             fontFamily = bookFamilyFor(fontBlock, settings, bookFonts)
-                ?: fontFamilyFor(settings.font, settings.customFontPath),
+                ?: fontFamilyFor(settings.font, settings.customFontPath, settings.customFontAxes,
+                    settings.customFontAuto, settings.customFontFamilyPaths),
             fontFeatureSettings = (cellBlock?.fontFeatureSettings ?: tableBlock?.fontFeatureSettings)
                 .takeIf { settings.bookStyles },
             fontWeight = when {
+                resolvedWeight != null -> FontWeight(resolvedWeight.coerceIn(1, 1000))
                 resolvedBold == true -> FontWeight.Bold
                 resolvedBold == false -> FontWeight.Normal
                 header -> FontWeight.Bold
@@ -514,7 +528,19 @@ object ReaderMetrics {
                 BookTextDirection.RTL -> TextDirection.Rtl
                 BookTextDirection.AUTO, null -> autoTextDirection(resolvedLanguage)
             },
+        ), settings, cellBlock?.fontTypography ?: tableBlock?.fontTypography)
+    }
+
+    /** Reader preferences supply defaults; authored properties win in publisher mode. */
+    private fun applyTypography(style: TextStyle, settings: ReaderSettings, authored: FontTypography?): TextStyle {
+        val family = style.fontFamily ?: return style
+        val css = authored.takeIf { settings.bookStyles }
+        val request = FontTypography(
+            variationAxes = css?.variationAxes,
+            stretchPercent = css?.stretchPercent,
+            opticalSizing = css?.opticalSizing,
         )
+        return style.copy(fontFamily = resolveFontTypography(family, style.fontSize.value, request))
     }
 
     private fun autoTextDirection(language: String?): TextDirection =

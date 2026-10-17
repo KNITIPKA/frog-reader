@@ -13,6 +13,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Login
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Fingerprint
+import androidx.compose.material.icons.rounded.Brightness6
+import androidx.compose.material.icons.rounded.DragHandle
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SwipeUp
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Vibration
@@ -22,6 +27,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -34,31 +40,55 @@ import com.example.frogreader.R
 import com.example.frogreader.data.AppLockDelay
 import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.StartupDestination
+import com.example.frogreader.data.translation.EXTERNAL_TEXT_ASK_EVERY_TIME
+import com.example.frogreader.data.translation.ExternalTextAction
+import com.example.frogreader.data.translation.resolveExternalTextApp
 import com.example.frogreader.ui.lock.canUseAppLock
-import com.example.frogreader.ui.translation.TranslatorPickerDialog
-import com.example.frogreader.ui.translation.rememberTranslatorApps
+import com.example.frogreader.ui.translation.ExternalTextAppPickerDialog
+import com.example.frogreader.ui.translation.descriptionRes
+import com.example.frogreader.ui.translation.rememberExternalTextApps
+import com.example.frogreader.ui.translation.titleRes
+import java.io.IOException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun ReadingSettingsPage(
     settings: AppSettings,
     onUpdate: ((AppSettings) -> AppSettings) -> Unit,
     onBack: () -> Unit,
+    saveExternalApp: suspend ((AppSettings) -> AppSettings) -> Unit = { onUpdate(it) },
+    onExternalAppSaveFailed: () -> Unit = {},
 ) {
-    var chooseTranslator by remember { mutableStateOf(false) }
-    val translators = rememberTranslatorApps()
-    val selectedTranslator = translators?.firstOrNull { it.id == settings.defaultTranslator }
-    if (chooseTranslator) {
-        TranslatorPickerDialog(
-            selected = settings.defaultTranslator,
-            onChoose = { app ->
-                onUpdate { it.copy(defaultTranslator = app.id) }
-                chooseTranslator = false
-            },
-            onReset = {
-                onUpdate { it.copy(defaultTranslator = null) }
-                chooseTranslator = false
-            },
-            onDismiss = { chooseTranslator = false },
+    var choosingAction by remember { mutableStateOf<ExternalTextAction?>(null) }
+    var savingChoice by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    choosingAction?.let { action ->
+        fun saveChoice(id: String?) {
+            if (savingChoice) return
+            savingChoice = true
+            scope.launch {
+                try {
+                    saveExternalApp { it.withDefaultApp(action, id) }
+                    choosingAction = null
+                } catch (_: IOException) {
+                    onExternalAppSaveFailed()
+                } catch (failure: RuntimeException) {
+                    if (failure is CancellationException) throw failure
+                    onExternalAppSaveFailed()
+                } finally {
+                    savingChoice = false
+                }
+            }
+        }
+        ExternalTextAppPickerDialog(
+            action = action,
+            selected = settings.defaultApp(action),
+            busy = savingChoice,
+            onChoose = { app -> saveChoice(app.id) },
+            onAskEveryTime = { saveChoice(EXTERNAL_TEXT_ASK_EVERY_TIME) },
+            onReset = { saveChoice(null) },
+            onDismiss = { choosingAction = null },
         )
     }
     SettingsPageScaffold(
@@ -112,6 +142,8 @@ internal fun ReadingSettingsPage(
         Spacer(Modifier.height(24.dp))
         SettingsSectionLabel(stringResource(R.string.settings_reading_behavior))
         SettingsCard {
+            ReaderPanelBehaviorSettingsRows(settings, onUpdate)
+            SettingsDivider()
             SettingsSwitchRow(
                 icon = Icons.Rounded.Timer,
                 title = stringResource(R.string.settings_auto_hide_return),
@@ -119,19 +151,31 @@ internal fun ReadingSettingsPage(
                 checked = settings.autoHideReturnButton,
                 onCheckedChange = { checked -> onUpdate { it.copy(autoHideReturnButton = checked) } },
             )
-            SettingsDivider()
-            SettingsNavigationRow(
-                icon = Icons.Rounded.Translate,
-                title = stringResource(R.string.settings_default_translator),
-                subtitle = selectedTranslator?.label ?: stringResource(
+            ExternalTextAction.entries.forEach { action ->
+                val apps = rememberExternalTextApps(action)
+                val choice = settings.defaultApp(action)
+                val selectedApp = apps?.let { resolveExternalTextApp(it, choice) }
+                val selectedLabel = if (selectedApp != null) {
+                    if (selectedApp.label == selectedApp.actionLabel) selectedApp.label else stringResource(
+                        R.string.external_text_app_and_action,
+                        selectedApp.label,
+                        selectedApp.actionLabel,
+                    )
+                } else stringResource(
                     when {
-                        settings.defaultTranslator == null -> R.string.translator_not_selected
-                        translators == null -> R.string.translator_loading
-                        else -> R.string.translator_unavailable
+                        choice == EXTERNAL_TEXT_ASK_EVERY_TIME -> R.string.external_text_ask_every_time
+                        choice == null -> R.string.external_text_not_selected
+                        apps == null -> R.string.external_text_loading
+                        else -> R.string.external_text_unavailable
                     },
-                ),
-                onClick = { chooseTranslator = true },
-            )
+                )
+                SettingsDivider()
+                ExternalTextActionSettingsRow(
+                    action = action,
+                    selectedLabel = selectedLabel,
+                    onClick = { choosingAction = action },
+                )
+            }
         }
 
         Spacer(Modifier.height(24.dp))
@@ -149,6 +193,70 @@ internal fun ReadingSettingsPage(
         }
         SettingsHelper(stringResource(R.string.settings_reading_helper))
     }
+}
+
+@Composable
+internal fun ExternalTextActionSettingsRow(
+    action: ExternalTextAction,
+    selectedLabel: String,
+    onClick: () -> Unit,
+) {
+    SettingsNavigationRow(
+        icon = when (action) {
+            ExternalTextAction.TRANSLATE -> Icons.Rounded.Translate
+            ExternalTextAction.DEFINE -> Icons.AutoMirrored.Rounded.MenuBook
+            ExternalTextAction.SEARCH -> Icons.Rounded.Search
+        },
+        title = stringResource(action.titleRes),
+        subtitle = stringResource(
+            R.string.external_text_settings_subtitle,
+            stringResource(action.descriptionRes),
+            selectedLabel,
+        ),
+        onClick = onClick,
+    )
+}
+
+private fun AppSettings.defaultApp(action: ExternalTextAction): String? = when (action) {
+    ExternalTextAction.TRANSLATE -> defaultTranslator
+    ExternalTextAction.DEFINE -> defaultDictionary
+    ExternalTextAction.SEARCH -> defaultSearchApp
+}
+
+private fun AppSettings.withDefaultApp(action: ExternalTextAction, id: String?): AppSettings = when (action) {
+    ExternalTextAction.TRANSLATE -> copy(defaultTranslator = id)
+    ExternalTextAction.DEFINE -> copy(defaultDictionary = id)
+    ExternalTextAction.SEARCH -> copy(defaultSearchApp = id)
+}
+
+@Composable
+internal fun ReaderPanelBehaviorSettingsRows(
+    settings: AppSettings,
+    onUpdate: ((AppSettings) -> AppSettings) -> Unit,
+) {
+    SettingsSwitchRow(
+        icon = Icons.Rounded.Brightness6,
+        title = stringResource(R.string.settings_reader_brightness_swipe),
+        subtitle = stringResource(R.string.settings_reader_brightness_swipe_subtitle),
+        checked = settings.brightnessSwipeEnabled,
+        onCheckedChange = { checked -> onUpdate { it.copy(brightnessSwipeEnabled = checked) } },
+    )
+    SettingsDivider()
+    SettingsSwitchRow(
+        icon = Icons.Rounded.DragHandle,
+        title = stringResource(R.string.settings_reader_collapsed_handle),
+        subtitle = stringResource(R.string.settings_reader_collapsed_handle_subtitle),
+        checked = settings.showCollapsedReaderHandle,
+        onCheckedChange = { checked -> onUpdate { it.copy(showCollapsedReaderHandle = checked) } },
+    )
+    SettingsDivider()
+    SettingsSwitchRow(
+        icon = Icons.Rounded.SwipeUp,
+        title = stringResource(R.string.settings_reader_expand_on_swipe),
+        subtitle = stringResource(R.string.settings_reader_expand_on_swipe_subtitle),
+        checked = settings.expandReaderPanelsOnSwipe,
+        onCheckedChange = { checked -> onUpdate { it.copy(expandReaderPanelsOnSwipe = checked) } },
+    )
 }
 
 @Composable

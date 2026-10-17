@@ -60,7 +60,7 @@ data class InlineRuby(
                 reading = reading.text,
                 spans = reading.spanStyles.map { RubySpan.from(it.item, it.start, it.end) },
                 annotations = reading.getStringAnnotations(0, reading.length)
-                    .filter { it.tag in setOf(INLINE_FONT_FAMILY_TAG, HIDDEN_TEXT_TAG, BIDI_TAG) }
+                    .filter { it.tag in setOf(INLINE_FONT_FAMILY_TAG, INLINE_FONT_TYPOGRAPHY_TAG, HIDDEN_TEXT_TAG, BIDI_TAG) }
                     .take(MAX_SPANS)
                     .map { RubyAnnotation(it.tag, it.item, it.start, it.end) },
             )

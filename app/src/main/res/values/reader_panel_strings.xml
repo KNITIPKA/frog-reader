@@ -1,0 +1,24 @@
+<resources>
+    <string name="settings_reader_collapsed_handle">Show handle in collapsed menu</string>
+    <string name="settings_reader_collapsed_handle_subtitle">Keep the three-line handle visible when the reader menu is open but its panels are closed</string>
+    <string name="settings_reader_expand_on_swipe">Expand panels on swipe</string>
+    <string name="settings_reader_expand_on_swipe_subtitle">Swiping up in settings or contents expands the panel before scrolling</string>
+    <string name="reader_panel_open">Open panel</string>
+    <string name="reader_panel_closed">Closed panel</string>
+    <string name="reader_panel_expand">Expand panel</string>
+    <string name="reader_panel_collapse">Collapse panel</string>
+    <string name="reader_panel_expanded">Expanded panel</string>
+    <string name="reader_panel_compact">Compact panel</string>
+    <string name="settings_reader_brightness_swipe">Swipe to adjust brightness</string>
+    <string name="settings_reader_brightness_swipe_subtitle">Swipe vertically along the left edge of the page to change brightness</string>
+    <string name="reader_counter_subtitle">Display the current page number while reading</string>
+    <string name="reader_counter_paged_only">Available in Pages mode</string>
+    <string name="reader_counter_style">Style</string>
+    <string name="reader_counter_page_only">Page only</string>
+    <string name="reader_counter_page_total">Page / Total</string>
+    <string name="reader_counter_chapter">Chapter</string>
+    <string name="reader_counter_loading">Book page numbers will appear when pagination is ready</string>
+    <string name="reader_counter_unavailable">—</string>
+    <string name="reader_counter_total_unavailable">— / —</string>
+    <string name="reader_page_number_total">%1$d/%2$d</string>
+</resources>

@@ -2,6 +2,8 @@ package com.example.frogreader.data.parser
 
 import com.example.frogreader.data.model.BookTextDirection
 import com.example.frogreader.data.model.FirstLetterStyle
+import com.example.frogreader.data.model.FontTypography
+import com.example.frogreader.data.model.normalizeFontUnicodeRange
 import com.example.frogreader.data.model.HeadingDefaults
 import com.example.frogreader.data.model.PublisherBorderSide
 import com.example.frogreader.data.model.PublisherBorderStyle
@@ -51,12 +53,18 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         val baseDir: String,
         val bold: Boolean,
         val italic: Boolean,
+        val weight: Int = if (bold) 700 else 400,
+        val weightMin: Int = weight,
+        val weightMax: Int = weight,
+        val stretchMin: Float = 100f,
+        val stretchMax: Float = stretchMin,
+        val unicodeRange: String? = null,
     )
 
     // ------------------------------------------------------------- model
 
     private enum class MarginSide { TOP, RIGHT, BOTTOM, LEFT, INLINE_START, INLINE_END }
-    private enum class FontPart { STYLE, WEIGHT, SIZE, LINE_HEIGHT, FAMILY, VARIANT }
+    private enum class FontPart { STYLE, WEIGHT, SIZE, LINE_HEIGHT, FAMILY, VARIANT, STRETCH, FEATURES, KERNING, OPTICAL, VARIATIONS, LIGATURES }
     private enum class BorderPart { WIDTH, STYLE, COLOR }
 
     private class Declaration(
@@ -396,6 +404,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
     class Computed(
         val italic: Boolean?,
         val bold: Boolean?,
+        val fontWeight: Int?,
         val fontSizeEm: Float,
         /** "center" | "left" | "right" | "end" | "start" | "justify" or null. */
         val textAlign: String?,
@@ -491,6 +500,9 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         internal val fontVariantCaps: String? = null,
         internal val fontVariantNumeric: String? = null,
         internal val explicitFontFeatures: String? = null,
+        internal val fontKerning: String? = null,
+        internal val fontVariantLigatures: String? = null,
+        val fontTypography: FontTypography = FontTypography(),
         /** Authored case conversion; source text is retained until mapping. */
         val textTransform: String? = null,
         /** Visibility retains layout; unlike display:none it can be overridden. */
@@ -528,6 +540,29 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
     private var stylesheetDeclarationCount = 0
     private val selectorMatchContext = SelectorMatchContext(MAX_SELECTOR_MATCH_OPERATIONS)
     private val cache = HashMap<Element, Computed>()
+    /**
+     * Resolution depends on the inherited style, tag defaults, presentational
+     * attributes and the final ordered cascade. Selectors are still matched
+     * for every element before consulting this cache: identical-looking
+     * siblings can have different structural or contextual CSS rules.
+     *
+     * Computed and Declaration use reference identity. The declaration order
+     * also matters when physical and logical properties address one side.
+     * No key holds a DOM element, and the cache is bounded even for chapters
+     * whose every paragraph has a unique style.
+     */
+    private data class SharedComputedKey(
+        val parent: Computed?,
+        val tag: String,
+        val align: String,
+        val direction: String,
+        val foreground: String,
+        val bodyForeground: String,
+        val background: String,
+        val declarations: List<Pair<String, Declaration>>,
+    )
+
+    private val sharedComputed = HashMap<SharedComputedKey, Computed>()
     private val parsingNamespaces = mutableMapOf<String, String>()
     private val sourceSheets = sheets.toList()
     private var darkImageResolver: CssResolver? = null
@@ -564,7 +599,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         }
         for (index in unresolved.lastIndex downTo 0) {
             val current = unresolved[index]
-            inherited = resolve(current, inherited).also { cache[current] = it }
+            inherited = resolveShared(current, inherited).also { cache[current] = it }
         }
         return checkNotNull(cache[element])
     }
@@ -576,11 +611,37 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
      */
     fun clearCache() {
         cache.clear()
+        sharedComputed.clear()
         // Structural selectors retain DOM elements too. Clear all chapter
         // caches while preserving the resolver's whole-book work ceiling.
         selectorMatchContext.clearCaches()
         darkImageResolver?.clearCache()
         responsiveResolvers.values.forEach(CssResolver::clearCache)
+    }
+
+    private fun resolveShared(element: Element, parent: Computed?): Computed {
+        val declared = declarationsFor(element)
+        val direction = element.attr("dir")
+        // An auto direction can inspect this element's actual text while
+        // resolving logical margins/padding. Text is deliberately absent
+        // from the shared key, so keep that path element-specific.
+        if (parent?.direction == "auto" || direction.trim().equals("auto", ignoreCase = true)) {
+            return resolve(element, parent, declared)
+        }
+        val key = SharedComputedKey(
+            parent = parent,
+            tag = element.normalName(),
+            align = element.attr("align"),
+            direction = direction,
+            foreground = element.attr("color"),
+            bodyForeground = element.attr("text"),
+            background = element.attr("bgcolor"),
+            declarations = declared.map { (property, declaration) -> property to declaration },
+        )
+        sharedComputed[key]?.let { return it }
+        return resolve(element, parent, declared).also { resolved ->
+            if (sharedComputed.size < MAX_SHARED_COMPUTED_STYLES) sharedComputed[key] = resolved
+        }
     }
 
     /** Bounded simple max-width queries retained for native responsive tables. */
@@ -772,11 +833,13 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         val merged = cascade(firstLetterRules, element, inline = null) ?: return null
 
         var scale = 1f
-        var bold: Boolean? = null
+        var fontWeight: Int? = null
         var italic: Boolean? = null
         var floatSide: String? = null
         var family: String? = null
         val inherited = computed(element)
+        val pseudo = resolve(element, inherited, merged, pseudoElement = true)
+        val typography = pseudo.fontTypography
         var direction = inherited.direction
         var foreground = merged["color"]?.value?.let {
             resolveForeground(it, inherited.foregroundColorArgb)
@@ -788,18 +851,12 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
             val value = declaration.value.trim().lowercase()
             when (property) {
                 "font-size" -> fontSizeFactor(value, 1f)?.let { scale = it }
-                "font-weight" -> {
-                    val number = value.toIntOrNull()
-                    when {
-                        value == "bold" || value == "bolder" -> bold = true
-                        number != null -> bold = number >= 600
-                        value == "normal" || value == "lighter" -> bold = false
-                    }
-                }
+                "font-weight" -> cssFontWeight(value, inherited.fontWeight)?.let { fontWeight = it }
 
                 "font-style" -> when {
                     value.startsWith("italic") || value.startsWith("oblique") -> italic = true
-                    value == "normal" -> italic = false
+                    value == "normal" || value == "initial" -> italic = false
+                    value in setOf("inherit", "unset", "revert", "revert-layer") -> italic = inherited.italic ?: false
                 }
 
                 "float" -> if (value == "left" || value == "right") floatSide = value
@@ -810,15 +867,20 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         }
         val isDropCap = floatSide != null || scale >= 1.5f
         val plain = !isDropCap && scale in 0.99f..1.01f &&
-            bold == null && italic == null && family == null &&
-            foreground == inherited.foregroundColorArgb && background == null
+            fontWeight == null && italic == null && family == null &&
+            foreground == inherited.foregroundColorArgb && background == null && typography == inherited.fontTypography &&
+            pseudo.fontFeatureSettings == inherited.fontFeatureSettings
         if (plain) return null
         return FirstLetterStyle(
             scale = scale.coerceIn(1f, 4f),
-            bold = bold,
-            italic = italic,
+            bold = (fontWeight ?: inherited.fontWeight)?.let { it >= 600 },
+            fontWeight = fontWeight ?: inherited.fontWeight,
+            italic = italic ?: inherited.italic,
             isDropCap = isDropCap,
             fontFamily = family,
+            fontTypography = typography,
+            fontFeatureSettings = pseudo.fontFeatureSettings
+                ?: "".takeIf { inherited.fontFeatureSettings != null },
             foregroundColorArgb = foreground.takeIf { it != inherited.foregroundColorArgb },
             backgroundColorArgb = background,
             leftSide = floatSide != "right",
@@ -878,9 +940,13 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         return FirstLetterStyle(
             scale = scale,
             bold = own.bold,
+            fontWeight = own.fontWeight,
             italic = own.italic,
             isDropCap = true,
             fontFamily = own.fontFamilyName,
+            fontTypography = own.fontTypography,
+            fontFeatureSettings = own.fontFeatureSettings
+                ?: "".takeIf { base.fontFeatureSettings != null },
             foregroundColorArgb = own.foregroundColorArgb
                 .takeIf { it != base.foregroundColorArgb },
             backgroundColorArgb = own.backgroundColorArgb,
@@ -900,6 +966,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         val text: String,
         val italic: Boolean? = null,
         val bold: Boolean? = null,
+        val fontWeight: Int? = null,
         /** Font size relative to the element (1 = same). */
         val scale: Float = 1f,
         val foregroundColorArgb: Int? = null,
@@ -910,6 +977,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         /** A generated block decoration, including empty border separators. */
         val publisherBox: PublisherBoxStyle? = null,
         val fontFamilyName: String? = null,
+        val fontTypography: FontTypography = FontTypography(),
     )
 
     /**
@@ -928,15 +996,20 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
             text = text,
             italic = value.italic.takeIf { it != inherited.italic },
             bold = value.bold.takeIf { it != inherited.bold },
+            fontWeight = value.fontWeight.takeIf { it != inherited.fontWeight },
             scale = (value.fontSizeEm / inherited.fontSizeEm).coerceIn(0.5f, 2.5f),
             foregroundColorArgb = value.foregroundColorArgb
                 .takeIf { it != inherited.foregroundColorArgb },
             backgroundColorArgb = value.backgroundColorArgb,
-            fontFeatureSettings = value.fontFeatureSettings,
+            fontFeatureSettings = value.fontFeatureSettings
+                ?: "".takeIf { inherited.fontFeatureSettings != null },
             textTransform = value.textTransform,
             visibilityHidden = value.visibilityHidden,
             publisherBox = publisherBoxStyle(element, value),
-            fontFamilyName = value.fontFamilyName,
+            // Generated code/pre glyphs inherit their semantic monospace;
+            // an explicit pseudo-element font-family clears this flag.
+            fontFamilyName = if (value.monospace) "monospace" else value.fontFamilyName,
+            fontTypography = value.fontTypography,
         )
     }
 
@@ -1145,7 +1218,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         }
 
         var italic = parent?.italic
-        var bold = parent?.bold
+        var fontWeight = parent?.fontWeight
         val inheritedFontSize = parent?.fontSizeEm ?: 1f
         val tagFontScale = when (if (pseudoElement) "" else element.normalName()) {
             "h1" -> HeadingDefaults.scale(1)
@@ -1199,6 +1272,11 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         var fontVariantCaps = parent?.fontVariantCaps
         var fontVariantNumeric = parent?.fontVariantNumeric
         var explicitFontFeatures = parent?.explicitFontFeatures
+        var fontKerning = parent?.fontKerning
+        var fontVariantLigatures = parent?.fontVariantLigatures
+        var variationAxes = parent?.fontTypography?.variationAxes
+        var stretchPercent = parent?.fontTypography?.stretchPercent
+        var opticalSizing = parent?.fontTypography?.opticalSizing
         var textTransform = parent?.textTransform
         var visibilityHidden = parent?.visibilityHidden ?: false
         var lineHeightNumber = parent?.lineHeightNumber
@@ -1347,64 +1425,107 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         // Tag defaults, so CSS-less inline tags keep working through here.
         when (if (pseudoElement) "" else element.normalName()) {
             "i", "em", "dfn", "var", "cite" -> italic = true
-            "b", "strong" -> bold = true
+            "b", "strong" -> fontWeight = 700
             "u", "ins" -> underline = true
             "s", "strike", "del" -> strike = true
             "sup" -> superScript = true
             "sub" -> subScript = true
             "code", "kbd", "samp", "tt", "pre" -> monospace = true
-            "h1", "h2", "h3", "h4", "h5", "h6" -> bold = true
+            "h1", "h2", "h3", "h4", "h5", "h6" -> fontWeight = 700
         }
 
+        val semanticWeight = fontWeight ?: 400
+        val semanticItalic = italic ?: false
         for ((property, declaration) in decl) {
             if (property.startsWith("--")) continue
-            val value = resolvedDeclarationValue(declaration, customProps) ?: continue
+            val value = resolvedDeclarationValue(
+                declaration, customProps, preserveCase = property == "font-variation-settings" || property == "font-feature-settings",
+            ) ?: continue
             when (property) {
                 "font-style" -> when {
                     value.startsWith("italic") || value.startsWith("oblique") -> italic = true
-                    value == "normal" -> italic = false
+                    value == "normal" || value == "initial" -> italic = false
+                    value == "inherit" || value == "unset" -> italic = parent?.italic ?: false
+                    value == "revert" || value == "revert-layer" -> italic = semanticItalic
                 }
 
-                "font-weight" -> {
-                    val number = value.toIntOrNull()
-                    when {
-                        value == "bold" || value == "bolder" -> bold = true
-                        number != null -> bold = number >= 600
-                        value == "normal" || value == "lighter" -> bold = false
-                    }
-                }
+                "font-weight" -> cssFontWeight(value, parent?.fontWeight, semanticWeight)?.let { fontWeight = it }
 
                 // Resolved above so declaration order cannot affect it.
                 "font-size" -> Unit
 
                 "font-variant", "font-variant-caps" -> when (value) {
-                    "inherit", "unset" -> Unit
+                    "inherit", "unset" -> {
+                        fontVariantCaps = parent?.fontVariantCaps
+                        if (property == "font-variant") {
+                            fontVariantNumeric = parent?.fontVariantNumeric
+                            fontVariantLigatures = parent?.fontVariantLigatures
+                        }
+                    }
                     "normal", "initial", "revert", "revert-layer" -> {
                         fontVariantCaps = null
-                        if (property == "font-variant") fontVariantNumeric = null
+                        if (property == "font-variant") {
+                            fontVariantNumeric = null
+                            fontVariantLigatures = null
+                        }
                     }
                     "small-caps", "all-small-caps", "petite-caps", "all-petite-caps", "unicase", "titling-caps" ->
                         {
                             fontVariantCaps = value
-                            if (property == "font-variant") fontVariantNumeric = null
+                            if (property == "font-variant") {
+                                fontVariantNumeric = null
+                                fontVariantLigatures = null
+                            }
                         }
                     else -> if (property == "font-variant") {
                         val tokens = value.split(whitespaceRegex)
                         fontVariantCaps = tokens.firstOrNull { it in FONT_VARIANT_CAPS_FEATURES }
                         fontVariantNumeric = tokens.filter { it in FONT_VARIANT_NUMERIC_FEATURES }
                             .joinToString(" ").takeIf { it.isNotEmpty() }
+                        fontVariantLigatures = tokens.filter { it in FONT_VARIANT_LIGATURE_FEATURES || it == "none" }
+                            .joinToString(" ").takeIf { it.isNotEmpty() }
                     }
                 }
 
                 "font-variant-numeric" -> when (value) {
-                    "inherit", "unset" -> Unit
+                    "inherit", "unset" -> fontVariantNumeric = parent?.fontVariantNumeric
                     "normal", "initial", "revert", "revert-layer" -> fontVariantNumeric = null
                     else -> if (value.split(whitespaceRegex).all { it in FONT_VARIANT_NUMERIC_FEATURES }) {
                         fontVariantNumeric = value
                     }
                 }
 
-                "font-feature-settings" -> when (value) {
+                "font-variation-settings" -> when (value.lowercase()) {
+                    "inherit", "unset", "revert", "revert-layer" -> variationAxes = parent?.fontTypography?.variationAxes
+                    "normal", "initial" -> variationAxes = emptyMap()
+                    else -> parseFontVariationSettings(value)?.let { variationAxes = it }
+                }
+
+                "font-stretch", "font-width" -> when (value) {
+                    "inherit", "unset", "revert", "revert-layer" -> stretchPercent = parent?.fontTypography?.stretchPercent
+                    "initial" -> stretchPercent = 100f
+                    else -> parseFontStretch(value)?.let { stretchPercent = it }
+                }
+
+                "font-optical-sizing" -> when (value) {
+                    "inherit", "unset", "revert", "revert-layer" -> opticalSizing = parent?.fontTypography?.opticalSizing
+                    "auto", "initial" -> opticalSizing = true
+                    "none" -> opticalSizing = false
+                }
+
+                "font-kerning" -> when (value) {
+                    "inherit", "unset", "revert", "revert-layer" -> fontKerning = parent?.fontKerning
+                    "auto", "initial" -> fontKerning = null
+                    "normal", "none" -> fontKerning = value
+                }
+
+                "font-variant-ligatures" -> when (value) {
+                    "inherit", "unset", "revert", "revert-layer" -> fontVariantLigatures = parent?.fontVariantLigatures
+                    "normal", "initial" -> fontVariantLigatures = null
+                    else -> if (validLigatureSettings(value)) fontVariantLigatures = value
+                }
+
+                "font-feature-settings" -> when (value.lowercase()) {
                     "inherit", "unset" -> Unit
                     "normal", "initial", "revert", "revert-layer" -> explicitFontFeatures = null
                     else -> parseFontFeatureSettings(value)?.let { explicitFontFeatures = it }
@@ -1827,13 +1948,17 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         return Computed(
             customProps = customProps,
             italic = italic,
-            bold = bold,
+            bold = fontWeight?.let { it >= 600 },
+            fontWeight = fontWeight,
             fontSizeEm = fontSize,
             textAlign = align,
             textIndentEm = indent,
             hidden = hidden,
             display = display,
-            fontFeatureSettings = assembleFontFeatures(fontVariantCaps, fontVariantNumeric, explicitFontFeatures),
+            fontFeatureSettings = assembleFontFeatures(fontVariantCaps, fontVariantNumeric, explicitFontFeatures, fontKerning, fontVariantLigatures),
+            fontKerning = fontKerning,
+            fontVariantLigatures = fontVariantLigatures,
+            fontTypography = FontTypography(variationAxes, stretchPercent, opticalSizing),
             fontVariantCaps = fontVariantCaps,
             fontVariantNumeric = fontVariantNumeric,
             explicitFontFeatures = explicitFontFeatures,
@@ -1920,11 +2045,34 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
             ?.lowercase()
     }
 
+    private fun parseFontVariationSettings(value: String): Map<String, Float>? {
+        val axes = LinkedHashMap<String, Float>()
+        val items = selectorSlices(value)
+        if (items.size > 64) return null
+        for (item in items) {
+            val match = fontVariationRegex.matchEntire(item.trim()) ?: return null
+            val amount = match.groupValues[3].toFloatOrNull()?.takeIf { it.isFinite() } ?: return null
+            axes[match.groupValues[2]] = amount
+        }
+        return axes.takeIf { it.isNotEmpty() }
+    }
+
+    private fun parseFontStretch(value: String): Float? = FONT_STRETCH_PERCENTAGES[value] ?: value
+        .takeIf { it.endsWith('%') }?.dropLast(1)?.toFloatOrNull()?.takeIf { it.isFinite() && it > 0f }
+
+    private fun validLigatureSettings(value: String): Boolean {
+        if (value == "none") return true
+        val tokens = value.split(whitespaceRegex)
+        if (tokens.any { it !in FONT_VARIANT_LIGATURE_FEATURES }) return false
+        val groups = tokens.map { it.removePrefix("no-") }
+        return groups.size == groups.distinct().size
+    }
+
     private fun parseFontFeatureSettings(value: String): String? {
         val features = LinkedHashMap<String, Int>()
         for (item in selectorSlices(value)) {
             val match = fontFeatureRegex.matchEntire(item.trim()) ?: return null
-            val amount = when (val argument = match.groupValues[2]) {
+            val amount = when (val argument = match.groupValues[2].lowercase()) {
                 "", "on" -> 1
                 "off" -> 0
                 else -> argument.toIntOrNull()?.takeIf { it in 0..65_535 } ?: return null
@@ -1936,11 +2084,22 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
     }
 
     /** Explicit feature settings override the same OpenType variant tag. */
-    private fun assembleFontFeatures(caps: String?, numeric: String?, explicit: String?): String? {
+    private fun assembleFontFeatures(
+        caps: String?, numeric: String?, explicit: String?, kerning: String?, ligatures: String?,
+    ): String? {
         val features = LinkedHashMap<String, Int>()
         FONT_VARIANT_CAPS_FEATURES[caps]?.forEach { features[it] = 1 }
         numeric?.split(whitespaceRegex)?.forEach { keyword ->
             FONT_VARIANT_NUMERIC_FEATURES[keyword]?.forEach { features[it] = 1 }
+        }
+        when (kerning) {
+            "none" -> features["kern"] = 0
+            "normal" -> features["kern"] = 1
+        }
+        if (ligatures == "none") {
+            listOf("liga", "clig", "dlig", "hlig", "calt").forEach { features[it] = 0 }
+        } else ligatures?.split(whitespaceRegex)?.forEach { keyword ->
+            FONT_VARIANT_LIGATURE_FEATURES[keyword]?.let { (tags, enabled) -> tags.forEach { features[it] = enabled } }
         }
         explicit?.let {
             for (item in selectorSlices(it)) {
@@ -1956,13 +2115,14 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
     private fun resolvedDeclarationValue(
         declaration: Declaration,
         customProps: Map<String, String>,
+        preserveCase: Boolean = false,
     ): String? {
         val raw = if ("var(" in declaration.value) {
             substituteVars(declaration.value, customProps) ?: return null
         } else {
             declaration.value
         }
-        val normalized = raw.trim().lowercase()
+        val normalized = raw.trim().let { if (preserveCase) it else it.lowercase() }
         return when {
             declaration.marginSide != null ->
                 marginShorthandValue(normalized, declaration.marginSide)
@@ -2497,20 +2657,61 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         val supported = when (property) {
             "display" -> value in setOf("none", "block", "inline", "inline-block", "table", "table-row", "table-cell", "flex")
             "color", "background-color" -> value == "currentcolor" || CssColor.parse(value) != null
+            "font-variation-settings" -> value == "normal" || parseFontVariationSettings(value) != null
+            "font-width", "font-stretch" -> parseFontStretch(value) != null
+            "font-optical-sizing" -> value == "auto" || value == "none"
+            "font-kerning" -> value in setOf("auto", "normal", "none")
+            "font-variant-ligatures" -> value == "normal" || validLigatureSettings(value)
+            "font-feature-settings" -> value == "normal" || parseFontFeatureSettings(value) != null
             else -> false
         }
         return if (negated) !supported else supported
+    }
+
+    /** CSS Fonts 4 relative-weight table; Compose accepts integral weights from 1 to 1000. */
+    private fun cssFontWeight(value: String, inherited: Int?, reverted: Int = inherited ?: 400): Int? {
+        val base = inherited ?: 400
+        return when (value) {
+            "normal", "initial" -> 400
+            "revert", "revert-layer" -> reverted
+            "bold" -> 700
+            "inherit", "unset" -> base
+            "bolder" -> when {
+                base < 350 -> 400
+                base < 550 -> 700
+                base < 900 -> 900
+                else -> base
+            }
+            "lighter" -> when {
+                base < 100 -> base
+                base < 550 -> 100
+                base < 750 -> 400
+                else -> 700
+            }
+            else -> value.toFloatOrNull()?.takeIf { it.isFinite() && it in 1f..1000f }
+                ?.let { kotlin.math.round(it).toInt() }
+        }
     }
 
     private fun parseFontFace(declarations: Map<String, Declaration>, baseDir: String) {
         val family = declarations["font-family"]?.let { firstFamilyName(it.value) } ?: return
         val src = declarations["src"]?.value ?: return
         val url = fontUrlRegex.find(src)?.groupValues?.get(1) ?: return
-        val weight = declarations["font-weight"]?.value?.trim()?.lowercase()
+        val weights = declarations["font-weight"]?.value?.trim()?.lowercase()
+            ?.split(whitespaceRegex)?.mapNotNull { cssFontWeight(it, 400) } ?: listOf(400)
+        val weightMin = weights.minOrNull() ?: 400
+        val weightMax = weights.maxOrNull() ?: weightMin
+        val weight = 400.coerceIn(weightMin, weightMax)
         val style = declarations["font-style"]?.value?.trim()?.lowercase()
-        val bold = weight == "bold" || (weight?.toIntOrNull() ?: 400) >= 600
+        val bold = weight >= 600
         val italic = style?.startsWith("italic") == true || style?.startsWith("oblique") == true
-        val key = listOf(family.lowercase(), url, baseDir, bold.toString(), italic.toString())
+        val widths = declarations["font-stretch"]?.value?.trim()?.lowercase()?.split(whitespaceRegex)
+            ?.takeIf { it.size in 1..2 }?.map(::parseFontStretch)
+            ?.takeIf { values -> values.all { it != null } }?.filterNotNull().orEmpty()
+        val stretchMin = widths.minOrNull() ?: 100f
+        val stretchMax = widths.maxOrNull() ?: stretchMin
+        val unicodeRange = normalizeFontUnicodeRange(declarations["unicode-range"]?.value)
+        val key = listOf(family.lowercase(), url, baseDir, weightMin.toString(), weightMax.toString(), italic.toString(), stretchMin.toString(), stretchMax.toString(), unicodeRange.orEmpty())
             .joinToString("\u0000")
         if (!fontFaceKeys.add(key) || mutableFontFaces.size >= MAX_FONT_FACES) return
         mutableFontFaces.add(FontFace(
@@ -2519,6 +2720,12 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
             baseDir = baseDir,
             bold = bold,
             italic = italic,
+            weight = weight,
+            weightMin = weightMin,
+            weightMax = weightMax,
+            stretchMin = stretchMin,
+            stretchMax = stretchMax,
+            unicodeRange = unicodeRange,
         ))
     }
 
@@ -2955,6 +3162,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
             val colon = declaration.indexOf(':')
             if (colon <= 0) continue
             val property = declaration.substring(0, colon).trim().lowercase()
+                .let { if (it == "font-width") "font-stretch" else it }
             var value = declaration.substring(colon + 1).trim()
             var important = false
             val bang = value.lastIndexOf('!')
@@ -3263,6 +3471,8 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         val lineHeight: String,
         val family: String,
         val variant: String = "normal",
+        val stretch: String = "normal",
+        val reset: String = "initial",
     ) {
         fun value(part: FontPart): String = when (part) {
             FontPart.STYLE -> style
@@ -3271,6 +3481,8 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
             FontPart.LINE_HEIGHT -> lineHeight
             FontPart.FAMILY -> family
             FontPart.VARIANT -> variant
+            FontPart.STRETCH -> stretch
+            FontPart.FEATURES, FontPart.KERNING, FontPart.OPTICAL, FontPart.VARIATIONS, FontPart.LIGATURES -> reset
         }
     }
 
@@ -3287,6 +3499,12 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
                 "line-height" to Declaration(parsed.lineHeight, important),
                 "font-family" to Declaration(parsed.family, important),
                 "font-variant" to Declaration(parsed.variant, important),
+                "font-stretch" to Declaration(parsed.stretch, important),
+                "font-feature-settings" to Declaration(parsed.reset, important),
+                "font-kerning" to Declaration(parsed.reset, important),
+                "font-optical-sizing" to Declaration(parsed.reset, important),
+                "font-variation-settings" to Declaration(parsed.reset, important),
+                "font-variant-ligatures" to Declaration(parsed.reset, important),
             )
         }
         if (!value.contains("var(", ignoreCase = true)) return null
@@ -3301,6 +3519,12 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
             "line-height" to FontPart.LINE_HEIGHT,
             "font-family" to FontPart.FAMILY,
             "font-variant" to FontPart.VARIANT,
+            "font-stretch" to FontPart.STRETCH,
+            "font-feature-settings" to FontPart.FEATURES,
+            "font-kerning" to FontPart.KERNING,
+            "font-optical-sizing" to FontPart.OPTICAL,
+            "font-variation-settings" to FontPart.VARIATIONS,
+            "font-variant-ligatures" to FontPart.LIGATURES,
         ).map { (property, part) ->
             property to Declaration(value, important, fontPart = part)
         }
@@ -3310,7 +3534,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         val value = raw.trim()
         when (value.lowercase()) {
             "inherit", "unset" -> return FontShorthandValues(
-                "inherit", "inherit", "inherit", "inherit", "inherit", "inherit",
+                "inherit", "inherit", "inherit", "inherit", "inherit", "inherit", "inherit", "inherit",
             )
             "initial", "revert", "revert-layer" -> return FontShorthandValues(
                 "normal", "normal", "medium", "normal", "initial",
@@ -3324,6 +3548,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         var style = "normal"
         var weight = "normal"
         var variant = "normal"
+        var stretch = "normal"
         var size: String? = null
         var index = 0
         while (index < tokens.size) {
@@ -3343,7 +3568,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
                 lower == "small-caps" -> variant = "small-caps"
                 lower == "bold" || lower == "bolder" || lower == "lighter" ||
                     lower.toIntOrNull()?.let { it in 1..1_000 } == true -> weight = lower
-                lower in FONT_STRETCH_KEYWORDS -> Unit
+                lower in FONT_STRETCH_KEYWORDS -> stretch = lower
                 else -> return null
             }
             index++
@@ -3356,7 +3581,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         }
         val family = tokens.drop(index).joinToString(" ").trim()
         if (family.isEmpty() || family == "/") return null
-        return FontShorthandValues(style, weight, resolvedSize, lineHeight, family, variant)
+        return FontShorthandValues(style, weight, resolvedSize, lineHeight, family, variant, stretch)
     }
 
     private fun String?.isFontAngle(): Boolean {
@@ -3514,6 +3739,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         const val MAX_UNIVERSAL_RULES = 1_024
         const val MAX_RULES_PER_INDEX_BUCKET = 4_096
         const val MAX_SELECTOR_MATCH_OPERATIONS = 5_000_000
+        const val MAX_SHARED_COMPUTED_STYLES = 1_024
         val commentRegex = Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL)
         val whitespaceRegex = Regex("""\s+""")
         val mediaFeatureRegex = Regex("""\(([^()]*)\)""")
@@ -3521,7 +3747,23 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         val simpleMaxWidthMediaRegex = Regex(
             """(?i)(?:(?:only\s+)?(?:screen|all)\s+and\s+)?\(\s*max-width\s*:\s*([^()]+)\s*\)""",
         )
-        val fontFeatureRegex = Regex("""["']([ -~]{4})["'](?:\s+(on|off|\d+))?""")
+        val fontVariationRegex = Regex("""(["'])([ -~]{4})\1\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)""")
+        val FONT_STRETCH_PERCENTAGES = mapOf(
+            "ultra-condensed" to 50f, "extra-condensed" to 62.5f, "condensed" to 75f,
+            "semi-condensed" to 87.5f, "normal" to 100f, "semi-expanded" to 112.5f,
+            "expanded" to 125f, "extra-expanded" to 150f, "ultra-expanded" to 200f,
+        )
+        val FONT_VARIANT_LIGATURE_FEATURES = mapOf(
+            "common-ligatures" to (listOf("liga", "clig") to 1),
+            "no-common-ligatures" to (listOf("liga", "clig") to 0),
+            "discretionary-ligatures" to (listOf("dlig") to 1),
+            "no-discretionary-ligatures" to (listOf("dlig") to 0),
+            "historical-ligatures" to (listOf("hlig") to 1),
+            "no-historical-ligatures" to (listOf("hlig") to 0),
+            "contextual" to (listOf("calt") to 1),
+            "no-contextual" to (listOf("calt") to 0),
+        )
+        val fontFeatureRegex = Regex("""["']([ -~]{4})["'](?:\s+((?i:on|off)|\d+))?""")
         val FONT_VARIANT_CAPS_FEATURES = mapOf(
             "small-caps" to listOf("smcp"),
             "all-small-caps" to listOf("smcp", "c2sc"),

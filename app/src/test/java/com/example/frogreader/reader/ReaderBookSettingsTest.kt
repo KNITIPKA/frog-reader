@@ -118,21 +118,28 @@ class ReaderBookSettingsTest {
     }
 
     @Test fun `saved book settings are available before the first flow collection`() = runTest(dispatcher) {
-        val personal = ReaderSettings(fontSizeSp = 23f, readingMode = ReadingMode.SCROLL)
+        val personal = ReaderSettings(fontSizeSp = 23f, readingMode = ReadingMode.SCROLL,
+            fontOpticalSizing = false, fontStretchPercent = 90f)
         StoreFixture.seed(temporary.root, listOf(book("a", personal)))
         val reader = model(repository(), "a")
-        assertEquals(personal, reader.settings.value)
+        assertEquals(personal.withAutomaticTypography(), reader.settings.value)
     }
 
     @Test fun `editing a book preserves other books and survives reopen and backup`() = runTest(dispatcher) {
-        val other = ReaderSettings(fontSizeSp = 21f, pageTurnAnimation = PageTurnAnimation.PAGE_CURL)
+        val other = ReaderSettings(fontSizeSp = 21f, pageTurnAnimation = PageTurnAnimation.PAGE_CURL,
+            pageMarginDp = 12)
         StoreFixture.seed(temporary.root, listOf(book("a"), book("b", other), book("c")))
         val repo = repository()
         val first = open(repo, "a")
         val second = open(repo, "b")
-        val edited = ReaderSettings(fontSizeSp = 26f, justify = true, pageMargins = PageMargins.NORMAL,
+        val requested = ReaderSettings(fontSizeSp = 26f, justify = true, pageMargins = PageMargins.NORMAL,
+            pageMarginDp = 28,
+            font = ReaderFont.CUSTOM, customFontPath = "/fonts/variable.ttf",
+            customFontAxes = mapOf("wght" to 700f, "wdth" to 75f),
+            fontOpticalSizing = false, fontStretchPercent = 90f,
             readingMode = ReadingMode.SCROLL, hideFootnotes = true, showPageCounter = false)
-        first.updateSettings { edited }
+        val edited = requested.withAutomaticTypography()
+        first.updateSettings { requested }
         repo.books.first { books -> books.first { it.id == "a" }.readerSettings == edited }
         runCurrent()
         assertEquals(edited, first.settings.value)

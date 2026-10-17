@@ -286,7 +286,8 @@ internal fun mathInlinePlacements(
             WeakMeasurerKey(measurer))
         val measuredNative = synchronized(mathLayouts) {
             mathLayouts[key] ?: NativeMathTypesetter(density, inherited) { token, tokenStyle ->
-                val measured = measurer.measure(token, tokenStyle, softWrap = false, maxLines = 1)
+                val typography = readerTypographyPlan(AnnotatedString(token), tokenStyle, density, true)
+                val measured = measurer.measure(typography.text, typography.style, softWrap = false, maxLines = 1)
                 MathGlyphMetrics(measured.size.width.toFloat(), measured.firstBaseline,
                     measured.size.height - measured.firstBaseline, measured)
             }.layout(mark.math.root)?.also { mathLayouts[key] = it }
@@ -296,8 +297,8 @@ internal fun mathInlinePlacements(
             val punctuation = text.subSequence(mark.end, punctuationEnd)
             // Keep the surrounding glyph styles, but do not inherit a clipped
             // paragraph's indentation when measuring these closing marks.
-            measurer.measure(AnnotatedString(punctuation.text, punctuation.spanStyles),
-                style.copy(textIndent = TextIndent.None), softWrap = false, maxLines = 1).size.width
+            val typography = readerTypographyPlan(punctuation, style.copy(textIndent = TextIndent.None), density, true)
+            measurer.measure(typography.text, typography.style, softWrap = false, maxLines = 1).size.width
         } else 0
         val native = measuredNative.fitted(mathInlineAvailableWidthPx(maxWidthPx,
             mark.start, style, density, punctuationWidthPx))

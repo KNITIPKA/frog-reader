@@ -97,6 +97,9 @@ class PublisherStyleTest {
             ),
         )
         assertEquals("/x/tnr.otf", style?.fontPath)
+        assertEquals(setOf("/x/tnr-italic.otf", "/x/tnr.otf", "/x/tnr-bi.otf", "/x/tnr-bold.otf"),
+            style?.embeddedFonts?.map { it.path }?.toSet())
+        assertEquals(4, style?.fontFaces?.size)
     }
 
     @Test
@@ -190,5 +193,45 @@ class PublisherStyleTest {
             ),
         )
         assertEquals(true, style?.justify)
+    }
+
+    @Test
+    fun `book with realistic or dark mode background images dictates autoInvertImages false`() {
+        val style = publisherStyleOf(
+            content(
+                listOf(
+                    ContentElement.Image("diagram.svg", darkModeInvert = true),
+                    ContentElement.Image("ill1.svg", darkModeBackgroundCurrentColor = true),
+                    ContentElement.Image("ill2.svg", darkModeBackgroundCurrentColor = true),
+                ),
+            ),
+        )
+        assertEquals(false, style?.autoInvertImages)
+    }
+
+    @Test
+    fun `book with darkModeInvert images dictates autoInvertImages true`() {
+        val style = publisherStyleOf(
+            content(
+                listOf(
+                    ContentElement.Image("diagram1.svg", darkModeInvert = true),
+                    ContentElement.Image("diagram2.svg", darkModeInvert = true),
+                ),
+            ),
+        )
+        assertEquals(true, style?.autoInvertImages)
+    }
+
+    @Test
+    fun `book with unstyled images dictates nothing about autoInvertImages`() {
+        val style = publisherStyleOf(
+            content(
+                listOf(
+                    ContentElement.Image("photo1.jpg"),
+                    ContentElement.Image("photo2.png"),
+                ),
+            ),
+        )
+        assertNull(style?.autoInvertImages)
     }
 }

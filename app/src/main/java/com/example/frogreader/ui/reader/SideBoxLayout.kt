@@ -614,7 +614,7 @@ fun SideBoxComposite(
                     model = sideBox.imagePath?.let { File(it) },
                     contentDescription = element.block?.floatImage?.altText,
                     contentScale = ContentScale.Fit,
-                    colorFilter = imageColorFilter(invertImages),
+                    modifier = Modifier.imageInvertFilter(invertImages),
                 )
             }
             ReaderText(
@@ -897,11 +897,11 @@ private fun PublisherFloatLeaf(
                         model = File(element.path),
                         contentDescription = element.altText,
                         contentScale = ContentScale.Fit,
-                        colorFilter = imageColorFilter(imageAppearance.invert),
                         modifier = Modifier
                             .width(with(density) { displayImageWidthPx.toDp() })
                             .height(with(density) { imageHeightPx.toDp() })
-                            .then(imageAppearance.background?.let { Modifier.background(it) } ?: Modifier),
+                            .then(imageAppearance.background?.let { Modifier.background(it) } ?: Modifier)
+                            .imageInvertFilter(imageAppearance.invert),
                     )
                 }
             }

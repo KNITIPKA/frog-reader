@@ -13,6 +13,12 @@ IBM Plex Sans — Copyright © 2017 IBM Corp., Reserved Font Name "Plex".
 SIL Open Font License 1.1.
 https://github.com/IBM/plex
 
+Liberation Serif, Sans and Mono 2.1.5 — Digitized data Copyright (c) 2010
+Google Corporation, Reserved Font Names Arimo, Tinos and Cousine.
+Copyright (c) 2012 Red Hat, Inc., Reserved Font Name Liberation.
+SIL Open Font License 1.1. All twelve original TTF files are bundled unchanged.
+https://github.com/liberationfonts/liberation-fonts
+
 Tabler Icons — Copyright (c) 2020-2026 Paweł Kuna. MIT licence.
 The GitHub, Telegram and Signal icons are derived from Tabler Icons.
 https://github.com/tabler/tabler-icons

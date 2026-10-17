@@ -49,7 +49,7 @@ internal fun AboutLicensesDialog(initialPage: AboutLicensePage, onDismiss: () ->
                     listOf("gpl-3.0.txt")
                 } else {
                     listOf("third-party-notices.txt", "Apache-2.0.txt", "jsoup-MIT.txt", "brotli-MIT.txt",
-                        "commonmark-BSD.txt", "literata-OFL.txt", "ibm-plex-OFL.txt", "tabler-icons-MIT.txt")
+                        "commonmark-BSD.txt", "literata-OFL.txt", "ibm-plex-OFL.txt", "liberation-OFL.txt", "tabler-icons-MIT.txt")
                 }
                 files.flatMap { file ->
                     context.assets.open("licenses/$file").bufferedReader().use { it.readText() }

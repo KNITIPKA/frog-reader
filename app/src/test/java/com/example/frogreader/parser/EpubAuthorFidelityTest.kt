@@ -1,8 +1,12 @@
 package com.example.frogreader.parser
 
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.sp
 import com.example.frogreader.data.model.BlockAlign
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.HIDDEN_TEXT_TAG
@@ -11,6 +15,7 @@ import com.example.frogreader.data.model.LINK_TAG
 import com.example.frogreader.data.model.PublisherRowLayout
 import com.example.frogreader.data.parser.CssResolver
 import com.example.frogreader.data.parser.HtmlMapper
+import com.example.frogreader.ui.reader.readerTypographyPlan
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -271,9 +276,24 @@ class EpubAuthorFidelityTest {
         val families = text.getStringAnnotations(INLINE_FONT_FAMILY_TAG, 0, text.length)
         val embedded = families.single { it.item == "standard blackletter" }
         assertEquals("Indenture ", text.text.substring(embedded.start, embedded.end))
-        assertEquals(1, families.size)
+        val reset = families.single { it.item == "serif" }
+        assertEquals("normal", text.text.substring(reset.start, reset.end))
+        assertEquals(2, families.size)
         val normalStart = text.text.indexOf("normal")
         assertFalse(normalStart in embedded.start until embedded.end)
         assertFalse(text.text.lastIndex in embedded.start until embedded.end)
+        val style = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 20.sp)
+        val publisher = readerTypographyPlan(text, style, Density(2f), true,
+            mapOf("standard blackletter" to FontFamily.Cursive))
+        fun familyAt(offset: Int) = publisher.text.spanStyles.lastOrNull {
+            offset in it.start until it.end && it.item.fontFamily != null
+        }?.item?.fontFamily ?: publisher.style.fontFamily
+        assertEquals(FontFamily.Cursive, familyAt(embedded.start))
+        assertEquals(FontFamily.Serif, familyAt(normalStart))
+        assertEquals(FontFamily.SansSerif, familyAt(text.text.lastIndex))
+        val reader = readerTypographyPlan(text, style, Density(2f), false,
+            mapOf("standard blackletter" to FontFamily.Cursive))
+        assertTrue(reader.text.spanStyles.none { it.item.fontFamily != null })
+        assertEquals(FontFamily.SansSerif, reader.style.fontFamily)
     }
 }

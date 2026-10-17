@@ -17,11 +17,14 @@ internal class ReaderPanelMotion(private val scope: CoroutineScope) {
     var targetHeight by mutableFloatStateOf(0f)
         private set
     val isOpen: Boolean get() = targetHeight > 0.5f
+    var isDragging = false
+        private set
     private var job: Job? = null
     private var backStartHeight: Float? = null
     private var backRestoreHeight = 0f
 
     fun animateTo(target: Float) {
+        isDragging = false
         backStartHeight = null
         job?.cancel()
         targetHeight = target.coerceAtLeast(0f)
@@ -33,6 +36,11 @@ internal class ReaderPanelMotion(private val scope: CoroutineScope) {
     }
 
     fun snapTo(target: Float) {
+        isDragging = false
+        snapHeightTo(target)
+    }
+
+    private fun snapHeightTo(target: Float) {
         backStartHeight = null
         job?.cancel()
         targetHeight = target.coerceAtLeast(0f)
@@ -41,13 +49,28 @@ internal class ReaderPanelMotion(private val scope: CoroutineScope) {
     }
 
     fun startDrag() {
+        isDragging = true
         backStartHeight = null
         job?.cancel()
         targetHeight = height.value
     }
 
+    /** Accumulate every pointer delta, even when several arrive before the next frame. */
+    fun dragBy(delta: Float, maxHeight: Float): Float {
+        if (!delta.isFinite()) return 0f
+        val start = targetHeight
+        val destination = (start - delta).coerceIn(0f, maxHeight.coerceAtLeast(0f))
+        snapHeightTo(destination)
+        return start - destination
+    }
+
+    fun finishDrag() {
+        isDragging = false
+    }
+
     /** Keep the drawer's open intent until the system gesture is committed. */
     fun beginBack() {
+        isDragging = false
         job?.cancel()
         backStartHeight = height.value
         backRestoreHeight = targetHeight
@@ -67,6 +90,6 @@ internal class ReaderPanelMotion(private val scope: CoroutineScope) {
 
     /** A late measurement may resize an open peek, but must never reopen a closing panel. */
     fun updatePeek(previous: Float, next: Float) {
-        if (backStartHeight == null && isOpen && abs(targetHeight - previous) < 1f) animateTo(next)
+        if (!isDragging && backStartHeight == null && isOpen && abs(targetHeight - previous) < 1f) animateTo(next)
     }
 }

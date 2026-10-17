@@ -10,11 +10,48 @@
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
-    <!-- Discover only activities that can process selected text (Android 11+). -->
+    <!-- Narrow external text contracts; no broad installed-package access (Android 11+). -->
     <queries>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT" />
             <data android:mimeType="text/plain" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TRANSLATE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.TRANSLATE" />
+            <data android:mimeType="text/plain" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DEFINE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DEFINE" />
+            <data android:mimeType="text/plain" />
+        </intent>
+        <intent>
+            <action android:name="aard2.lookup" />
+        </intent>
+        <intent>
+            <action android:name="colordict.intent.action.SEARCH" />
+        </intent>
+        <intent>
+            <action android:name="com.hughes.action.ACTION_SEARCH_DICT" />
+        </intent>
+        <intent>
+            <action android:name="com.ngc.fora.action.LOOKUP" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.WEB_SEARCH" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEARCH" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="kiwix" android:host="search" />
         </intent>
     </queries>
 

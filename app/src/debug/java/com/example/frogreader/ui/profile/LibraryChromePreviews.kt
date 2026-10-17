@@ -1,6 +1,11 @@
 package com.example.frogreader.ui.profile
 
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,6 +25,9 @@ import com.example.frogreader.ui.library.LibraryScreen
 import com.example.frogreader.ui.library.LibraryViewModel
 import com.example.frogreader.ui.nav.NavTab
 import com.example.frogreader.ui.theme.FrogReaderTheme
+import com.example.frogreader.ui.theme.LocalFrogColors
+import com.example.frogreader.ui.theme.dynamicFrogColors
+import com.example.frogreader.ui.theme.isDark
 import kotlinx.coroutines.flow.MutableStateFlow
 
 @Preview(name = "Library · 360dp", widthDp = 360, heightDp = 800, showSystemUi = true)
@@ -89,6 +97,19 @@ private fun ScreenshotHeroPreview() = LibraryChrome(
     AppTheme.OLED, expanded = false, heroTitle = "Последнее желание", heroAuthor = "Анджей Сапковский",
 )
 
+@Preview(name = "Hero · purple Material You · light container", widthDp = 393, heightDp = 852, showSystemUi = true)
+@Preview(name = "Hero · purple Material You · large text", widthDp = 360, heightDp = 800, fontScale = 1.5f)
+@Composable
+private fun PurpleMaterialYouHeroPreview() = LibraryChrome(
+    AppTheme.OLED, expanded = false, heroTitle = "Towing Jehovah", heroAuthor = "James Morrow",
+    // Expressive system palettes can give a dark theme a light primary container.
+    // Its dark foreground belongs to the header, never to the neutral hero card.
+    previewColorScheme = darkColorScheme(
+        primaryContainer = lightColorScheme().primaryContainer,
+        onPrimaryContainer = lightColorScheme().onPrimaryContainer,
+    ),
+)
+
 @Preview(name = "Hero · short title", widthDp = 360, heightDp = 800, showSystemUi = true)
 @Composable
 private fun ShortHeroPreview() = LibraryChrome(
@@ -138,12 +159,13 @@ private fun LibraryChrome(
     heroAuthor: String? = "H. G. Wells",
     heroProgress: ReadingProgress = ReadingProgress(fraction = 0.84f),
     heroStatus: ReadingStatus = ReadingStatus.READING,
+    previewColorScheme: ColorScheme? = null,
 ) {
     val viewModel = remember(mode, heroTitle, heroAuthor, heroProgress, heroStatus) {
         LibraryViewModel(PreviewLibraryRepository(heroTitle, heroAuthor, heroProgress, heroStatus)).apply { setViewMode(mode) }
     }
     var menuExpanded by remember { mutableStateOf(expanded) }
-    FrogReaderTheme(theme) {
+    val content: @Composable () -> Unit = {
         FrogMainScaffold(
             navigationVisible = true,
             selectedTab = NavTab.LIBRARY,
@@ -157,6 +179,17 @@ private fun LibraryChrome(
             onNewShelf = {},
         ) { padding ->
             LibraryScreen(viewModel = viewModel, contentPadding = padding)
+        }
+    }
+    FrogReaderTheme(theme) {
+        if (previewColorScheme == null) {
+            content()
+        } else {
+            CompositionLocalProvider(
+                LocalFrogColors provides dynamicFrogColors(previewColorScheme, dark = theme.isDark()),
+            ) {
+                MaterialTheme(colorScheme = previewColorScheme, content = content)
+            }
         }
     }
 }

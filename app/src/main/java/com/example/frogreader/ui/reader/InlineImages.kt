@@ -70,9 +70,10 @@ internal fun inlineImageContent(
             AsyncImage(
                 model = File(mark.item),
                 contentDescription = description,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .imageInvertFilter(invert),
                 contentScale = ContentScale.Fit,
-                colorFilter = imageColorFilter(invert),
             )
         }
     }

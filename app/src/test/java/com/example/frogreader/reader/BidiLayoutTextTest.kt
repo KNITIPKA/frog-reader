@@ -89,6 +89,33 @@ class BidiLayoutTextTest {
     }
 
     @Test
+    fun `identity maps every UTF16 boundary and clamps offsets without changing annotations`() {
+        val styled = AnnotatedString.Builder("A🙂אב\nBC").apply {
+            addStyle(SpanStyle(fontWeight = FontWeight.Bold), 1, 5)
+            addStyle(ParagraphStyle(textAlign = TextAlign.Start), 0, length)
+            addStringAnnotation("note", "retained", 1, 3)
+            addLink(LinkAnnotation.Url("https://example.com"), 3, 5)
+        }.toAnnotatedString()
+        val ignoredBidi = AnnotatedString.Builder("plain").apply {
+            addStringAnnotation(BIDI_TAG, "unknown-mode", 0, 5)
+        }.toAnnotatedString()
+        for (source in listOf(AnnotatedString(""), AnnotatedString("x"), styled,
+            ignoredBidi, AnnotatedString("text\n".repeat(2_000)))) {
+            val bidi = BidiLayoutText.of(source)
+            assertSame(source, bidi.source)
+            assertSame(source, bidi.display)
+            assertFalse(bidi.hasLayoutChanges)
+            val offsets = listOf(Int.MIN_VALUE, Int.MAX_VALUE) + (-2..source.length + 2)
+            for (offset in offsets) {
+                val expected = offset.coerceIn(0, source.length)
+                assertEquals(expected, bidi.layoutStart(offset))
+                assertEquals(expected, bidi.layoutEnd(offset))
+                assertEquals(expected, bidi.sourceOffset(offset))
+            }
+        }
+    }
+
+    @Test
     fun `explicit paragraphs use Compose breaks while source keeps authored newlines`() {
         val source = AnnotatedString.Builder("Left\nאב\nCenter").apply {
             addStyle(ParagraphStyle(textAlign = TextAlign.Left), 0, 4)

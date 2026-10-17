@@ -20,6 +20,7 @@ import com.example.frogreader.data.model.EXTERNAL_LINK_TAG
 import com.example.frogreader.data.model.FOOTNOTE_TAG
 import com.example.frogreader.data.model.HIDDEN_TEXT_TAG
 import com.example.frogreader.data.model.INLINE_FONT_FAMILY_TAG
+import com.example.frogreader.data.model.INLINE_FONT_TYPOGRAPHY_TAG
 import com.example.frogreader.data.model.INLINE_IMAGE_TAG
 import com.example.frogreader.data.model.INLINE_TEXT_BOX_TAG
 import com.example.frogreader.data.model.InlineTextBoxSpec
@@ -130,6 +131,9 @@ class HtmlMapper(
     /** id → index (in the produced element list) where that anchor lives. */
     val anchors = mutableMapOf<String, Int>()
 
+    /** Same-position aliases, indexed while registering each first-seen id. */
+    private val anchorIdsByStart = mutableMapOf<Int, MutableList<String>>()
+
     /** Canonical keys of every internal link referenced by this document. */
     val linkTargets = mutableSetOf<String>()
 
@@ -202,7 +206,9 @@ class HtmlMapper(
     }
 
     private fun registerAnchor(id: String) {
-        if (id.isNotEmpty()) anchors.putIfAbsent(id, out.size)
+        if (id.isNotEmpty() && anchors.putIfAbsent(id, out.size) == null) {
+            anchorIdsByStart.getOrPut(out.size) { mutableListOf() }.add(id)
+        }
     }
 
     private fun walk(container: Element, quote: Boolean, depth: Int = 0) {
@@ -256,7 +262,7 @@ class HtmlMapper(
                                 // anchor immediately before the semantic aside.
                                 // It points at the same output position and is
                                 // therefore an exact alias of this note body.
-                                addAll(anchors.filterValues { it == noteStart }.keys)
+                                addAll(anchorIdsByStart[noteStart].orEmpty())
                             }.forEach { id -> noteDocuments.putIfAbsent(id, document) }
                         }
                     }
@@ -275,7 +281,7 @@ class HtmlMapper(
             append(node.attr("type"))
             append(' ')
             append(node.className())
-        }.lowercase().split(Regex("[^a-z0-9_-]+"))
+        }.lowercase().split(NOTE_TOKEN_SEPARATOR)
         if (node.normalName() in NOTE_ITEM_TAGS && ownTokens.any(::isNoteContainerToken)) {
             return true
         }
@@ -288,7 +294,7 @@ class HtmlMapper(
         return node.parents().take(3).any { ancestor ->
             val tokens = "${ancestor.attr("epub:type")} ${ancestor.attr("role")} " +
                 "${ancestor.attr("type")} ${ancestor.className()}"
-            tokens.lowercase().split(Regex("[^a-z0-9_-]+")).any(::isNoteCollectionToken)
+            tokens.lowercase().split(NOTE_TOKEN_SEPARATOR).any(::isNoteCollectionToken)
         }
     }
 
@@ -1246,6 +1252,7 @@ class HtmlMapper(
                     // Named family annotations and inline effects already
                     // belong to the shared source text, not the cell block.
                     own.fontFamilyName == original.fontFamilyName &&
+                    own.fontTypography == original.fontTypography &&
                     own.underline == original.underline && own.strike == original.strike &&
                     own.superScript == original.superScript && own.subScript == original.subScript &&
                     own.unicodeBidi == original.unicodeBidi &&
@@ -1283,8 +1290,9 @@ class HtmlMapper(
 
     private fun sameResponsiveInlinePresentation(a: CssResolver.Computed, b: CssResolver.Computed): Boolean =
         a.hidden == b.hidden && a.display == b.display &&
-            a.italic == b.italic && a.bold == b.bold && a.fontSizeEm == b.fontSizeEm &&
+            a.italic == b.italic && a.fontWeight == b.fontWeight && a.fontSizeEm == b.fontSizeEm &&
             a.fontFamilyName == b.fontFamilyName && a.fontFeatureSettings == b.fontFeatureSettings &&
+            a.fontTypography == b.fontTypography &&
             a.monospace == b.monospace && a.underline == b.underline && a.strike == b.strike &&
             a.superScript == b.superScript && a.subScript == b.subScript &&
             a.foregroundColorArgb == b.foregroundColorArgb && a.backgroundColorArgb == b.backgroundColorArgb &&
@@ -1298,9 +1306,10 @@ class HtmlMapper(
     private fun sameResponsiveGeneratedContent(element: Element, base: CssResolver, narrow: CssResolver): Boolean {
         fun same(a: CssResolver.GeneratedRun?, b: CssResolver.GeneratedRun?): Boolean {
             if (a == null || b == null) return a == null && b == null
-            return a.text == b.text && a.italic == b.italic && a.bold == b.bold && a.scale == b.scale &&
+            return a.text == b.text && a.italic == b.italic && a.fontWeight == b.fontWeight && a.scale == b.scale &&
                 a.foregroundColorArgb == b.foregroundColorArgb && a.backgroundColorArgb == b.backgroundColorArgb &&
                 a.fontFeatureSettings == b.fontFeatureSettings && a.fontFamilyName == b.fontFamilyName &&
+                a.fontTypography == b.fontTypography &&
                 a.textTransform == b.textTransform && a.visibilityHidden == b.visibilityHidden &&
                 a.publisherBox == b.publisherBox
         }
@@ -1443,13 +1452,15 @@ class HtmlMapper(
         val style = BlockStyle(
             italic = own.italic.takeIf { it != base.italic },
             bold = own.bold.takeIf { it != base.bold },
+            fontWeight = own.fontWeight.takeIf { it != base.fontWeight },
             // Absolute root-em scale: ReaderMetrics replaces, rather than
             // multiplies, the surrounding table scale when this is present.
             fontScale = own.fontSizeEm.coerceIn(0.5f, 3f).takeIf {
                 kotlin.math.abs(own.fontSizeEm - base.fontSizeEm) > 0.001f
             },
             fontFamily = own.fontFamilyName.takeIf { it != base.fontFamilyName },
-            fontFeatureSettings = own.fontFeatureSettings.takeIf { it != base.fontFeatureSettings },
+            fontFeatureSettings = own.fontFeatureSettings.orEmpty().takeIf { own.fontFeatureSettings != base.fontFeatureSettings },
+            fontTypography = own.fontTypography.takeIf { it != base.fontTypography },
             lineHeightMult = when {
                 own.lineHeightMult == null && base.lineHeightMult != null -> 1.3f
                 own.lineHeightMult != null && (
@@ -1505,9 +1516,11 @@ class HtmlMapper(
             align = cell.align ?: base.align,
             italic = own?.italic ?: base.italic,
             bold = own?.bold ?: base.bold,
+            fontWeight = own?.fontWeight ?: base.fontWeight,
             fontScale = own?.fontScale ?: base.fontScale,
             fontFamily = own?.fontFamily ?: base.fontFamily,
             fontFeatureSettings = own?.fontFeatureSettings ?: base.fontFeatureSettings,
+            fontTypography = own?.fontTypography ?: base.fontTypography,
             lineHeightMult = own?.lineHeightMult ?: base.lineHeightMult,
             language = own?.language ?: base.language,
             direction = own?.direction ?: base.direction,
@@ -1801,6 +1814,7 @@ class HtmlMapper(
             align = align,
             italic = computed.italic,
             bold = computed.bold,
+            fontWeight = computed.fontWeight,
             // A 1em paragraph is visually identical to the reader base and
             // need not allocate a non-default BlockStyle. A heading is
             // different: explicit 1em must override its semantic H1-H6 size.
@@ -1811,6 +1825,7 @@ class HtmlMapper(
             firstLineIndentEm = computed.textIndentEm,
             fontFamily = computed.fontFamilyName,
             fontFeatureSettings = computed.fontFeatureSettings,
+            fontTypography = computed.fontTypography.takeUnless { it.isEmpty },
             lineHeightMult = computed.lineHeightMult,
             hyphens = computed.hyphensAuto,
             // The values themselves stay on PublisherBoxSpan. These bits let
@@ -1838,14 +1853,16 @@ class HtmlMapper(
     /** A generated run appended as styled inline text. */
     private fun appendGeneratedRun(builder: InlineTextBuilder, run: CssResolver.GeneratedRun?) {
         if (run == null) return
-        val family = run.fontFamilyName?.takeUnless { it in GENERIC_FONT_FAMILIES }
+        val family = run.fontFamilyName
         if (family != null) builder.pushAnnotation(INLINE_FONT_FAMILY_TAG, family)
+        builder.pushAnnotation(INLINE_FONT_TYPOGRAPHY_TAG, run.fontTypography.encode())
         if (run.visibilityHidden) builder.pushAnnotation(HIDDEN_TEXT_TAG, "true")
         val style = generatedSpanStyle(run)
         if (style != null) builder.pushStyle(style)
         builder.text(transformText(run.text, run.textTransform))
         if (style != null) builder.pop()
         if (run.visibilityHidden) builder.pop()
+        builder.pop()
         if (family != null) builder.pop()
     }
 
@@ -1860,8 +1877,9 @@ class HtmlMapper(
             style = style.copy(fontStyle = if (run.italic) FontStyle.Italic else FontStyle.Normal)
             any = true
         }
-        if (run.bold != null) {
-            style = style.copy(fontWeight = if (run.bold) FontWeight.Bold else FontWeight.Normal)
+        if (run.fontWeight != null || run.bold != null) {
+            style = style.copy(fontWeight = run.fontWeight?.let(::FontWeight)
+                ?: if (run.bold == true) FontWeight.Bold else FontWeight.Normal)
             any = true
         }
         if (run.scale !in 0.99f..1.01f) {
@@ -2130,12 +2148,17 @@ class HtmlMapper(
                 val parent = node.parent()
                 val computed = parent?.let { css?.computed(it) }
                 val hidden = computed?.visibilityHidden == true
-                val family = computed?.fontFamilyName?.takeUnless { it in GENERIC_FONT_FAMILIES }
+                // Code/pre defaults set monospace independently of an
+                // inherited body's family name. An explicit CSS family on
+                // the code resets computed.monospace and still takes effect.
+                val family = if (computed?.monospace == true) "monospace" else computed?.fontFamilyName
                 if (family != null) out.pushAnnotation(INLINE_FONT_FAMILY_TAG, family)
+                if (computed != null) out.pushAnnotation(INLINE_FONT_TYPOGRAPHY_TAG, computed.fontTypography.encode())
                 if (hidden) out.pushAnnotation(HIDDEN_TEXT_TAG, "true")
                 val text = transformText(node.wholeText, computed?.textTransform, parent, out.lastCharacter)
                 if (preserveWhitespace) out.preformattedText(text) else out.text(text)
                 if (hidden) out.pop()
+                if (computed != null) out.pop()
                 if (family != null) out.pop()
             }
 
@@ -2311,8 +2334,8 @@ class HtmlMapper(
             style = style.copy(fontStyle = if (own.italic) FontStyle.Italic else FontStyle.Normal)
             any = true
         }
-        if (own.bold != null && own.bold != base.bold) {
-            style = style.copy(fontWeight = if (own.bold) FontWeight.Bold else FontWeight.Normal)
+        if (own.fontWeight != null && own.fontWeight != base.fontWeight) {
+            style = style.copy(fontWeight = FontWeight(own.fontWeight))
             any = true
         }
         val sizeRatio = own.fontSizeEm / base.fontSizeEm
@@ -2342,22 +2365,12 @@ class HtmlMapper(
             style = style.copy(textDecoration = TextDecoration.combine(decorations))
             any = true
         }
-        if (own.monospace && !base.monospace) {
+        // Structural code keeps its semantic face even when publisher CSS is
+        // disabled. CSS family choices stay as annotations so the reader can
+        // apply or ignore them with the current setting.
+        if (element.normalName() in SEMANTIC_MONOSPACE_TAGS) {
             style = style.copy(fontFamily = FontFamily.Monospace)
             any = true
-        }
-        if (own.fontFamilyName != base.fontFamilyName) {
-            val family = when (own.fontFamilyName) {
-                "serif" -> FontFamily.Serif
-                "sans-serif", "sans" -> FontFamily.SansSerif
-                "monospace" -> FontFamily.Monospace
-                "cursive" -> FontFamily.Cursive
-                else -> null // named embedded faces are selected at block level
-            }
-            if (family != null) {
-                style = style.copy(fontFamily = family)
-                any = true
-            }
         }
         if (own.foregroundColorArgb != base.foregroundColorArgb) {
             own.foregroundColorArgb?.let {
@@ -2557,9 +2570,9 @@ class HtmlMapper(
     /** EPUB 3 semantics plus conservative EPUB 2/Kindle legacy patterns. */
     private fun isNoteReference(link: Element, key: String): Boolean {
         if ('#' !in key) return false
-        val epubTypes = link.attr("epub:type").split(Regex("\\s+"))
+        val epubTypes = link.attr("epub:type").split(NOTE_WHITESPACE_SEPARATOR)
         if (epubTypes.any { it.equals("noteref", ignoreCase = true) }) return true
-        if (link.attr("role").split(Regex("\\s+")).any {
+        if (link.attr("role").split(NOTE_WHITESPACE_SEPARATOR).any {
                 it.equals("doc-noteref", ignoreCase = true)
             }
         ) {
@@ -2638,7 +2651,7 @@ class HtmlMapper(
         val CSS_BLOCK_DISPLAYS = setOf("block", "flow-root", "list-item", "flex", "grid", "table")
         val CSS_HORIZONTAL_DISPLAYS = setOf("flex", "inline-flex", "table", "inline-table")
         val CSS_ROW_EXCLUDED_TAGS = setOf("table", "tr", "td", "th")
-        val GENERIC_FONT_FAMILIES = setOf("serif", "sans-serif", "sans", "monospace", "cursive", "fantasy", "system-ui")
+        val SEMANTIC_MONOSPACE_TAGS = setOf("code", "kbd", "samp", "tt")
         val COMPLEX_HORIZONTAL_CELL_TAGS = setOf("table", "ul", "ol", "audio", "video", "img", "svg")
         const val MAX_CSS_ROW_CELLS = 24
         const val MAX_RESPONSIVE_TABLE_CELLS = 4_096
@@ -2665,6 +2678,8 @@ class HtmlMapper(
         val NESTED_LIST_TAGS = setOf("ul", "ol", "list")
         val CELL_BLOCK_TAGS = setOf("p", "div")
         val NOTE_HINT = Regex("(?:^|[-_\\s])(footnote|endnote|noteref|note)(?:$|[-_\\s])")
+        val NOTE_TOKEN_SEPARATOR = Regex("[^a-z0-9_-]+")
+        val NOTE_WHITESPACE_SEPARATOR = Regex("\\s+")
         val NOTE_ITEM_TAGS = setOf("li", "p", "div", "section", "aside", "note", "prodnote")
         val NOTE_CONTAINER_TOKENS = setOf(
             "footnote", "endnote", "rearnote", "doc-footnote", "doc-endnote",

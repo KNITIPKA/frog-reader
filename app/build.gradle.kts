@@ -124,6 +124,13 @@ tasks.withType<Test>().configureEach {
     providers.gradleProperty("testBookDir").orNull?.let {
         systemProperty("frogreader.testBookDir", it)
     }
+    providers.environmentVariable("FROGREADER_PROFILE_EPUB").orNull?.let {
+        inputs.file(it)
+        systemProperty("frogreader.profileEpub", it)
+    }
+    providers.environmentVariable("FROGREADER_PROFILE_JFR").orNull?.let {
+        systemProperty("frogreader.profileJfr", it)
+    }
 }
 
 dependencies {

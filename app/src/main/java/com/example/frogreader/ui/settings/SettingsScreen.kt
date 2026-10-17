@@ -77,6 +77,7 @@ fun SettingsScreen(
     val lastBackupAt by backupViewModel.lastBackupAt.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val externalAppSaveFailed = stringResource(R.string.external_text_save_failed)
     var destination by rememberSaveable { mutableStateOf(SettingsDestination.ROOT) }
     var showAbout by rememberSaveable { mutableStateOf(false) }
 
@@ -112,6 +113,10 @@ fun SettingsScreen(
                 SettingsDestination.READING -> ReadingSettingsPage(
                     settings = settings,
                     onUpdate = viewModel::update,
+                    saveExternalApp = viewModel::saveExternalApp,
+                    onExternalAppSaveFailed = {
+                        scope.launch { snackbarHostState.showSnackbar(externalAppSaveFailed) }
+                    },
                     onBack = { destination = SettingsDestination.ROOT },
                 )
 

@@ -25,7 +25,7 @@ class ReaderOpeningMotionTest {
     }
 
     @Test
-    fun `loader stays visible until the page reports its restored layout`() = runTest {
+    fun `handoff waits until the page reports its restored layout`() = runTest {
         val motion = ReaderOpeningMotion()
         launch(frameClock()) { motion.play() }
         advanceUntilIdle()
@@ -36,26 +36,49 @@ class ReaderOpeningMotionTest {
     }
 
     @Test
-    fun `loader collapses fully before text expands and both stages finish`() = runTest {
+    fun `ready text appears while loader leaves and handoff finishes within a quarter second`() = runTest {
         val motion = ReaderOpeningMotion()
         motion.onContentReady()
         launch(frameClock()) { motion.play() }
 
-        advanceTimeBy(128)
+        advanceTimeBy(64)
         runCurrent()
         assertTrue(motion.loaderScale.value in 0f..1f)
         assertTrue(motion.loaderScale.value < 1f && motion.loaderScale.value > 0f)
-        assertEquals(0f, motion.reveal.value, 0f)
+        assertTrue(motion.reveal.value > 0f && motion.reveal.value < 1f)
 
-        advanceTimeBy(240)
+        advanceTimeBy(176)
         runCurrent()
         assertEquals(0f, motion.loaderScale.value, 0f)
-        assertTrue(motion.reveal.value > 0f && motion.reveal.value < 1f)
-        assertFalse(motion.finished)
-
-        advanceUntilIdle()
         assertEquals(1f, motion.reveal.value, 0f)
         assertTrue(motion.finished)
+    }
+
+    @Test
+    fun `fast opening never flashes a loader`() = runTest {
+        val motion = ReaderOpeningMotion()
+        launch { motion.showLoaderAfterDelay() }
+        advanceTimeBy(100)
+        motion.onContentReady()
+        advanceUntilIdle()
+        assertFalse(motion.loaderVisible)
+    }
+
+    @Test
+    fun `longer opening shows loader after a short grace period`() = runTest {
+        val motion = ReaderOpeningMotion()
+        launch { motion.showLoaderAfterDelay() }
+        advanceTimeBy(179)
+        runCurrent()
+        assertFalse(motion.loaderVisible)
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(motion.loaderVisible)
+
+        motion.onContentReady()
+        launch(frameClock()) { motion.play() }
+        advanceUntilIdle()
+        assertFalse(motion.loaderVisible)
     }
 
     @Test

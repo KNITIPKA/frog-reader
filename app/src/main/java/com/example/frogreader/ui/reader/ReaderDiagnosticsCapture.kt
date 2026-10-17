@@ -9,6 +9,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
@@ -20,6 +21,7 @@ import com.example.frogreader.data.AppTheme
 import com.example.frogreader.data.ReadingMode
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.diagnostics.ReaderDiagnosticSnapshot
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -32,13 +34,14 @@ internal fun CaptureReaderDiagnostics(
     viewport: IntSize,
 ) {
     val tracker = (LocalContext.current.applicationContext as? FrogReaderApp)?.readerDiagnostics
+    val pagination by viewModel.pagination.collectAsStateWithLifecycle()
     val density = LocalDensity.current
     val insets = WindowInsets.systemBarsIgnoringVisibility.asPaddingValues()
     val topInset = insets.calculateTopPadding()
     val bottomInset = insets.calculateBottomPadding()
     val fonts = remember(ready) { ready.bookFonts.keys.sorted() }
     val record = rememberUpdatedState {
-        val holder = viewModel.pagination.value.takeIf { settings.readingMode == ReadingMode.PAGES }
+        val holder = pagination.takeIf { settings.readingMode == ReadingMode.PAGES }
         val rendered = holder?.settings ?: settings.copy(fontSizeSp = liveFontSize)
         val top = topInset + if (settings.readingMode == ReadingMode.PAGES) 16.dp else 20.dp
         val bottom = bottomInset + if (settings.readingMode == ReadingMode.PAGES) 40.dp else 48.dp
@@ -48,7 +51,7 @@ internal fun CaptureReaderDiagnostics(
                 capturedAtMillis = System.currentTimeMillis(),
                 viewportWidthPx = viewport.width, viewportHeightPx = viewport.height,
                 contentWidthPx = with(density) {
-                    (viewport.width.toDp() - ReaderMetrics.horizontalPadding(rendered.pageMargins) * 2)
+                    (viewport.width.toDp() - ReaderMetrics.horizontalPadding(rendered) * 2)
                         .roundToPx().coerceAtLeast(0)
                 },
                 contentHeightPx = with(density) {
@@ -69,7 +72,7 @@ internal fun CaptureReaderDiagnostics(
         )
     }
     LaunchedEffect(ready, viewport, settings, appSettings.theme, appSettings.autoInvertImages,
-        liveFontSize, density, topInset, bottomInset) {
+        liveFontSize, density, topInset, bottomInset, pagination) {
         record.value()
     }
     DisposableEffect(ready.book.id) {

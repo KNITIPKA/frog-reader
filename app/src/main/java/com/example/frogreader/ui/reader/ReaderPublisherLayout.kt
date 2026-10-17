@@ -243,6 +243,9 @@ internal fun resolvePublisherFloatTarget(
 ): Int {
     if (items.isEmpty()) return 0
     val safeSource = sourceIndex.coerceIn(items.indices)
+    if (items is ReaderChapterItems) {
+        return items.publisherFloatTargetForSource(safeSource) ?: safeSource
+    }
     if (!items[safeSource].suppressedByPublisherFloat) return safeSource
     val target = items.indexOfFirst { item ->
         item.publisherFloat?.contents?.any { it.sourceItemIndex == safeSource } == true

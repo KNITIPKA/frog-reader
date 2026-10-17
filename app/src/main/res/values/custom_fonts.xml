@@ -1,0 +1,9 @@
+<resources>
+    <string name="reader_fonts_back">Back to font families</string>
+    <string name="reader_fonts_saved">Your font families</string>
+    <string name="reader_font_family_auto">Auto</string>
+    <string name="reader_font_family_auto_subtitle">Use entire font family</string>
+    <string name="reader_font_family_auto_description">Automatically matches font styles to the book.</string>
+    <string name="reader_font_delete_family">Delete family</string>
+    <string name="reader_fonts_import_failed">Some files could not be added. Choose valid TTF, OTF or TTC fonts.</string>
+</resources>

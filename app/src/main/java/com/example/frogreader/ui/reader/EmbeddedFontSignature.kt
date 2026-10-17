@@ -1,6 +1,7 @@
 package com.example.frogreader.ui.reader
 
 import com.example.frogreader.data.model.BookFont
+import com.example.frogreader.data.model.normalizeFontUnicodeRange
 import java.io.File
 import java.security.MessageDigest
 
@@ -14,18 +15,39 @@ import java.security.MessageDigest
  * explicit state, distinct from every real file (including an empty one).
  */
 internal fun embeddedFontSignature(fonts: List<BookFont>): String {
-    val records = fonts.map { font ->
+    // One variable file can supply many declared weights: hash its bytes once per open.
+    val fileStates = HashMap<String, String>()
+    // Only faces competing for the same width/weight/style need source-order identity.
+    // Counting earlier overlapping faces also covers overlapping variable weight ranges.
+    val records = fonts.mapIndexed { index, font ->
+        val sourceOrder = fonts.subList(0, index).count { earlier ->
+            earlier.family == font.family && earlier.italic == font.italic &&
+                earlier.weightMin <= font.weightMax && font.weightMin <= earlier.weightMax &&
+                earlier.stretchMin <= font.stretchMax && font.stretchMin <= earlier.stretchMax
+        }
         EmbeddedFontRecord(
             family = font.family,
-            bold = font.bold,
+            weight = font.weight,
+            weightMin = font.weightMin,
+            weightMax = font.weightMax,
+            stretchMin = font.stretchMin,
+            stretchMax = font.stretchMax,
             italic = font.italic,
-            fileState = fontFileState(File(font.path)),
+            unicodeRange = normalizeFontUnicodeRange(font.unicodeRange).orEmpty(),
+            sourceOrder = sourceOrder,
+            fileState = fileStates.getOrPut(font.path) { fontFileState(File(font.path)) },
         )
     }.sortedWith(
         compareBy<EmbeddedFontRecord>(
             { it.family },
-            { it.bold },
+            { it.weight },
+            { it.weightMin },
+            { it.weightMax },
+            { it.stretchMin },
+            { it.stretchMax },
             { it.italic },
+            { it.unicodeRange },
+            { it.sourceOrder },
             { it.fileState },
         ),
     )
@@ -33,8 +55,14 @@ internal fun embeddedFontSignature(fonts: List<BookFont>): String {
     val digest = MessageDigest.getInstance("SHA-256")
     records.forEach { record ->
         digest.updateFramed(record.family)
-        digest.update(if (record.bold) 1 else 0)
+        digest.updateFramed(record.weight.toString())
+        digest.updateFramed(record.weightMin.toString())
+        digest.updateFramed(record.weightMax.toString())
+        digest.updateFramed(record.stretchMin.toString())
+        digest.updateFramed(record.stretchMax.toString())
         digest.update(if (record.italic) 1 else 0)
+        digest.updateFramed(record.unicodeRange)
+        digest.updateFramed(record.sourceOrder.toString())
         digest.updateFramed(record.fileState)
     }
     return digest.digest().toLowerHex()
@@ -42,8 +70,14 @@ internal fun embeddedFontSignature(fonts: List<BookFont>): String {
 
 private data class EmbeddedFontRecord(
     val family: String,
-    val bold: Boolean,
+    val weight: Int,
+    val weightMin: Int,
+    val weightMax: Int,
+    val stretchMin: Float,
+    val stretchMax: Float,
     val italic: Boolean,
+    val unicodeRange: String,
+    val sourceOrder: Int,
     val fileState: String,
 )
 

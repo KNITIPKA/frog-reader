@@ -88,6 +88,8 @@ class BackupArchiveTest {
             theme = AppTheme.OLED, dailyGoalMinutes = 45,
             autoHideReturnButton = false,
             defaultTranslator = "translator.app/translator.app.ProcessText",
+            defaultDictionary = "colordict:dictionary.app/dictionary.app.Lookup",
+            defaultSearchApp = "search:search.app/search.app.Search",
         ),
     )
 
@@ -154,6 +156,53 @@ class BackupArchiveTest {
     }
 
     @Test
+    fun `external choices can be reset separately in settings backups`() {
+        val choices = settings.app
+        listOf(
+            choices.copy(defaultTranslator = null),
+            choices.copy(defaultDictionary = null),
+            choices.copy(defaultSearchApp = null),
+        ).forEach { appSettings ->
+            val expected = settings.copy(app = appSettings)
+            val out = ByteArrayOutputStream()
+            BackupArchive.write(
+                out = out,
+                document = document(),
+                stats = stats,
+                settings = expected,
+                mode = BackupMode.DATA,
+                appVersion = "1.56",
+                createdAtMillis = 1_700_000_000_000L,
+            )
+
+            val restored = BackupArchive.read(ByteArrayInputStream(out.toByteArray()), booksDir, coversDir)
+            assertEquals(BackupManifest.FORMAT_VERSION, restored.manifest.formatVersion)
+            assertEquals(expected, restored.settings)
+        }
+    }
+
+    @Test
+    fun `numeric reading margins survive global and per book settings backups`() {
+        val global = settings.copy(reader = ReaderSettings(pageMarginDp = 24))
+        val perBook = ReaderSettings(pageMargins = PageMargins.NORMAL, pageMarginDp = 38)
+        val out = ByteArrayOutputStream()
+        BackupArchive.write(
+            out = out,
+            document = document(book("a").copy(readerSettings = perBook)),
+            stats = stats,
+            settings = global,
+            mode = BackupMode.DATA,
+            appVersion = "1.56",
+            createdAtMillis = 1_700_000_000_000L,
+        )
+
+        val restored = BackupArchive.read(ByteArrayInputStream(out.toByteArray()), booksDir, coversDir)
+        assertEquals(BackupManifest.FORMAT_VERSION, restored.manifest.formatVersion)
+        assertEquals(global, restored.settings)
+        assertEquals(perBook, restored.document.books.single().readerSettings)
+    }
+
+    @Test
     fun `everything the user made survives a data-only round trip`() {
         val bytes = writeArchive(document(book("a"), book("b")))
 
@@ -179,6 +228,23 @@ class BackupArchiveTest {
         assertEquals(45, contents.settings?.app?.dailyGoalMinutes)
         assertEquals(false, contents.settings?.app?.autoHideReturnButton)
         assertEquals(settings.app.defaultTranslator, contents.settings?.app?.defaultTranslator)
+        assertEquals(settings.app.defaultDictionary, contents.settings?.app?.defaultDictionary)
+        assertEquals(settings.app.defaultSearchApp, contents.settings?.app?.defaultSearchApp)
+    }
+
+    @Test
+    fun `variable font instances survive global and per book settings backups`() {
+        val chosen = ReaderSettings(font = com.example.frogreader.data.ReaderFont.CUSTOM,
+            customFontPath = "/fonts/variable.ttf", customFontAxes = mapOf("wght" to 700f, "wdth" to 75f))
+        val global = settings.copy(reader = chosen)
+        val perBook = chosen.copy(customFontAxes = mapOf("wght" to 900f, "wdth" to 100f))
+        val out = ByteArrayOutputStream()
+        BackupArchive.write(out, document(book("a").copy(readerSettings = perBook)), stats, global,
+            BackupMode.DATA, "BETA", 1_700_000_000_000L)
+        val restored = BackupArchive.read(ByteArrayInputStream(out.toByteArray()), booksDir, coversDir)
+        assertEquals(BackupManifest.FORMAT_VERSION, restored.manifest.formatVersion)
+        assertEquals(global, restored.settings)
+        assertEquals(perBook, restored.document.books.single().readerSettings)
     }
 
     @Test
@@ -413,6 +479,8 @@ class BackupArchiveTest {
         assertTrue(saved.reader.hyphenation)
         assertFalse(saved.reader.bookStyles)
         assertEquals(PageMargins.NORMAL, saved.reader.pageMargins)
+        assertNull(saved.reader.pageMarginDp)
+        assertEquals(20, saved.reader.sideMarginDp)
         assertEquals(ReadingMode.SCROLL, saved.reader.readingMode)
         assertFalse(saved.reader.dropCaps)
         assertEquals(PageTurnAnimation.SLIDE, saved.reader.pageTurnAnimation)
@@ -426,6 +494,9 @@ class BackupArchiveTest {
         assertEquals(StartupDestination.LIBRARY, app.startupDestination)
         assertEquals(AppLockDelay.ONE_MINUTE, app.appLockDelay)
         assertEquals(BackupMode.DATA, app.backupMode)
+        assertNull(app.defaultTranslator)
+        assertNull(app.defaultDictionary)
+        assertNull(app.defaultSearchApp)
     }
 
     @Test

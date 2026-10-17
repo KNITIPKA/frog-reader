@@ -90,6 +90,118 @@ class ReadingQueueAttachmentTest {
         assertTrue(repo.readingQueue.value.isEmpty())
     }
 
+    @Test fun `library book queues once and survives restart without changing library data`() = runTest {
+        val repo = repository()
+        val existing = repo.importBook(uri)
+        repo.setRating(existing.id, 5)
+        repo.saveProgress(existing.id, ReadingProgress(fraction = 0.42f))
+        val before = repo.books.value.single()
+        repo.saveReadingQueueEntry(null, "First", "", "")
+
+        assertTrue(repo.addLibraryBookToReadingQueue(existing.id))
+        assertFalse(repo.addLibraryBookToReadingQueue(existing.id))
+
+        val restarted = repository()
+        assertEquals(before, restarted.books.value.single())
+        assertEquals(listOf("First", before.title), restarted.readingQueue.value.map { it.title })
+        val queued = restarted.readingQueue.value.last()
+        assertEquals(before.author, queued.author)
+        assertEquals(before, queued.attachment)
+        val opened = restarted.startReadingQueueEntry(queued.id)
+        assertEquals(before, opened)
+        assertEquals(before, repository().books.value.single())
+        assertEquals("First", repository().readingQueue.value.single().title)
+    }
+
+    @Test fun `removing queued library book keeps its file available for start reading`() = runTest {
+        val repo = repository()
+        val book = repo.importBook(uri)
+        repo.addLibraryBookToReadingQueue(book.id)
+        repo.deleteBook(book.id)
+        assertTrue(repo.books.value.isEmpty())
+        assertNotNull(repo.bookFileFor(repo.readingQueue.value.single().attachment!!))
+        val restarted = repository()
+        val opened = restarted.startReadingQueueEntry(restarted.readingQueue.value.single().id)
+        assertEquals(book.id, opened.id)
+        assertNotNull(restarted.bookFileFor(opened))
+        assertTrue(restarted.loadContent(opened).chapters.isNotEmpty())
+    }
+
+    @Test fun `deleting a queue entry never deletes the library file`() = runTest {
+        val repo = repository()
+        val book = repo.importBook(uri)
+        repo.addLibraryBookToReadingQueue(book.id)
+        val queued = repo.readingQueue.value.single()
+        repo.deleteReadingQueueEntry(queued.id)
+        repo.discardReadingQueueAttachment(queued.attachment!!)
+        assertNotNull(repo.bookFileFor(book))
+        assertEquals(book.id, repository().books.value.single().id)
+    }
+
+    @Test fun `removing library book from queue is durable preserves other entries and allows adding again`() = runTest {
+        val repo = repository()
+        val book = repo.importBook(uri)
+        repo.setRating(book.id, 4)
+        repo.saveProgress(book.id, ReadingProgress(fraction = 0.35f))
+        val before = repo.books.value.single()
+        repo.saveReadingQueueEntry(null, "First", "", "Keep this note")
+        val first = repo.readingQueue.value.single()
+        repo.addLibraryBookToReadingQueue(book.id)
+        repo.saveReadingQueueEntry(null, "Last", "", "")
+        val last = repo.readingQueue.value.last()
+
+        repo.removeLibraryBookFromReadingQueue(book.id)
+        repo.removeLibraryBookFromReadingQueue(book.id)
+        repo.removeLibraryBookFromReadingQueue("missing")
+
+        val restarted = repository()
+        assertEquals(listOf(first, last), restarted.readingQueue.value)
+        assertEquals(before, restarted.books.value.single())
+        assertNotNull(restarted.bookFileFor(before))
+        assertTrue(restarted.addLibraryBookToReadingQueue(book.id))
+        assertEquals(listOf(first.id, last.id), restarted.readingQueue.value.dropLast(1).map { it.id })
+        assertEquals(before, restarted.readingQueue.value.last().attachment)
+    }
+
+    @Test fun `missing library book cannot create a queue entry`() = runTest {
+        val repo = repository()
+        try { repo.addLibraryBookToReadingQueue("missing"); fail("Must reject a missing book") }
+        catch (_: java.io.IOException) { }
+        assertTrue(repository().readingQueue.value.isEmpty())
+    }
+
+    @Test fun `queued library book uses current file and progress after replacement`() = runTest {
+        val repo = repository()
+        val book = repo.importBook(uri)
+        repo.addLibraryBookToReadingQueue(book.id)
+        val replacement = repo.commitImport(repo.stageImport(uri), ImportMode.Replace(book.id))
+        repo.saveProgress(book.id, ReadingProgress(fraction = 0.6f))
+        val before = repo.books.value.single()
+        val opened = repo.startReadingQueueEntry(repo.readingQueue.value.single().id)
+        assertEquals(before, opened)
+        assertEquals(replacement.fileName, opened.fileName)
+        assertNotNull(repo.bookFileFor(opened))
+        assertEquals(1, repo.books.value.size)
+    }
+
+    @Test fun `full backup restores library book and its shared queue attachment`() = runTest {
+        val repo = repository()
+        val book = repo.importBook(uri)
+        repo.addLibraryBookToReadingQueue(book.id)
+        val out = ByteArrayOutputStream()
+        BackupArchive.write(out, repo.backupDocument(), ReadingStats(), BackupSettings(), BackupMode.FULL, "test", 1,
+            bookFile = repo::bookFileFor, coverFile = repo::coverFileFor)
+        booksDir.deleteRecursively()
+        val doc = BackupArchive.read(out.toByteArray().inputStream(), booksDir, coversDir)
+            .resolveDocument(booksDir, coversDir)
+        repo.replaceAll(doc.books, doc.shelves, doc.readingQueue)
+        val restarted = repository()
+        val opened = restarted.startReadingQueueEntry(restarted.readingQueue.value.single().id)
+        assertEquals(book.id, opened.id)
+        assertEquals(1, restarted.books.value.size)
+        assertTrue(restarted.loadContent(opened).chapters.isNotEmpty())
+    }
+
     @Test fun `missing attachment cannot remove queue entry or create a library book`() = runTest {
         val repo = repository()
         val attached = repo.prepareReadingQueueAttachment(uri)

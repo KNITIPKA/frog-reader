@@ -22,6 +22,11 @@ class SettingsViewModel(private val settingsRepository: SettingsRepository) : Vi
         viewModelScope.launch { settingsRepository.updateApp(transform) }
     }
 
+    /** External-app dialogs await persistence so a failed choice stays editable and is reported. */
+    suspend fun saveExternalApp(transform: (AppSettings) -> AppSettings) {
+        settingsRepository.updateApp(transform)
+    }
+
     companion object {
         val Factory = viewModelFactory {
             initializer {

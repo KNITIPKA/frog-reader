@@ -16,6 +16,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
@@ -120,6 +121,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.frogreader.ui.theme.LocalFrogColors
+import com.example.frogreader.ui.components.rememberPagerPillInteraction
 import java.util.Locale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.hapticfeedback.HapticFeedback
@@ -307,7 +309,17 @@ class MainActivity : ComponentActivity() {
         }
         window.setBackgroundDrawable(bootScheme.surface.toArgb().toDrawable())
 
-        enableEdgeToEdge()
+        // Compose paints the app canvas (or the reader's paper) under both bars.
+        // The default auto style adds a white/dark three-button navigation scrim,
+        // including over Beige. Explicit styles keep it transparent on API 26–28
+        // and disable platform contrast enforcement on API 29+. Icon appearance
+        // continues to follow the active app theme in the effects below.
+        val transparentBars = if (bootTheme.isDark()) {
+            SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        } else {
+            SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+        }
+        enableEdgeToEdge(statusBarStyle = transparentBars, navigationBarStyle = transparentBars)
         // A file/widget intent remains queued while welcome or app lock is on screen.
         // An explicit saved null also prevents replaying an already consumed launch intent.
         @Suppress("DEPRECATION")
@@ -1308,6 +1320,13 @@ internal fun FrogNavigationBar(
 ) {
     val scheme = MaterialTheme.colorScheme
     val density = LocalDensity.current
+    val pillInteraction = rememberPagerPillInteraction(
+        selectedIndex = if (selectedTab == NavTab.PROFILE) 1 else 0,
+        pagerProgress = tabProgress,
+        enabled = visible,
+        onSelect = { onTabSelected(if (it == 1) NavTab.PROFILE else NavTab.LIBRARY) },
+    )
+    val visibleProgress = pillInteraction.progress
     val actionSpace by animateDpAsState(
         if (reserveImportSpace) importButtonSize + ImportButtonGap else 0.dp, label = "dockActionSpace",
     )
@@ -1346,14 +1365,14 @@ internal fun FrogNavigationBar(
                 shadowElevation = 3.dp,
             ) {
                 val isRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-                Box(modifier = Modifier.padding(FrogDockContentPadding)) {
+                Box(modifier = Modifier.padding(FrogDockContentPadding).then(pillInteraction.modifier)) {
                     Box(modifier = Modifier.matchParentSize()) {
                         Box(
                             modifier = Modifier
                                 .fillMaxHeight()
                                 .fillMaxWidth(0.5f)
                                 .graphicsLayer {
-                                    translationX = tabProgress() * size.width * if (isRtl) -1f else 1f
+                                    translationX = visibleProgress() * size.width * if (isRtl) -1f else 1f
                                 }
                                 .clip(RoundedCornerShape(24.dp))
                                 .background(scheme.primaryContainer)
@@ -1367,18 +1386,18 @@ internal fun FrogNavigationBar(
                         FrogNavigationItem(
                             modifier = Modifier.weight(1f),
                             selected = selectedTab == NavTab.LIBRARY,
-                            selectionProgress = { 1f - tabProgress() },
+                            selectionProgress = { 1f - visibleProgress() },
                             enabled = visible,
-                            onClick = { onTabSelected(NavTab.LIBRARY) },
+                            onClick = { pillInteraction.select(0) },
                             icon = Icons.Rounded.AutoStories,
                             label = stringResource(R.string.nav_library),
                         )
                         FrogNavigationItem(
                             modifier = Modifier.weight(1f),
                             selected = selectedTab == NavTab.PROFILE,
-                            selectionProgress = tabProgress,
+                            selectionProgress = visibleProgress,
                             enabled = visible,
-                            onClick = { onTabSelected(NavTab.PROFILE) },
+                            onClick = { pillInteraction.select(1) },
                             icon = Icons.Outlined.PersonOutline,
                             selectedIcon = Icons.Rounded.Person,
                             label = stringResource(R.string.nav_profile),

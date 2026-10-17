@@ -1,6 +1,9 @@
 package com.example.frogreader.data.model
 
+import kotlinx.serialization.Serializable
+
 /** Border patterns the native publisher-layout renderer can reproduce. */
+@Serializable
 enum class PublisherBorderStyle {
     NONE,
     SOLID,
@@ -10,6 +13,7 @@ enum class PublisherBorderStyle {
 }
 
 /** One physical edge of a publisher-authored box. */
+@Serializable
 data class PublisherBorderSide(
     val widthEm: Float,
     val colorArgb: Int,
@@ -28,6 +32,7 @@ data class PublisherBorderSide(
  * other retained lengths are normalized to reader-root em after resolving
  * element-relative `em`/`ch`/`ex` against the element's computed font size.
  */
+@Serializable
 data class PublisherBoxStyle(
     val marginTopEm: Float = 0f,
     val marginRightEm: Float = 0f,
@@ -79,10 +84,13 @@ data class PublisherBoxStyle(
     }
 }
 
+@Serializable
 enum class PublisherBoxAlign { START, CENTER, END }
 
+@Serializable
 enum class PublisherFloatSide { LEFT, RIGHT }
 
+@Serializable
 enum class PublisherClear { NONE, LEFT, RIGHT, BOTH }
 
 /**
@@ -95,6 +103,7 @@ enum class PublisherClear { NONE, LEFT, RIGHT, BOTH }
  * continuation created when an EPUB document is sliced at a navigation
  * boundary.
  */
+@Serializable
 data class PublisherBoxSpan(
     val id: String,
     val parentId: String? = null,

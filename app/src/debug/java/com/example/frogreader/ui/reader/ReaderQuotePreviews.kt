@@ -115,7 +115,7 @@ private fun QuotePagePreview(theme: AppTheme, selecting: Boolean = false) {
             if (selecting) {
                 Surface(color = colors.chrome, contentColor = colors.onChrome) {
                     SelectionToolbarActions(colors, setOf("original", "blue", "rose", "enclosing"),
-                        availableQuoteColors(controller.selection, quotePreviewQuotes), {}, {}, {}, {})
+                        availableQuoteColors(controller.selection, quotePreviewQuotes), {}, {}, {}, {}, {}, {})
                 }
                 Spacer(Modifier.height(24.dp))
             }

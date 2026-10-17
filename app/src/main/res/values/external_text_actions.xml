@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="selection_define">Define</string>
+    <string name="selection_search">Search</string>
+    <string name="settings_default_dictionary">Default dictionary</string>
+    <string name="settings_default_search_app">Default search app</string>
+    <string name="external_text_translate_description">Choose an app to translate selected text</string>
+    <string name="external_text_define_description">Choose an app to look up selected words</string>
+    <string name="external_text_search_description">Choose an app to search selected text</string>
+    <string name="external_text_process_text_hint">Apps perform the action shown beneath their name.</string>
+    <string name="external_text_translate_empty">No compatible apps found. Install an app that supports processing selected text, then return here.</string>
+    <string name="external_text_define_empty">No compatible dictionary apps found. Install an app that supports dictionary lookup, then return here.</string>
+    <string name="external_text_search_empty">No compatible search apps found. Install an app that supports receiving search queries, then return here.</string>
+    <string name="external_text_ask_every_time">Ask every time</string>
+    <string name="external_text_not_selected">Choose an app the first time</string>
+    <string name="external_text_loading">Loading installed apps…</string>
+    <string name="external_text_unavailable">Selected app unavailable — choose another</string>
+    <string name="external_text_app_and_action">%1$s · %2$s</string>
+    <string name="external_text_settings_subtitle">%1$s\n%2$s</string>
+    <string name="external_text_launch_failed">Could not open this app. Choose another app.</string>
+    <string name="external_text_save_failed">Could not save your app choice. Please try again.</string>
+    <string name="external_text_selection_too_long">This selection is too long to send to another app. Select a shorter passage and try again.</string>
+</resources>

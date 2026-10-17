@@ -62,6 +62,10 @@
     <!-- Long-press menu, shared by books and shelves -->
     <string name="library_menu_select">Select</string>
     <string name="library_menu_add_to_shelf">Add to shelf</string>
+    <string name="library_menu_add_to_reading_queue">Add to the Reading Queue</string>
+    <string name="library_menu_remove_from_reading_queue">Remove from the Reading Queue</string>
+    <string name="library_reading_queue_added">“%1$s” added to your Reading Queue</string>
+    <string name="library_reading_queue_already_added">“%1$s” is already in your Reading Queue</string>
     <string name="library_menu_remove">Remove from library</string>
     <string name="library_menu_more">More actions</string>
 
@@ -117,6 +121,11 @@
 
     <!-- Reader screen -->
     <string name="reader_error_title">Couldn\'t open this book</string>
+    <string name="reader_preparing_destination">Preparing your destination…</string>
+    <string name="reader_preparing_pages">Preparing the next pages…</string>
+    <string name="reader_preparing_pages_continue">Reading will continue here automatically.</string>
+    <string name="reader_loading_chapters">Loading chapters…</string>
+    <string name="reader_search_loading_book">Searching as the book loads…</string>
     <string name="reader_error_message">The file may be damaged or missing.</string>
     <string name="reader_back">Back</string>
     <string name="reader_return">Previous location</string>
@@ -236,6 +245,13 @@
     <string name="reader_section_pages_nav">Pages &amp; navigation</string>
     <string name="reader_section_device">Device</string>
     <string name="reader_section_margins">Side margins</string>
+    <string name="reader_margins_dp">%1$d dp</string>
+    <string name="reader_decrease_side_margins">Widen text (decrease side margins)</string>
+    <string name="reader_increase_side_margins">Narrow text (increase side margins)</string>
+    <string name="reader_decrease_line_spacing">Decrease line spacing</string>
+    <string name="reader_increase_line_spacing">Increase line spacing</string>
+    <string name="reader_decrease_font_size">Decrease font size</string>
+    <string name="reader_increase_font_size">Increase font size</string>
     <string name="reader_margins_narrow">Narrow</string>
     <string name="reader_margins_normal">Normal</string>
     <string name="reader_margins_wide">Wide</string>
@@ -634,7 +650,7 @@
     <string name="reading_queue_remove_file">Remove attached file</string>
     <string name="reading_queue_more">Book actions</string>
     <string name="reading_queue_file_ready">%1$s ready to read</string>
-    <string name="reading_queue_file_private">Appears in your library when you start reading</string>
+    <string name="reading_queue_file_private">Ready to read when you choose Start reading</string>
     <string name="reading_queue_file_failed">Could not attach this file. Choose a supported EPUB, FB2, MOBI, AZW3, TXT or MD book and try again.</string>
     <string name="reading_queue_deleted">“%1$s” removed from your queue</string>
     <string name="reading_queue_saved_note">Your Reading Queue note</string>

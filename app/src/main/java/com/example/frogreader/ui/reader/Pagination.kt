@@ -62,7 +62,7 @@ class BookPage(
  * Bumped whenever pagination decisions or parser output that affects layout
  * change — stale disk caches then miss on the key and are recomputed.
  */
-const val LAYOUT_ENGINE_VERSION = 17
+const val LAYOUT_ENGINE_VERSION = 24
 
 class PaginationSpec(
     val contentWidthPx: Int,
@@ -83,6 +83,9 @@ class PaginationSpec(
             "$fontSize | ${settings.lineHeight} | " +
             "density=${density.density.toBits()}/${density.fontScale.toBits()} | " +
             "${settings.font} | ${settings.customFontPath} | " +
+            "fontAxes=${com.example.frogreader.data.fontVariationKey(settings.customFontAxes)} | " +
+            "fontAuto=${settings.customFontAuto} | " +
+            "fontFamily=${settings.customFontFamilyPaths.distinct().sorted().joinToString { "${it.length}:$it" }} | " +
             "${settings.justify} | ${settings.hyphenation} | " +
             "${settings.startChaptersOnNewPage} | ${settings.hideFootnotes} | " +
             "${settings.bookStyles} | ${settings.dropCaps} | lang=$language | " +
@@ -100,6 +103,11 @@ class PaginationSpec(
  * also starts a page (a chapter start, with chapters-on-new-page enabled)
  * produces byte-identical pages — swapping the full result in later is
  * invisible.
+ *
+ * [stopAfterLocation] requests only a readable prefix around a source anchor.
+ * It returns after [previewPageCount] closed pages from the anchor's page;
+ * an unfinished trailing page is discarded so every returned cut agrees with
+ * a complete pass. A shorter source range simply returns all of its pages.
  */
 suspend fun paginateBook(
     items: List<ReaderItem>,
@@ -107,12 +115,18 @@ suspend fun paginateBook(
     spec: PaginationSpec,
     fromIndex: Int = 0,
     toIndex: Int = items.size,
+    stopAfterLocation: ReaderReturnLocation.Main? = null,
+    previewPageCount: Int = 3,
 ): List<BookPage> {
     val pages = mutableListOf<BookPage>()
     var parts = mutableListOf<PagePart>()
     var usedPx = 0
     var pageFirstIndex = 0
     var pageFirstChar = 0
+
+    fun previewReady(): Boolean = stopAfterLocation?.let { target ->
+        paginationPreviewReady(pages, target, previewPageCount)
+    } == true
 
     fun closePage() {
         if (parts.isNotEmpty()) {
@@ -191,39 +205,70 @@ suspend fun paginateBook(
         // flow rather than suppressing and clipping real book content.
         val normalFlowFloatTargets = mutableSetOf<Int>()
         val normalFlowFloatSources = mutableSetOf<Int>()
-        if (spec.settings.bookStyles) {
-            items.forEachIndexed { targetIndex, target ->
-                val publisherFloat = target.publisherFloat ?: return@forEachIndexed
-                val plan = publisherSideBoxPlan(targetIndex)
-                val geometry = publisherBoxGeometry(
-                    boxes = target.publisherBoxes,
-                    columnWidthPx = spec.contentWidthPx,
-                    fontSizePx = fontSizePx,
-                    partStartsElement = true,
-                    partEndsElement = true,
-                    enabled = true,
-                    inlineWidths = inlineWidths,
-                    viewportHeightPx = spec.contentHeightPx,
+        val checkedFloatTargets = mutableSetOf<Int>()
+        val floatTargetBySource = mutableMapOf<Int, Int>()
+        fun ensurePublisherFloatFlow(targetIndex: Int) {
+            if (!spec.settings.bookStyles || !checkedFloatTargets.add(targetIndex)) return
+            val target = items[targetIndex]
+            val publisherFloat = target.publisherFloat ?: return
+            publisherFloat.contents.forEach { content ->
+                floatTargetBySource[content.sourceItemIndex] = targetIndex
+            }
+            val plan = publisherSideBoxPlan(targetIndex)
+            val geometry = publisherBoxGeometry(
+                boxes = target.publisherBoxes,
+                columnWidthPx = spec.contentWidthPx,
+                fontSizePx = fontSizePx,
+                partStartsElement = true,
+                partEndsElement = true,
+                enabled = true,
+                inlineWidths = inlineWidths,
+                viewportHeightPx = spec.contentHeightPx,
+            )
+            val (top, bottom) = ReaderMetrics.verticalPaddings(
+                target.element,
+                spec.fontSize,
+                bookStyles = true,
+            )
+            val verticalInsets = top.roundToPx() + bottom.roundToPx() +
+                geometry.topInsetPx + geometry.bottomInsetPx
+            if (publisherFloatNeedsNormalFlow(
+                    compositeHeightPx = plan?.compositeHeightPx,
+                    verticalInsetsPx = verticalInsets,
+                    pageHeightPx = spec.contentHeightPx,
                 )
-                val (top, bottom) = ReaderMetrics.verticalPaddings(
-                    target.element,
-                    spec.fontSize,
-                    bookStyles = true,
-                )
-                val verticalInsets = top.roundToPx() + bottom.roundToPx() +
-                    geometry.topInsetPx + geometry.bottomInsetPx
-                if (publisherFloatNeedsNormalFlow(
-                        compositeHeightPx = plan?.compositeHeightPx,
-                        verticalInsetsPx = verticalInsets,
-                        pageHeightPx = spec.contentHeightPx,
-                    )
-                ) {
-                    normalFlowFloatTargets += targetIndex
-                    publisherFloat.contents.forEach { content ->
-                        normalFlowFloatSources += content.sourceItemIndex
-                    }
+            ) {
+                normalFlowFloatTargets += targetIndex
+                publisherFloat.contents.forEach { content ->
+                    normalFlowFloatSources += content.sourceItemIndex
                 }
             }
+        }
+
+        fun ensureSuppressedSourceFlow(sourceIndex: Int) {
+            val targetIndex = floatTargetBySource[sourceIndex]
+                ?: if (items is ReaderChapterItems) {
+                    items.publisherFloatTargetForSource(sourceIndex)
+                } else {
+                    // Plain lists are used by linked documents and test fixtures.
+                    // A source's owning float follows it in the same chapter;
+                    // cache all siblings when first encountered instead of
+                    // rescanning this range for each caption/image leaf.
+                    val chapter = items[sourceIndex].chapterIndex
+                    var target: Int? = null
+                    var candidate = sourceIndex + 1
+                    while (candidate < items.size) {
+                        val item = items[candidate]
+                        if (item.chapterIndex != chapter) break
+                        if (item.publisherFloat?.contents?.any { it.sourceItemIndex == sourceIndex } == true) {
+                            target = candidate
+                            break
+                        }
+                        candidate++
+                    }
+                    target
+                }
+            targetIndex?.let(::ensurePublisherFloatFlow)
         }
 
         /**
@@ -237,11 +282,12 @@ suspend fun paginateBook(
             val limit = min(headingIndex + 4, items.size)
             while (j < limit) {
                 val next = items[j]
-                if (next.suppressedByPublisherFloat && spec.settings.bookStyles &&
-                    j !in normalFlowFloatSources
-                ) {
-                    j++
-                    continue
+                if (next.suppressedByPublisherFloat && spec.settings.bookStyles) {
+                    ensureSuppressedSourceFlow(j)
+                    if (j !in normalFlowFloatSources) {
+                        j++
+                        continue
+                    }
                 }
                 if (spec.settings.startChaptersOnNewPage &&
                     next.chapterIndex != items[headingIndex].chapterIndex
@@ -341,6 +387,7 @@ suspend fun paginateBook(
         }
 
         for (index in fromIndex.coerceAtLeast(0) until toIndex.coerceAtMost(items.size)) {
+            if (previewReady()) return pages
             val item = items[index]
             val itemFontSize = inlineWidths.fittedFontSize(item.publisherBoxes, spec.contentWidthPx)
             val itemFontSizePx = itemFontSize.sp.toPx()
@@ -358,10 +405,12 @@ suspend fun paginateBook(
 
             // The semantic leaves remain addressable, but a supported CSS
             // float subtree is drawn inside its following paragraph.
-            if (item.suppressedByPublisherFloat && spec.settings.bookStyles &&
-                index !in normalFlowFloatSources
-            ) {
-                continue
+            if (spec.settings.bookStyles) {
+                if (item.publisherFloat != null) ensurePublisherFloatFlow(index)
+                if (item.suppressedByPublisherFloat) {
+                    ensureSuppressedSourceFlow(index)
+                    if (index !in normalFlowFloatSources) continue
+                }
             }
 
             // Give a multi-leaf `break-inside:avoid` container the maximum
@@ -625,6 +674,7 @@ suspend fun paginateBook(
                     val raw = packedText.text
                     var cursor = 0
                     while (cursor < raw.length) {
+                        if (previewReady()) return pages
                         // Skip whitespace a previous cut left behind.
                         while (cursor < raw.length && raw[cursor].isWhitespace()) cursor++
                         if (cursor >= raw.length) break
@@ -897,6 +947,7 @@ suspend fun paginateBook(
                     val repeatHeader = element.rows.first().isHeader && element.rows.size > 1
                     var row = 0
                     while (row < element.rows.size) {
+                        if (previewReady()) return pages
                         val headerPx = if (row > 0 && repeatHeader) layout.rowHeightsPx[0] else 0
                         val publisherStartsElement = row == 0
                         val leadingPadding = baseVPaddingPx +

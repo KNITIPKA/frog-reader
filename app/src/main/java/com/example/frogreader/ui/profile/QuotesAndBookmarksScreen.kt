@@ -1,6 +1,7 @@
 package com.example.frogreader.ui.profile
 
 import com.example.frogreader.ui.components.FrogSnackbarHost
+import com.example.frogreader.ui.components.FrogSegmentedControl
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -295,28 +296,30 @@ internal fun QuotesAndBookmarksContent(
 @Composable
 private fun QuotesAndBookmarksTabs(selected: Int, quoteCount: Int, bookmarkCount: Int, onSelect: (Int) -> Unit) {
     val colors = MaterialTheme.colorScheme
-    Surface(
-        color = colors.surfaceContainer, shape = RoundedCornerShape(20.dp),
+    val options = listOf(R.string.reader_quotes to quoteCount, R.string.reader_bookmarks to bookmarkCount)
+    FrogSegmentedControl(
+        count = options.size,
+        selectedIndex = selected,
+        onSelect = onSelect,
+        containerColor = colors.surfaceContainer,
+        indicatorColor = colors.primary,
+        contentColor = colors.onSurfaceVariant,
+        selectedContentColor = colors.onPrimary,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 4.dp),
-    ) {
-        Row(Modifier.selectableGroup().padding(4.dp)) {
-            listOf(R.string.reader_quotes to quoteCount, R.string.reader_bookmarks to bookmarkCount)
-                .forEachIndexed { index, (label, count) ->
-                    Tab(
-                        selected = selected == index, onClick = { onSelect(index) },
-                        modifier = Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
-                            .background(if (selected == index) colors.primary else colors.surfaceContainer),
-                        selectedContentColor = colors.onPrimary,
-                        unselectedContentColor = colors.onSurfaceVariant,
-                        text = {
-                            Text(stringResource(R.string.quotes_bookmarks_tab_count, stringResource(label), count),
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = if (selected == index) FontWeight.SemiBold else FontWeight.Normal,
-                                maxLines = 2)
-                        },
-                    )
-                }
-        }
+        containerRadius = 20.dp,
+        indicatorRadius = 16.dp,
+        minItemHeight = 48.dp,
+    ) { index, active, foreground ->
+        val (label, count) = options[index]
+        Text(
+            stringResource(R.string.quotes_bookmarks_tab_count, stringResource(label), count),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 2,
+            color = foreground,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+        )
     }
 }
 

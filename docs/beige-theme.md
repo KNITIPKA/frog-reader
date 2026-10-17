@@ -61,8 +61,8 @@ components must not inherit default purple fixed roles.
    Secondary and unselected controls remain neutral. `inverseSurface` belongs
    to inverse content, not selected tabs.
 5. Reader controls use the same shapes, group backgrounds and filled-selection
-   treatment as Light. Only their palette changes. Chip rows (theme, side margins,
-   reading mode, font and similar choices) and steppers retain their rounded
+   treatment as Light. Only their palette changes. Chip rows (theme, reading mode,
+   font and similar choices) and steppers retain their rounded
    `control` backdrop in warm taupe. Nested steppers use distinct paper-beige
    `controlButton` faces. Values use `onChrome`, captions use `onChromeVariant`,
    actions use `accent` / `onAccent`.

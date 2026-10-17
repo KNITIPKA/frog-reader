@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.frogreader.R
+import com.example.frogreader.ui.components.FrogSegmentedControl
 
 internal val SettingsCardShape = RoundedCornerShape(28.dp)
 internal val SettingsRowShape = RoundedCornerShape(22.dp)
@@ -266,52 +267,32 @@ internal fun <T> SettingsSegmentedControl(
     enabled: Boolean = true,
 ) {
     val haptics = LocalHapticFeedback.current
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .selectableGroup()
-            .clip(RoundedCornerShape(24.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        options.forEach { (value, label) ->
-            val isSelected = value == selected
-            val interactionSource = remember(value) { MutableInteractionSource() }
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(40.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(
-                        if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                    )
-                    .selectable(
-                        selected = isSelected,
-                        enabled = enabled,
-                        role = Role.RadioButton,
-                        interactionSource = interactionSource,
-                        indication = null,
-                        onClick = {
-                            if (!isSelected) {
-                                haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                                onSelected(value)
-                            }
-                        },
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
-                    color = if (isSelected) {
-                        MaterialTheme.colorScheme.onPrimary
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                )
+    val colors = MaterialTheme.colorScheme
+    FrogSegmentedControl(
+        count = options.size,
+        selectedIndex = options.indexOfFirst { it.first == selected },
+        modifier = modifier.fillMaxWidth(),
+        enabled = enabled,
+        containerColor = colors.surfaceContainer,
+        indicatorColor = colors.primary,
+        contentColor = colors.onSurface,
+        selectedContentColor = colors.onPrimary,
+        gap = 4.dp,
+        onSelect = { index ->
+            val value = options[index].first
+            if (value != selected) {
+                haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+                onSelected(value)
             }
-        }
+        },
+    ) { index, _, foreground ->
+        Text(
+            text = options[index].second,
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
+            color = foreground,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+        )
     }
 }
 

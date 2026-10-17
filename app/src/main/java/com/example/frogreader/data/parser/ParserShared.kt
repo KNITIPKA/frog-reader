@@ -86,10 +86,14 @@ internal fun buildNotes(
         val chapter = chapters.getOrNull(chapterIndex) ?: continue
         val elements = chapter.elements
         if (elementIndex !in elements.indices) continue
-        val end = anchoredStartsByChapter[chapterIndex]
-            .orEmpty()
-            .firstOrNull { it > elementIndex }
-            ?: elements.size
+        val starts = anchoredStartsByChapter[chapterIndex].orEmpty()
+        // Large reference books can have thousands of note anchors in one
+        // chapter. Searching from the beginning for every note makes this
+        // pass quadratic; the sorted, distinct index gives the same boundary
+        // with a binary search, including aliases at the current position.
+        val position = starts.binarySearch(elementIndex)
+        val nextPosition = if (position >= 0) position + 1 else -position - 1
+        val end = starts.getOrNull(nextPosition) ?: elements.size
         if (end > elementIndex) {
             notes[key] = NoteDocument(
                 elements = elements.subList(elementIndex, end).toList(),

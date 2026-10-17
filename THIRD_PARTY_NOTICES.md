@@ -20,6 +20,7 @@ tap the GPLv3 label or the credits at the bottom of the popup.
 | --- | --- | --- |
 | Literata regular and italic | [Literata](https://github.com/googlefonts/literata), Copyright 2017 The Literata Project Authors; designed by TypeTogether | SIL Open Font License 1.1, [literata-OFL.txt](app/src/main/assets/licenses/literata-OFL.txt) |
 | IBM Plex Sans regular and italic | [IBM Plex](https://github.com/IBM/plex), Copyright © 2017 IBM Corp.; Reserved Font Name “Plex” | SIL Open Font License 1.1, [ibm-plex-OFL.txt](app/src/main/assets/licenses/ibm-plex-OFL.txt) |
+| Liberation Serif, Sans and Mono, four styles each (2.1.5) | [Liberation Fonts](https://github.com/liberationfonts/liberation-fonts), Digitized data Copyright (c) 2010 Google Corporation; Copyright (c) 2012 Red Hat, Inc.; Reserved Font Names Arimo, Tinos, Cousine and Liberation | SIL Open Font License 1.1, [liberation-OFL.txt](app/src/main/assets/licenses/liberation-OFL.txt); unmodified upstream TTF files |
 | GitHub, Telegram and Signal icons | [Tabler Icons](https://github.com/tabler/tabler-icons), Copyright (c) 2020–2026 Paweł Kuna | MIT, [tabler-icons-MIT.txt](app/src/main/assets/licenses/tabler-icons-MIT.txt); originals are in `assets/icons/about/` |
 
 The fonts remain under the OFL. The project GPL licence does not replace the

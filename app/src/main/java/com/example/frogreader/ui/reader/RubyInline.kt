@@ -152,6 +152,7 @@ internal fun rubyInlineLayouts(
     measurer: TextMeasurer,
     density: Density,
     bookFonts: Map<String, FontFamily> = emptyMap(),
+    publisherStyles: Boolean = true,
 ): List<RubyInlineLayout> {
     return rubyInlineSourceRanges(text).map { source ->
         val ruby = source.ruby
@@ -181,13 +182,15 @@ internal fun rubyInlineLayouts(
             lineHeight = TextUnit.Unspecified,
             lineHeightStyle = null,
         )
-        val rawReading = ruby.readingText().withBookFonts(bookFonts)
+        val rawReading = ruby.readingText()
         val hiddenReading = rawReading.getStringAnnotations(HIDDEN_TEXT_TAG, 0, rawReading.length)
         val readingText = if (hiddenReading.isEmpty()) rawReading else AnnotatedString.Builder(rawReading).apply {
             hiddenReading.forEach { addStyle(SpanStyle(color = Color.Transparent, background = Color.Transparent), it.start, it.end) }
         }.toAnnotatedString()
-        val baseLayout = measurer.measure(base, style = runStyle, softWrap = false, maxLines = 1)
-        val readingLayout = measurer.measure(readingText, style = readingStyle, softWrap = false, maxLines = 1)
+        val baseTypography = readerTypographyPlan(base, runStyle, density, publisherStyles, bookFonts)
+        val readingTypography = readerTypographyPlan(readingText, readingStyle, density, publisherStyles, bookFonts)
+        val baseLayout = measurer.measure(baseTypography.text, style = baseTypography.style, softWrap = false, maxLines = 1)
+        val readingLayout = measurer.measure(readingTypography.text, style = readingTypography.style, softWrap = false, maxLines = 1)
         val geometry = rubyInlineHorizontalGeometry(baseLayout.size.width.toFloat(),
             baseLayout.getHorizontalPosition(source.baseStart, true),
             baseLayout.getHorizontalPosition(source.baseEnd, true), readingLayout.size.width.toFloat())

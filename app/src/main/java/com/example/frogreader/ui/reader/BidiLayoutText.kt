@@ -10,29 +10,36 @@ import com.example.frogreader.data.model.InlineBidiMode
  * scopes and explicit paragraph styles. [source] is always the exact
  * searchable/copyable book text; [display] includes bidi controls and omits
  * separators whose line breaks Compose already supplies between paragraphs.
- * The two maps make selection, pagination and highlighting stay in source
- * coordinates even though Compose lays out the display copy.
+ * Offset maps make selection, pagination and highlighting stay in source
+ * coordinates even though Compose lays out the display copy. Ordinary text
+ * needs no maps: its source and display offsets are identical.
  */
 class BidiLayoutText private constructor(
     val source: AnnotatedString,
     val display: AnnotatedString,
-    private val sourceStarts: IntArray,
-    private val sourceEnds: IntArray,
-    private val displayOffsets: IntArray,
+    private val sourceStarts: IntArray? = null,
+    private val sourceEnds: IntArray? = null,
+    private val displayOffsets: IntArray? = null,
 ) {
     val hasLayoutChanges: Boolean get() = source !== display
 
     /** Source boundary used at the inclusive start of a painted/measured range. */
-    fun layoutStart(sourceOffset: Int): Int =
-        sourceStarts[sourceOffset.coerceIn(0, source.length)]
+    fun layoutStart(sourceOffset: Int): Int {
+        val offset = sourceOffset.coerceIn(0, source.length)
+        return sourceStarts?.get(offset) ?: offset
+    }
 
     /** Source boundary used at the exclusive end of a painted/measured range. */
-    fun layoutEnd(sourceOffset: Int): Int =
-        sourceEnds[sourceOffset.coerceIn(0, source.length)]
+    fun layoutEnd(sourceOffset: Int): Int {
+        val offset = sourceOffset.coerceIn(0, source.length)
+        return sourceEnds?.get(offset) ?: offset
+    }
 
     /** A Compose layout/caret offset back in clean source-text coordinates. */
-    fun sourceOffset(layoutOffset: Int): Int =
-        displayOffsets[layoutOffset.coerceIn(0, display.length)]
+    fun sourceOffset(layoutOffset: Int): Int {
+        val offset = layoutOffset.coerceIn(0, display.length)
+        return displayOffsets?.get(offset) ?: offset
+    }
 
     companion object {
         fun of(source: AnnotatedString): BidiLayoutText {
@@ -114,10 +121,7 @@ class BidiLayoutText private constructor(
             )
         }
 
-        private fun identity(source: AnnotatedString): BidiLayoutText {
-            val offsets = IntArray(source.length + 1) { it }
-            return BidiLayoutText(source, source, offsets, offsets, offsets)
-        }
+        private fun identity(source: AnnotatedString): BidiLayoutText = BidiLayoutText(source, source)
 
         /** Copies every public Compose annotation except our private bidi metadata. */
         private fun copyAnnotations(

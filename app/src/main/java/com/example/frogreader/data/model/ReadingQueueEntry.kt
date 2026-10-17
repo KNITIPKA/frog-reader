@@ -12,7 +12,7 @@ data class ReadingQueueEntry(
     val author: String = "",
     val note: String = "",
     val createdAtMillis: Long = 0L,
-    /** Private file and parsed metadata; absent from the library until Start reading. */
+    /** Attached file and metadata, either private to the queue or shared with a library book. */
     val attachment: Book? = null,
     override val updatedAtMillis: Long = 0L,
 ) : Timestamped<ReadingQueueEntry> {

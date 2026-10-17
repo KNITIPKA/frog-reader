@@ -16,7 +16,14 @@ import com.example.frogreader.data.model.LINK_TAG
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.FileOutputStream
+import java.io.FilterOutputStream
+import java.io.IOException
 import java.io.RandomAccessFile
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import kotlinx.serialization.json.encodeToStream
+import kotlinx.serialization.json.decodeFromStream
 import java.security.MessageDigest
 
 /**
@@ -29,6 +36,8 @@ object PaginationCache {
 
     /** Bump when the CachedPart/CachedPage shape changes. */
     private const val FORMAT_VERSION = 7
+    // A pathological layout must never create an unbounded disposable file.
+    private const val MAX_FILE_BYTES = 16L * 1024 * 1024
 
     @Serializable
     private class CachedPart(
@@ -180,10 +189,13 @@ object PaginationCache {
         return hash.finish()
     }
 
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     fun load(file: File, key: String, items: List<ReaderItem>): List<BookPage>? =
         runCatching {
-            if (!file.exists()) return null
-            val cached = json.decodeFromString<CachedPagination>(file.readText())
+            if (!file.isFile || file.length() > MAX_FILE_BYTES) return null
+            val cached = file.inputStream().buffered().use {
+                json.decodeFromStream<CachedPagination>(it)
+            }
             if (cached.version != FORMAT_VERSION ||
                 cached.key != key ||
                 cached.itemCount != items.size ||
@@ -292,7 +304,10 @@ object PaginationCache {
             }
         }.getOrNull()
 
+    @Synchronized
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     fun save(file: File, key: String, items: List<ReaderItem>, pages: List<BookPage>) {
+        val temporary = File(file.path + ".tmp")
         runCatching {
             file.parentFile?.mkdirs()
             val tables = linkedMapOf<Int, CachedTableLayout>()
@@ -352,8 +367,26 @@ object PaginationCache {
                     )
                 },
             )
-            file.writeText(json.encodeToString(CachedPagination.serializer(), cached))
+            FileOutputStream(temporary).use { output ->
+                val bounded = object : FilterOutputStream(output) {
+                    private var written = 0L
+                    override fun write(value: Int) {
+                        if (++written > MAX_FILE_BYTES) throw IOException("Layout cache exceeds limit")
+                        out.write(value)
+                    }
+                    override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                        written += length
+                        if (written > MAX_FILE_BYTES) throw IOException("Layout cache exceeds limit")
+                        out.write(bytes, offset, length)
+                    }
+                }
+                json.encodeToStream(CachedPagination.serializer(), cached, bounded)
+                output.fd.sync()
+            }
+            Files.move(temporary.toPath(), file.toPath(),
+                StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
         }
+        temporary.delete()
     }
 
     private class ContentHasher {

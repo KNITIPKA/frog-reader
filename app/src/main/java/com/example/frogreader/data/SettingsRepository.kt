@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.frogreader.data.model.BackupMode
@@ -16,6 +17,8 @@ import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 private const val BOOT_PREFS = "boot_hints"
 
@@ -25,7 +28,7 @@ enum class ReaderFont { LITERATA, SERIF, SANS, CUSTOM }
 @kotlinx.serialization.Serializable
 enum class ReadingMode { SCROLL, PAGES }
 
-/** Horizontal padding of the reading column. */
+/** Legacy reading-column presets, retained for old books and backups. */
 @kotlinx.serialization.Serializable
 enum class PageMargins { NARROW, NORMAL, WIDE }
 
@@ -69,6 +72,16 @@ data class ReaderSettings(
     val font: ReaderFont = ReaderFont.LITERATA,
     /** Path of the user's own font file (ReaderFont.CUSTOM). */
     val customFontPath: String? = null,
+    /** Chosen instance coordinates, or explicit publisher axes retained by an adopted Auto family. */
+    val customFontAxes: Map<String, Float> = emptyMap(),
+    /** False keeps every existing manual face selection unchanged. */
+    val customFontAuto: Boolean = false,
+    /** Files belonging to the selected Auto family, refreshed when the library changes. */
+    val customFontFamilyPaths: List<String> = emptyList(),
+    /** Legacy preference retained for old settings; reading now adapts automatically. */
+    val fontOpticalSizing: Boolean = true,
+    /** Legacy manual width preference; reading now uses the normal font width by default. */
+    val fontStretchPercent: Float = 100f,
     val justify: Boolean = false,
     val hyphenation: Boolean = false,
     /**
@@ -78,6 +91,8 @@ data class ReaderSettings(
      */
     val bookStyles: Boolean = true,
     val pageMargins: PageMargins = PageMargins.WIDE,
+    /** Horizontal inset in dp; null preserves the saved legacy preset. */
+    val pageMarginDp: Int? = null,
     val readingMode: ReadingMode = ReadingMode.PAGES,
     /** Every chapter begins on a fresh page (paged mode). */
     val startChaptersOnNewPage: Boolean = true,
@@ -85,6 +100,7 @@ data class ReaderSettings(
     val showChapterPagesLeft: Boolean = false,
     /** Show a counter at the bottom of each reading page. */
     val showPageCounter: Boolean = true,
+    val showTotalPageCount: Boolean = false,
     /** Strip [53]-style footnote markers from the text entirely. */
     val hideFootnotes: Boolean = false,
     /**
@@ -100,7 +116,26 @@ data class ReaderSettings(
     val dropCaps: Boolean = true,
     /** Chosen page-turn animation in paged mode. */
     val pageTurnAnimation: PageTurnAnimation = PageTurnAnimation.CASCADE,
-)
+) {
+    /** Retire hidden manual controls without changing selected fonts or publisher CSS. */
+    fun withAutomaticTypography(): ReaderSettings =
+        if (fontOpticalSizing && fontStretchPercent == 100f) this
+        else copy(fontOpticalSizing = true, fontStretchPercent = 100f)
+
+    /** Reading and pagination use the same bounded inset, including restored settings. */
+    val sideMarginDp: Int
+        get() = (pageMarginDp ?: when (pageMargins) {
+            PageMargins.NARROW -> 10
+            PageMargins.NORMAL -> 20
+            PageMargins.WIDE -> 34
+        }).coerceIn(MIN_SIDE_MARGIN_DP, MAX_SIDE_MARGIN_DP)
+
+    companion object {
+        const val MIN_SIDE_MARGIN_DP = 8
+        const val MAX_SIDE_MARGIN_DP = 48
+        const val SIDE_MARGIN_STEP_DP = 2
+    }
+}
 
 /** App-wide settings (theme, feedback, behavior, privacy). */
 @kotlinx.serialization.Serializable
@@ -114,9 +149,16 @@ data class AppSettings(
     val keepScreenOn: Boolean = true,
     val volumeKeyPaging: Boolean = true,
     val readerChromeStyle: ReaderChromeStyle = ReaderChromeStyle.FLOATING,
+    val showCollapsedReaderHandle: Boolean = false,
+    val expandReaderPanelsOnSwipe: Boolean = false,
+    val brightnessSwipeEnabled: Boolean = false,
     val autoHideReturnButton: Boolean = true,
-    /** Flattened PROCESS_TEXT activity component; null means choose on first use. */
+    /** Handler ID; legacy flattened PROCESS_TEXT components remain valid. Null chooses on first use. */
     val defaultTranslator: String? = null,
+    /** External dictionary target identifier; null means choose on first use. */
+    val defaultDictionary: String? = null,
+    /** External search target identifier; null means choose on first use. */
+    val defaultSearchApp: String? = null,
     val appLock: Boolean = false,
     val appLockDelay: AppLockDelay = AppLockDelay.ONE_MINUTE,
     val backupMode: BackupMode = BackupMode.DATA,
@@ -216,14 +258,21 @@ class SettingsRepository(private val context: Context) {
         val lineHeight = floatPreferencesKey("line_height")
         val font = stringPreferencesKey("font")
         val customFontPath = stringPreferencesKey("custom_font_path")
+        val customFontAxes = stringPreferencesKey("custom_font_axes")
+        val customFontAuto = booleanPreferencesKey("custom_font_auto")
+        val customFontFamilyPaths = stringPreferencesKey("custom_font_family_paths")
+        val fontOpticalSizing = booleanPreferencesKey("font_optical_sizing")
+        val fontStretchPercent = floatPreferencesKey("font_stretch_percent")
         val justify = booleanPreferencesKey("justify")
         val hyphenation = booleanPreferencesKey("hyphenation")
         val bookStyles = booleanPreferencesKey("book_styles")
         val pageMargins = stringPreferencesKey("page_margins")
+        val pageMarginDp = intPreferencesKey("page_margin_dp")
         val readingMode = stringPreferencesKey("reading_mode")
         val chapterNewPage = booleanPreferencesKey("chapter_new_page")
         val chapterPagesLeft = booleanPreferencesKey("chapter_pages_left")
         val showPageCounter = booleanPreferencesKey("show_page_counter")
+        val showTotalPageCount = booleanPreferencesKey("show_total_page_count")
         val hideFootnotes = booleanPreferencesKey("hide_footnotes")
         val invertImages = booleanPreferencesKey("invert_images")
         val dropCaps = booleanPreferencesKey("drop_caps")
@@ -240,8 +289,13 @@ class SettingsRepository(private val context: Context) {
         val keepScreenOn = booleanPreferencesKey("keep_screen_on")
         val volumeKeyPaging = booleanPreferencesKey("volume_key_paging")
         val readerChromeStyle = stringPreferencesKey("reader_chrome_style")
+        val showCollapsedReaderHandle = booleanPreferencesKey("show_collapsed_reader_handle")
+        val expandReaderPanelsOnSwipe = booleanPreferencesKey("expand_reader_panels_on_swipe")
+        val brightnessSwipeEnabled = booleanPreferencesKey("brightness_swipe_enabled")
         val autoHideReturnButton = booleanPreferencesKey("auto_hide_return_button")
         val defaultTranslator = stringPreferencesKey("default_translator")
+        val defaultDictionary = stringPreferencesKey("default_dictionary")
+        val defaultSearchApp = stringPreferencesKey("default_search_app")
         val appLock = booleanPreferencesKey("app_lock")
         val appLockDelay = stringPreferencesKey("app_lock_delay")
         val backupMode = stringPreferencesKey("backup_scope")
@@ -321,21 +375,33 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun update(transform: (ReaderSettings) -> ReaderSettings) {
         context.settingsDataStore.edit { prefs ->
-            val updated = transform(prefs.readReaderSettings())
+            val updated = transform(prefs.readReaderSettings()).withAutomaticTypography()
             prefs[Keys.fontSize] = updated.fontSizeSp
             prefs[Keys.lineHeight] = updated.lineHeight
             prefs[Keys.font] = updated.font.name
             updated.customFontPath
                 ?.let { prefs[Keys.customFontPath] = it }
                 ?: prefs.remove(Keys.customFontPath)
+            val axes = normalizedFontAxes(updated.customFontAxes)
+            if (axes.isEmpty()) prefs.remove(Keys.customFontAxes)
+            else prefs[Keys.customFontAxes] = Json.encodeToString(axes)
+            prefs[Keys.customFontAuto] = updated.customFontAuto
+            if (updated.customFontFamilyPaths.isEmpty()) prefs.remove(Keys.customFontFamilyPaths)
+            else prefs[Keys.customFontFamilyPaths] = Json.encodeToString(updated.customFontFamilyPaths.distinct().sorted())
+            prefs[Keys.fontOpticalSizing] = updated.fontOpticalSizing
+            prefs[Keys.fontStretchPercent] = updated.fontStretchPercent.takeIf { it.isFinite() && it > 0f } ?: 100f
             prefs[Keys.justify] = updated.justify
             prefs[Keys.hyphenation] = updated.hyphenation
             prefs[Keys.bookStyles] = updated.bookStyles
             prefs[Keys.pageMargins] = updated.pageMargins.name
+            updated.pageMarginDp
+                ?.let { prefs[Keys.pageMarginDp] = updated.sideMarginDp }
+                ?: prefs.remove(Keys.pageMarginDp)
             prefs[Keys.readingMode] = updated.readingMode.name
             prefs[Keys.chapterNewPage] = updated.startChaptersOnNewPage
             prefs[Keys.chapterPagesLeft] = updated.showChapterPagesLeft
             prefs[Keys.showPageCounter] = updated.showPageCounter
+            prefs[Keys.showTotalPageCount] = updated.showTotalPageCount
             prefs[Keys.hideFootnotes] = updated.hideFootnotes
             prefs[Keys.invertImages] = updated.invertImages
             prefs[Keys.dropCaps] = updated.dropCaps
@@ -355,9 +421,16 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.keepScreenOn] = updated.keepScreenOn
             prefs[Keys.volumeKeyPaging] = updated.volumeKeyPaging
             prefs[Keys.readerChromeStyle] = updated.readerChromeStyle.name
+            prefs[Keys.showCollapsedReaderHandle] = updated.showCollapsedReaderHandle
+            prefs[Keys.expandReaderPanelsOnSwipe] = updated.expandReaderPanelsOnSwipe
+            prefs[Keys.brightnessSwipeEnabled] = updated.brightnessSwipeEnabled
             prefs[Keys.autoHideReturnButton] = updated.autoHideReturnButton
             updated.defaultTranslator?.let { prefs[Keys.defaultTranslator] = it }
                 ?: prefs.remove(Keys.defaultTranslator)
+            updated.defaultDictionary?.let { prefs[Keys.defaultDictionary] = it }
+                ?: prefs.remove(Keys.defaultDictionary)
+            updated.defaultSearchApp?.let { prefs[Keys.defaultSearchApp] = it }
+                ?: prefs.remove(Keys.defaultSearchApp)
             prefs[Keys.appLock] = updated.appLock
             prefs[Keys.appLockDelay] = updated.appLockDelay.name
             prefs[Keys.backupMode] = updated.backupMode.name
@@ -378,14 +451,28 @@ class SettingsRepository(private val context: Context) {
             lineHeight = this[Keys.lineHeight] ?: defaults.lineHeight,
             font = enumOrDefault(this[Keys.font], defaults.font),
             customFontPath = this[Keys.customFontPath],
+            customFontAxes = this[Keys.customFontAxes]?.let { saved ->
+                runCatching { normalizedFontAxes(Json.decodeFromString<Map<String, Float>>(saved)) }.getOrDefault(emptyMap())
+            }.orEmpty(),
+            customFontAuto = this[Keys.customFontAuto] ?: defaults.customFontAuto,
+            customFontFamilyPaths = this[Keys.customFontFamilyPaths]?.let { saved ->
+                runCatching { Json.decodeFromString<List<String>>(saved).distinct().sorted() }.getOrDefault(emptyList())
+            }.orEmpty(),
+            fontOpticalSizing = defaults.fontOpticalSizing,
+            fontStretchPercent = defaults.fontStretchPercent,
             justify = this[Keys.justify] ?: defaults.justify,
             hyphenation = this[Keys.hyphenation] ?: defaults.hyphenation,
             bookStyles = this[Keys.bookStyles] ?: defaults.bookStyles,
             pageMargins = enumOrDefault(this[Keys.pageMargins], defaults.pageMargins),
+            pageMarginDp = this[Keys.pageMarginDp]?.coerceIn(
+                ReaderSettings.MIN_SIDE_MARGIN_DP,
+                ReaderSettings.MAX_SIDE_MARGIN_DP,
+            ),
             readingMode = enumOrDefault(this[Keys.readingMode], defaults.readingMode),
             startChaptersOnNewPage = this[Keys.chapterNewPage] ?: defaults.startChaptersOnNewPage,
             showChapterPagesLeft = this[Keys.chapterPagesLeft] ?: defaults.showChapterPagesLeft,
             showPageCounter = this[Keys.showPageCounter] ?: defaults.showPageCounter,
+            showTotalPageCount = this[Keys.showTotalPageCount] ?: defaults.showTotalPageCount,
             hideFootnotes = this[Keys.hideFootnotes] ?: defaults.hideFootnotes,
             invertImages = this[Keys.invertImages] ?: defaults.invertImages,
             dropCaps = this[Keys.dropCaps] ?: defaults.dropCaps,
@@ -414,8 +501,13 @@ class SettingsRepository(private val context: Context) {
             keepScreenOn = this[Keys.keepScreenOn] ?: defaults.keepScreenOn,
             volumeKeyPaging = this[Keys.volumeKeyPaging] ?: defaults.volumeKeyPaging,
             readerChromeStyle = enumOrDefault(this[Keys.readerChromeStyle], defaults.readerChromeStyle),
+            showCollapsedReaderHandle = this[Keys.showCollapsedReaderHandle] ?: defaults.showCollapsedReaderHandle,
+            expandReaderPanelsOnSwipe = this[Keys.expandReaderPanelsOnSwipe] ?: defaults.expandReaderPanelsOnSwipe,
+            brightnessSwipeEnabled = this[Keys.brightnessSwipeEnabled] ?: defaults.brightnessSwipeEnabled,
             autoHideReturnButton = this[Keys.autoHideReturnButton] ?: defaults.autoHideReturnButton,
             defaultTranslator = this[Keys.defaultTranslator],
+            defaultDictionary = this[Keys.defaultDictionary],
+            defaultSearchApp = this[Keys.defaultSearchApp],
             appLock = this[Keys.appLock] ?: defaults.appLock,
             appLockDelay = enumOrDefault(this[Keys.appLockDelay], defaults.appLockDelay),
             backupMode = enumOrDefault(this[Keys.backupMode], defaults.backupMode),

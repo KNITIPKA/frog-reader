@@ -13,7 +13,7 @@ Follow the system enabled, Beige for the system light appearance and Material Yo
 disabled. Keep screen on, volume-key page turning, automatic return-button hiding
 and vibration are enabled. Brightness follows the system (Auto).
 
-The initial reading layout uses Literata at 18 sp, line spacing 1.5, Wide side
+The initial reading layout uses Literata at 18 sp, line spacing 1.5, 34 dp side
 margins, Pages mode and the Stack animation. Publisher formatting is enabled;
 explicit styles in the book take priority, while unspecified properties use the
 reader defaults. Justification and hyphenation are disabled, decorated initials

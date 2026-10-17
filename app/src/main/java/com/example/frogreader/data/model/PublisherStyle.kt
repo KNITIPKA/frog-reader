@@ -29,10 +29,21 @@ class PublisherStyle(
      * it does not define the page, but the reader may still want it.
      */
     val embeddedFonts: List<EmbeddedFont> = emptyList(),
+    /**
+     * Dark-mode image inversion dictated by the book:
+     * true = invert diagrams/drawings,
+     * false = keep original ink (e.g. realistic illustrations with dark-mode backing or filter: none),
+     * null = the book specifies no dark-mode image rules.
+     */
+    val autoInvertImages: Boolean? = null,
+    /** All faces of the active body family, retained when adopting reader typography. */
+    val fontFaces: List<BookFont> = emptyList(),
+    val fontTypography: FontTypography? = null,
 ) {
     val isEmpty: Boolean
         get() = justify == null && lineHeight == null && hyphenation == null &&
-            !dropCaps && fontName == null && embeddedFonts.isEmpty()
+            !dropCaps && fontName == null && embeddedFonts.isEmpty() &&
+            autoInvertImages == null && fontTypography == null
 }
 
 /** One typeface shipped inside the book: its name and its extracted file. */
@@ -44,27 +55,43 @@ fun publisherStyleOf(content: BookContent): PublisherStyle? {
     val lineHeightVotes = mutableMapOf<Float, Int>()
     val hyphenVotes = mutableMapOf<Boolean, Int>()
     val fontVotes = mutableMapOf<String, Int>()
+    val typographyVotes = mutableMapOf<FontTypography, Int>()
+    val invertVotes = mutableMapOf<Boolean, Int>()
     var dropCaps = false
 
     val families = content.fonts.groupBy { it.family }
 
     for (chapter in content.chapters) {
         for (element in chapter.elements) {
-            val paragraph = element as? ContentElement.Paragraph ?: continue
-            if (paragraph.style != ParagraphStyle.NORMAL) continue
-            val block = paragraph.block ?: continue
-
-            // Centered and right-aligned blocks are decoration (titles,
-            // signatures) — only body alignment answers "justified?".
-            when (block.align) {
-                BlockAlign.JUSTIFY -> justifyVotes.merge(true, 1, Int::plus)
-                BlockAlign.START -> justifyVotes.merge(false, 1, Int::plus)
+            when (element) {
+                is ContentElement.Paragraph -> {
+                    if (element.style == ParagraphStyle.NORMAL) {
+                        val block = element.block
+                        if (block != null) {
+                            block.fontTypography?.takeUnless { it.isEmpty }?.let { typographyVotes.merge(it, 1, Int::plus) }
+                            // Centered and right-aligned blocks are decoration (titles,
+                            // signatures) — only body alignment answers "justified?".
+                            when (block.align) {
+                                BlockAlign.JUSTIFY -> justifyVotes.merge(true, 1, Int::plus)
+                                BlockAlign.START -> justifyVotes.merge(false, 1, Int::plus)
+                                else -> Unit
+                            }
+                            block.lineHeightMult?.let { lineHeightVotes.merge(it, 1, Int::plus) }
+                            block.hyphens?.let { hyphenVotes.merge(it, 1, Int::plus) }
+                            block.fontFamily?.let { fontVotes.merge(it, 1, Int::plus) }
+                            if (block.firstLetter?.isDropCap == true) dropCaps = true
+                        }
+                    }
+                }
+                is ContentElement.Image -> {
+                    if (element.darkModeBackgroundCurrentColor || element.darkModeBackgroundArgb != null) {
+                        invertVotes.merge(false, 1, Int::plus)
+                    } else if (element.darkModeInvert) {
+                        invertVotes.merge(true, 1, Int::plus)
+                    }
+                }
                 else -> Unit
             }
-            block.lineHeightMult?.let { lineHeightVotes.merge(it, 1, Int::plus) }
-            block.hyphens?.let { hyphenVotes.merge(it, 1, Int::plus) }
-            block.fontFamily?.let { fontVotes.merge(it, 1, Int::plus) }
-            if (block.firstLetter?.isDropCap == true) dropCaps = true
         }
     }
 
@@ -76,9 +103,7 @@ fun publisherStyleOf(content: BookContent): PublisherStyle? {
     // one. Taking whichever came last would set the whole book in Bold.
     val embedded = font?.let { family ->
         families[family]?.let { faces ->
-            faces.firstOrNull { !it.bold && !it.italic }
-                ?: faces.firstOrNull { !it.bold }
-                ?: faces.first()
+            representativeBookFace(faces)
         }
     }
     val genericName = when (font) {
@@ -86,6 +111,8 @@ fun publisherStyleOf(content: BookContent): PublisherStyle? {
         "sans-serif" -> "Sans"
         "monospace" -> "Monospace"
         "cursive" -> "Cursive"
+        "literata" -> "Literata"
+        "ibm plex sans", "ibm plex sans var" -> "IBM Plex Sans"
         else -> null
     }
 
@@ -102,14 +129,19 @@ fun publisherStyleOf(content: BookContent): PublisherStyle? {
         fontCss = font?.takeIf { embedded != null || genericName != null },
         embeddedFonts = families.entries
             .sortedBy { it.key }
-            .mapNotNull { (family, faces) ->
-                val face = faces.firstOrNull { !it.bold && !it.italic }
-                    ?: faces.firstOrNull { !it.bold }
-                    ?: faces.firstOrNull()
-                face?.let {
+            .flatMap { (family, faces) ->
+                faces.distinctBy { it.path }.map {
                     EmbeddedFont(family.replaceFirstChar { c -> c.uppercase() }, it.path)
                 }
             },
+        autoInvertImages = invertVotes.maxByOrNull { it.value }?.key,
+        fontFaces = font?.let { families[it] }.orEmpty(),
+        fontTypography = typographyVotes.maxByOrNull { it.value }?.key,
     )
     return style.takeIf { !it.isEmpty }
 }
+
+/** Prefer an upright face nearest Regular, including a variable range containing it. */
+private fun representativeBookFace(faces: List<BookFont>): BookFont? = faces.minWithOrNull(
+    compareBy<BookFont>({ it.italic }, { kotlin.math.abs(400 - 400.coerceIn(it.weightMin, it.weightMax)) }),
+)

@@ -621,7 +621,7 @@ object MobiParser {
             val match = KINDLE_EMBED.find(face.src) ?: continue
             val n = Kf8Assembler.base32(match.groupValues[1]) ?: continue
             val family = face.family.trim().lowercase()
-            val key = "$n:${family.length}:$family:${face.bold}:${face.italic}"
+            val key = "$n:${family.length}:$family:${face.weightMin}:${face.weightMax}:${face.italic}:${face.stretchMin}:${face.stretchMax}"
             if (key in out) continue
             val record = section.resourceRecord(n) ?: continue
             val recordBytes = section.pdb.recordOptional(
@@ -661,6 +661,11 @@ object MobiParser {
                 path = target.absolutePath,
                 bold = face.bold,
                 italic = face.italic,
+                weight = face.weight,
+                weightMin = face.weightMin,
+                weightMax = face.weightMax,
+                stretchMin = face.stretchMin,
+                stretchMax = face.stretchMax,
             )
         }
     }

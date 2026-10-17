@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.LibraryAdd
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -117,6 +118,9 @@ internal fun LibraryItemMenu(
     target: MenuTarget,
     onSelect: () -> Unit,
     onAddToShelf: () -> Unit,
+    onAddToReadingQueue: () -> Unit,
+    onRemoveFromReadingQueue: () -> Unit,
+    isInReadingQueue: Boolean,
     onAddBooks: () -> Unit,
     onRemoveFromShelf: () -> Unit,
     onInfo: () -> Unit,
@@ -148,6 +152,15 @@ internal fun LibraryItemMenu(
         )
         when (target) {
             is MenuTarget.BookTarget -> {
+                FrogMenuItem(
+                    icon = if (isInReadingQueue) Icons.Rounded.RemoveCircleOutline
+                        else Icons.AutoMirrored.Rounded.PlaylistAdd,
+                    label = stringResource(
+                        if (isInReadingQueue) R.string.library_menu_remove_from_reading_queue
+                        else R.string.library_menu_add_to_reading_queue,
+                    ),
+                    onClick = if (isInReadingQueue) onRemoveFromReadingQueue else onAddToReadingQueue,
+                )
                 // A book on a shelf is offered the way OUT of it, not another
                 // way in: it can only be on one shelf, so "add to shelf" while
                 // it is already on one is really a move, and reads as a second
