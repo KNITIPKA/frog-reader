@@ -15,10 +15,12 @@ import com.example.frogreader.data.model.INLINE_IMAGE_TAG
 import com.example.frogreader.data.model.LINK_TAG
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FilterOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -27,15 +29,14 @@ import kotlinx.serialization.json.decodeFromStream
 import java.security.MessageDigest
 
 /**
- * Disk cache of a book's page layout, so reopening the book skips the whole
- * measurement pass. One file per book, keyed by the pagination spec (screen
- * size + every layout-affecting setting) and by a cheap content signature —
- * any mismatch simply recomputes.
+ * Shared disk geometry for measured pages. Full layouts are bound to the
+ * pagination spec and content signature. Indexed layouts bind individual
+ * batches to their source and spec in the layout store.
  */
 object PaginationCache {
 
     /** Bump when the CachedPart/CachedPage shape changes. */
-    private const val FORMAT_VERSION = 7
+    internal const val FORMAT_VERSION = 8
     // A pathological layout must never create an unbounded disposable file.
     private const val MAX_FILE_BYTES = 16L * 1024 * 1024
 
@@ -79,15 +80,86 @@ object PaginationCache {
 
     @Serializable
     private class CachedPagination(
-        val key: String,
-        val itemCount: Int,
-        val contentSignature: String,
+        val key: String? = null,
+        val itemCount: Int? = null,
+        val contentSignature: String? = null,
         val pages: List<CachedPage>,
         val version: Int = 1,
         val tables: Map<Int, CachedTableLayout> = emptyMap(),
     )
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    /** Page geometry in global source coordinates. The layout store binds a batch to its content. */
+    internal class Batch private constructor(
+        private val pages: List<CachedPage>,
+        private val tables: Map<Int, CachedTableLayout>,
+    ) {
+        val size: Int get() = pages.size
+
+        val anchors: IntArray
+            get() = IntArray(size * 2).also { anchors ->
+                pages.forEachIndexed { index, page ->
+                    anchors[index * 2] = page.first
+                    anchors[index * 2 + 1] = page.firstChar
+                }
+            }
+
+        // Float children and inline publisher content are already resolved in
+        // the prepared source item. Only page anchors and part sources are read.
+        val requiredItemIndices: IntArray
+            get() = sortedSetOf<Int>().apply {
+                for (page in pages) {
+                    add(page.first)
+                    page.parts.forEach { add(it.item) }
+                }
+            }.toIntArray()
+
+        fun slice(fromPage: Int, toPageExclusive: Int): Batch =
+            Batch(pages.subList(fromPage, toPageExclusive), tables)
+
+        fun restore(items: List<ReaderItem>): List<BookPage>? = restorePages(pages, tables, items)
+
+        companion object {
+            internal fun read(bytes: ByteArray, offset: Int, length: Int): Batch? {
+                if (length.toLong() !in 1L..MAX_FILE_BYTES || offset < 0 || offset > bytes.size - length) return null
+                val cached = readCached { bytes.inputStream(offset, length) } ?: return null
+                if (cached.key != null || cached.itemCount != null || cached.contentSignature != null) return null
+                if (cached.pages.any { page ->
+                        page.first < 0 || page.firstChar < 0 || page.parts.isEmpty() ||
+                            page.parts.any { it.item < 0 }
+                    }
+                ) return null
+                return Batch(cached.pages, cached.tables)
+            }
+        }
+    }
+
+    internal fun encodeBatch(pages: List<BookPage>, destination: File) {
+        writeCached(destination, cachePages(pages), sync = false)
+    }
+
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    internal fun encodeBatchBytes(pages: List<BookPage>): ByteArray {
+        val raw = ByteArrayOutputStream()
+        val bounded = object : FilterOutputStream(raw) {
+            private var written = 0L
+            override fun write(value: Int) {
+                if (++written > MAX_FILE_BYTES) throw IOException("Layout cache exceeds limit")
+                out.write(value)
+            }
+            override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                if (length < 0 || length > MAX_FILE_BYTES - written) throw IOException("Layout cache exceeds limit")
+                written += length
+                out.write(bytes, offset, length)
+            }
+        }
+        json.encodeToStream(CachedPagination.serializer(), cachePages(pages), bounded)
+        return raw.toByteArray()
+    }
+
+    internal fun readBatch(bytes: ByteArray, offset: Int, length: Int): Batch? =
+        Batch.read(bytes, offset, length)
 
     fun fileFor(dir: File, bookId: String): File = File(dir, "$bookId.json")
 
@@ -189,204 +261,258 @@ object PaginationCache {
         return hash.finish()
     }
 
+    fun load(file: File, key: String, items: List<ReaderItem>): List<BookPage>? {
+        val cached = readCached(file) ?: return null
+        if (cached.key != key || cached.itemCount != items.size ||
+            cached.contentSignature != contentSignature(items)
+        ) return null
+        return restorePages(cached.pages, cached.tables, items)
+    }
+
+    private fun readCached(file: File): CachedPagination? {
+        if (!file.isFile || file.length() !in 1L..MAX_FILE_BYTES) return null
+        return readCached { file.inputStream().buffered() }
+    }
+
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
-    fun load(file: File, key: String, items: List<ReaderItem>): List<BookPage>? =
-        runCatching {
-            if (!file.isFile || file.length() > MAX_FILE_BYTES) return null
-            val cached = file.inputStream().buffered().use {
-                json.decodeFromStream<CachedPagination>(it)
+    private inline fun readCached(openInput: () -> InputStream): CachedPagination? = try {
+        openInput().use { json.decodeFromStream<CachedPagination>(it) }
+            .takeIf { it.version == FORMAT_VERSION }
+    } catch (_: IOException) {
+        null
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    private fun restorePages(
+        pages: List<CachedPage>,
+        tables: Map<Int, CachedTableLayout>,
+        items: List<ReaderItem>,
+    ): List<BookPage>? {
+        // Reuse the rebuilt grid across all fragments of the same table.
+        val tableLayouts = HashMap<Int, TableLayout>()
+        return pages.map { page ->
+            val anchor = items.getOrNull(page.first)?.takeUnless { it.isLoading } ?: return null
+            if (page.firstChar !in 0..anchor.element.anchorEnd()) return null
+            val parts = page.parts.map { part ->
+                val item = items.getOrNull(part.item)?.takeUnless { it.isLoading } ?: return null
+                val layout = if (part.rowS >= 0) {
+                    val table = item.element as? ContentElement.Table ?: return null
+                    if (part.rowS !in table.rows.indices ||
+                        part.rowE !in (part.rowS + 1)..table.rows.size
+                    ) return null
+                    tableLayouts[part.item] ?: restoreTable(tables[part.item], table)
+                        ?.also { tableLayouts[part.item] = it } ?: return null
+                } else {
+                    if (part.rowS != -1 || part.rowE != -1) return null
+                    null
+                }
+                restorePart(part, item, layout) ?: return null
             }
-            if (cached.version != FORMAT_VERSION ||
-                cached.key != key ||
-                cached.itemCount != items.size ||
-                cached.contentSignature != contentSignature(items)
-            ) {
-                return null
+            BookPage(parts, page.first, page.firstChar)
+        }
+    }
+
+    private fun ContentElement.anchorEnd(): Int = when (this) {
+        is ContentElement.Paragraph -> text.length
+        is ContentElement.Heading -> styledText.length
+        is ContentElement.Table -> rows.size
+        else -> 0
+    }
+
+    private fun restoreTable(cached: CachedTableLayout?, table: ContentElement.Table): TableLayout? {
+        cached ?: return null
+        val widths = cached.cols
+        val heights = cached.rowH
+        val offsets = cached.offsets
+        val width = cached.width ?: return null
+        if (heights.size != table.rows.size || heights.any { it < 0 } ||
+            offsets.size != widths.size + 1 || offsets.last() != width || width < 0 ||
+            widths.any { it < 0 } || offsets.first() < 0 ||
+            (1 until offsets.size).any { offsets[it - 1] > offsets[it] } ||
+            !cached.scale.isFinite() || cached.scale <= 0f
+        ) return null
+        val grid = TableGrid.build(table.rows)
+        if (grid.columnCount.coerceAtLeast(1) != widths.size) return null
+        val stacked = cached.stackedCells?.let { cells ->
+            if (cells.size != table.rows.size || cells.indices.any { row ->
+                    cells[row].size != table.rows[row].cells.size ||
+                        cells[row].any { it < 0 } || cells[row].sumOf(Int::toLong) != heights[row].toLong()
+                }
+            ) return null
+            cells.map { it.toIntArray() }
+        }
+        return TableLayout(
+            grid,
+            widths.toIntArray(),
+            heights.toIntArray(),
+            cached.scale,
+            offsets.toIntArray(),
+            width,
+            stacked,
+        )
+    }
+
+    private fun restorePart(part: CachedPart, item: ReaderItem, layout: TableLayout?): PagePart? {
+        val element = item.element
+        val text = if (part.start >= 0) {
+            val full = when (element) {
+                is ContentElement.Paragraph -> element.text
+                is ContentElement.Heading -> element.styledText
+                else -> return null
             }
-            // Every page fragment of a long drama table shares the same
-            // grid and measured arrays. Rebuilding the full table per page
-            // made a cache hit quadratic and retained duplicate row heights.
-            val tableLayouts = HashMap<Int, TableLayout>()
-            cached.pages.map { page ->
-                BookPage(
-                    parts = page.parts.map { part ->
-                        val element = items.getOrNull(part.item)?.element ?: return null
-                        if (part.rowS >= 0) {
-                            val table = element as? ContentElement.Table ?: return null
-                            val cachedTable = cached.tables[part.item] ?: return null
-                            val cols = cachedTable.cols
-                            val rowHeights = cachedTable.rowH
-                            if (rowHeights.size != table.rows.size) return null
-                            if (part.rowS !in table.rows.indices ||
-                                part.rowE !in (part.rowS + 1)..table.rows.size
-                            ) return null
-                            val layout = tableLayouts[part.item] ?: run {
-                                val grid = TableGrid.build(table.rows)
-                                if (grid.columnCount != cols.size) return null
-                                val widths = cols.toIntArray()
-                                val offsets = cachedTable.offsets.takeIf { it.size == cols.size + 1 }?.toIntArray()
-                                    ?: tableColumnGeometry(widths, widths.sum(), null).offsetsPx
-                                val stacked = cachedTable.stackedCells?.let { heights ->
-                                    if (heights.size != table.rows.size || heights.indices.any { r ->
-                                        heights[r].size != table.rows[r].cells.size ||
-                                            heights[r].any { it < 0 } || heights[r].sum() != rowHeights[r]
-                                    }) return null
-                                    heights.map { it.toIntArray() }
-                                }
-                                TableLayout(grid, widths, rowHeights.toIntArray(), cachedTable.scale,
-                                    offsets, cachedTable.width ?: offsets.last(), stacked)
-                                    .also { tableLayouts[part.item] = it }
-                            }
-                            return@map PagePart(
-                                itemIndex = part.item,
-                                element = element,
-                                rowStart = part.rowS,
-                                rowEnd = part.rowE,
-                                tableLayout = layout,
-                                headerRepeated = part.hdr,
-                                charStart = part.rowS,
-                                charEnd = part.rowE,
-                                publisherBoxes = items[part.item].publisherBoxes,
-                                publisherStartsElement = part.pbStart,
-                                publisherEndsElement = part.pbEnd,
-                                allowsVerticalScroll = part.vScroll,
-                            )
-                        }
-                        val text = if (part.start >= 0) {
-                            val full = when (element) {
-                                is ContentElement.Paragraph -> element.text
-                                is ContentElement.Heading -> element.styledText
-                                else -> return null
-                            }
-                            if (part.end > full.length || part.start > part.end) return null
-                            full.subSequence(part.start, part.end)
-                        } else {
-                            null
-                        }
-                        val sideBox = if (part.sbBesideW > 0) {
-                            SideBoxSpec(
-                                capText = part.sbCap,
-                                imagePath = part.sbImg,
-                                leftSide = part.sbLeft,
-                                boxWidthPx = part.sbW,
-                                boxHeightPx = part.sbH,
-                                besideWidthPx = part.sbBesideW,
-                                besideEndChar = part.sbEnd,
-                                compositeHeightPx = part.sbCompH,
-                                capFontSizeSp = part.sbCapSp,
-                                capTopPx = part.sbCapTop,
-                                publisherFloat = items[part.item].publisherFloat,
-                                publisherFloatItemHeightsPx = part.sbFloatHeights.orEmpty(),
-                                publisherStacked = part.sbStacked,
-                            )
-                        } else {
-                            null
-                        }
-                        PagePart(
-                            itemIndex = part.item,
-                            element = element,
-                            text = text,
-                            isParagraphStart = part.paraStart,
-                            imageHeightPx = part.imageH,
-                            charStart = part.start,
-                            charEnd = part.end,
-                            sideBox = sideBox,
-                            floatImagePath = part.fImg,
-                            publisherBoxes = items[part.item].publisherBoxes,
-                            publisherStartsElement = part.pbStart,
-                            publisherEndsElement = part.pbEnd,
-                            allowsVerticalScroll = part.vScroll,
-                        )
-                    },
-                    firstItemIndex = page.first,
-                    firstCharOffset = page.firstChar,
-                )
-            }
-        }.getOrNull()
+            if (part.end !in part.start..full.length) return null
+            full.subSequence(part.start, part.end)
+        } else {
+            if (part.start != -1 || part.end != -1) return null
+            null
+        }
+        val sideBox = if (part.sbBesideW > 0) {
+            val floatHeights = part.sbFloatHeights.orEmpty()
+            val float = item.publisherFloat
+            if (element !is ContentElement.Paragraph || text == null ||
+                part.sbEnd !in part.start..element.text.length ||
+                part.sbW < 0 || part.sbH < 0 || part.sbCompH < 0 ||
+                !part.sbCapSp.isFinite() || part.sbCapSp < 0f ||
+                floatHeights.size != (float?.contents?.size ?: 0) ||
+                floatHeights.any { it < 0 } || (part.sbStacked && float == null)
+            ) return null
+            SideBoxSpec(
+                capText = part.sbCap,
+                imagePath = part.sbImg,
+                leftSide = part.sbLeft,
+                boxWidthPx = part.sbW,
+                boxHeightPx = part.sbH,
+                besideWidthPx = part.sbBesideW,
+                besideEndChar = part.sbEnd,
+                compositeHeightPx = part.sbCompH,
+                capFontSizeSp = part.sbCapSp,
+                capTopPx = part.sbCapTop,
+                publisherFloat = float,
+                publisherFloatItemHeightsPx = floatHeights,
+                publisherStacked = part.sbStacked,
+            )
+        } else {
+            if (part.sbBesideW != 0) return null
+            null
+        }
+        return PagePart(
+            itemIndex = part.item,
+            element = element,
+            text = text,
+            isParagraphStart = part.paraStart,
+            imageHeightPx = part.imageH,
+            charStart = if (layout == null) part.start else part.rowS,
+            charEnd = if (layout == null) part.end else part.rowE,
+            rowStart = part.rowS,
+            rowEnd = part.rowE,
+            tableLayout = layout,
+            headerRepeated = part.hdr,
+            sideBox = sideBox,
+            floatImagePath = part.fImg,
+            publisherBoxes = if (part.fImg == null) item.publisherBoxes else emptyList(),
+            publisherStartsElement = part.pbStart,
+            publisherEndsElement = part.pbEnd,
+            allowsVerticalScroll = part.vScroll,
+        )
+    }
 
     @Synchronized
-    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     fun save(file: File, key: String, items: List<ReaderItem>, pages: List<BookPage>) {
         val temporary = File(file.path + ".tmp")
         runCatching {
             file.parentFile?.mkdirs()
-            val tables = linkedMapOf<Int, CachedTableLayout>()
-            pages.forEach { page ->
-                page.parts.forEach { part ->
-                    part.tableLayout?.let { layout ->
-                        if (part.itemIndex !in tables) {
-                            tables[part.itemIndex] = CachedTableLayout(
-                                layout.colWidthsPx.toList(), layout.rowHeightsPx.toList(), layout.fontScale,
-                                layout.columnOffsetsPx.toList(), layout.tableWidthPx,
-                                layout.stackedCellHeightsPx?.map { it.toList() },
-                            )
-                        }
-                    }
-                }
-            }
-            val cached = CachedPagination(
-                key = key,
-                itemCount = items.size,
-                contentSignature = contentSignature(items),
-                version = FORMAT_VERSION,
-                tables = tables,
-                pages = pages.map { page ->
-                    CachedPage(
-                        first = page.firstItemIndex,
-                        firstChar = page.firstCharOffset,
-                        parts = page.parts.map { part ->
-                            CachedPart(
-                                item = part.itemIndex,
-                                start = if (part.text != null) part.charStart else -1,
-                                end = if (part.text != null) part.charEnd else -1,
-                                paraStart = part.isParagraphStart,
-                                imageH = part.imageHeightPx,
-                                rowS = part.rowStart,
-                                rowE = part.rowEnd,
-                                hdr = part.headerRepeated,
-                                sbCap = part.sideBox?.capText,
-                                sbImg = part.sideBox?.imagePath,
-                                sbLeft = part.sideBox?.leftSide ?: true,
-                                sbW = part.sideBox?.boxWidthPx ?: 0,
-                                sbH = part.sideBox?.boxHeightPx ?: 0,
-                                sbBesideW = part.sideBox?.besideWidthPx ?: 0,
-                                sbEnd = part.sideBox?.besideEndChar ?: 0,
-                                sbCompH = part.sideBox?.compositeHeightPx ?: 0,
-                                sbCapSp = part.sideBox?.capFontSizeSp ?: 0f,
-                                sbCapTop = part.sideBox?.capTopPx ?: 0,
-                                sbFloatHeights = part.sideBox
-                                    ?.publisherFloatItemHeightsPx
-                                    ?.takeIf(List<Int>::isNotEmpty),
-                                sbStacked = part.sideBox?.publisherStacked == true,
-                                fImg = part.floatImagePath,
-                                pbStart = part.publisherStartsElement,
-                                pbEnd = part.publisherEndsElement,
-                                vScroll = part.allowsVerticalScroll,
-                            )
-                        },
-                    )
-                },
-            )
-            FileOutputStream(temporary).use { output ->
-                val bounded = object : FilterOutputStream(output) {
-                    private var written = 0L
-                    override fun write(value: Int) {
-                        if (++written > MAX_FILE_BYTES) throw IOException("Layout cache exceeds limit")
-                        out.write(value)
-                    }
-                    override fun write(bytes: ByteArray, offset: Int, length: Int) {
-                        written += length
-                        if (written > MAX_FILE_BYTES) throw IOException("Layout cache exceeds limit")
-                        out.write(bytes, offset, length)
-                    }
-                }
-                json.encodeToStream(CachedPagination.serializer(), cached, bounded)
-                output.fd.sync()
-            }
+            val cached = cachePages(pages, key, items.size, contentSignature(items))
+            writeCached(temporary, cached, sync = true)
             Files.move(temporary.toPath(), file.toPath(),
                 StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
         }
         temporary.delete()
+    }
+
+    private fun cachePages(
+        pages: List<BookPage>,
+        key: String? = null,
+        itemCount: Int? = null,
+        signature: String? = null,
+    ): CachedPagination {
+        val tables = linkedMapOf<Int, CachedTableLayout>()
+        pages.forEach { page ->
+            page.parts.forEach { part ->
+                part.tableLayout?.let { layout ->
+                    if (part.itemIndex !in tables) {
+                        tables[part.itemIndex] = CachedTableLayout(
+                            layout.colWidthsPx.toList(), layout.rowHeightsPx.toList(), layout.fontScale,
+                            layout.columnOffsetsPx.toList(), layout.tableWidthPx,
+                            layout.stackedCellHeightsPx?.map { it.toList() },
+                        )
+                    }
+                }
+            }
+        }
+        return CachedPagination(
+            key = key,
+            itemCount = itemCount,
+            contentSignature = signature,
+            version = FORMAT_VERSION,
+            tables = tables,
+            pages = pages.map { page ->
+                CachedPage(
+                    first = page.firstItemIndex,
+                    firstChar = page.firstCharOffset,
+                    parts = page.parts.map { part ->
+                        CachedPart(
+                            item = part.itemIndex,
+                            start = if (part.text != null) part.charStart else -1,
+                            end = if (part.text != null) part.charEnd else -1,
+                            paraStart = part.isParagraphStart,
+                            imageH = part.imageHeightPx,
+                            rowS = part.rowStart,
+                            rowE = part.rowEnd,
+                            hdr = part.headerRepeated,
+                            sbCap = part.sideBox?.capText,
+                            sbImg = part.sideBox?.imagePath,
+                            sbLeft = part.sideBox?.leftSide ?: true,
+                            sbW = part.sideBox?.boxWidthPx ?: 0,
+                            sbH = part.sideBox?.boxHeightPx ?: 0,
+                            sbBesideW = part.sideBox?.besideWidthPx ?: 0,
+                            sbEnd = part.sideBox?.besideEndChar ?: 0,
+                            sbCompH = part.sideBox?.compositeHeightPx ?: 0,
+                            sbCapSp = part.sideBox?.capFontSizeSp ?: 0f,
+                            sbCapTop = part.sideBox?.capTopPx ?: 0,
+                            sbFloatHeights = part.sideBox
+                                ?.publisherFloatItemHeightsPx
+                                ?.takeIf(List<Int>::isNotEmpty),
+                            sbStacked = part.sideBox?.publisherStacked == true,
+                            fImg = part.floatImagePath,
+                            pbStart = part.publisherStartsElement,
+                            pbEnd = part.publisherEndsElement,
+                            vScroll = part.allowsVerticalScroll,
+                        )
+                    },
+                )
+            },
+        )
+    }
+
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    private fun writeCached(destination: File, cached: CachedPagination, sync: Boolean) {
+        FileOutputStream(destination).use { output ->
+            val bounded = object : FilterOutputStream(output) {
+                private var written = 0L
+                override fun write(value: Int) {
+                    if (++written > MAX_FILE_BYTES) throw IOException("Layout cache exceeds limit")
+                    out.write(value)
+                }
+                override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                    written += length
+                    if (written > MAX_FILE_BYTES) throw IOException("Layout cache exceeds limit")
+                    out.write(bytes, offset, length)
+                }
+            }
+            json.encodeToStream(CachedPagination.serializer(), cached, bounded)
+            if (sync) output.fd.sync()
+        }
     }
 
     private class ContentHasher {

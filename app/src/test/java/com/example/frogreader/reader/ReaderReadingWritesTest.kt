@@ -1,6 +1,5 @@
 package com.example.frogreader.reader
 
-import com.example.frogreader.ui.reader.ReaderReadingTimeWrite
 import com.example.frogreader.ui.reader.ReaderReadingWriteQueue
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -9,29 +8,23 @@ import java.io.IOException
 
 class ReaderReadingWritesTest {
     @Test
-    fun `retry retains time before completion without duplicating a persisted counter`() = runTest {
-        var bookSeconds = 0L
-        var dailySeconds = 0L
-        var failDaily = true
+    fun `failed transaction remains queued before completion and retries once`() = runTest {
+        var committedIntervals = 0
+        var failWrite = true
         var finished = false
-        val time = ReaderReadingTimeWrite(
-            saveBook = { bookSeconds += 120 },
-            saveStats = {
-                if (failDaily) throw IOException("Disk full")
-                dailySeconds += 120
-            },
-        )
         val queue = ReaderReadingWriteQueue()
-        queue.add(time::commit)
+        queue.add {
+            if (failWrite) throw IOException("Disk full")
+            committedIntervals++
+        }
         queue.add { finished = true }
-        try { queue.drain(); fail("The failed counter must remain queued") } catch (_: IOException) { }
-        assertEquals(120L, bookSeconds)
-        assertEquals(0L, dailySeconds)
+        try { queue.drain(); fail("The failed interval must remain queued") } catch (_: IOException) { }
+        assertEquals(0, committedIntervals)
         assertFalse(finished)
-        failDaily = false
+        failWrite = false
         queue.drain()
-        assertEquals(120L, bookSeconds)
-        assertEquals(120L, dailySeconds)
+        queue.drain()
+        assertEquals(1, committedIntervals)
         assertTrue(finished)
         assertTrue(queue.isEmpty)
     }

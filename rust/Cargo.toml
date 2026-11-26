@@ -1,0 +1,15 @@
+[workspace]
+members = ["frogreader-core"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.90"
+version = "0.1.0"
+publish = false
+
+[profile.release]
+# JNI must catch Rust panics; abort would terminate the Android process.
+panic = "unwind"
+lto = "thin"
+codegen-units = 1

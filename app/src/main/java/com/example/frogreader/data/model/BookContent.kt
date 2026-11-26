@@ -27,7 +27,11 @@ class BookMetadata(
     /** Annotation / back-cover blurb, plain text. */
     val description: String? = null,
     val language: String? = null,
-)
+    val additionalMetadata: Map<String, String> = emptyMap(),
+) {
+    /** Derived import result, seeded into a rebuildable cache after the file is committed. */
+    internal var pdfOutline: PdfOutline? = null
+}
 
 /**
  * Annotation tag marking a footnote reference inside paragraph text.
@@ -114,6 +118,8 @@ class BookContent(
      * locale, so one Arabic quotation cannot reverse a Russian publication.
      */
     val pageProgression: PageProgression = PageProgression.DEFAULT,
+    /** Exact EPUB spine coordinates for the sequential leaves present in this snapshot. */
+    val epubSourceRanges: List<EpubSourceRange> = emptyList(),
 ) {
     @kotlinx.serialization.Transient
     val totalElements: Int = chapters.sumOf { it.elements.size }
@@ -431,6 +437,7 @@ const val INLINE_FONT_FAMILY_TAG = "frogreader:font-family"
  * settings win over the book for those.
  */
 @Serializable
+@InternedFrbStyle
 data class BlockStyle(
     val align: BlockAlign? = null,
     val italic: Boolean? = null,

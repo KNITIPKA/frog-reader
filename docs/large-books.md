@@ -49,44 +49,42 @@ only layout saved to disk.
 
 ## Bounded repeat-opening cache
 
-`ParsedContentCache` stores separate gzip prefix and complete snapshots. A
-cached prefix can reach the screen while the full snapshot decodes. Ordinary
-books can restore their parsed text after process death, without rerunning the
-HTML/CSS parser. EPUB parser checkpoints refresh the prefix when resuming deeper
-in a book. The disk prefix normally retains the saved source element and 64
-following elements; paragraphs/tables stay whole, publisher float and bounded
-inline-layout groups extend the boundary when necessary. Note/link closure and
-clipped publisher boxes preserve rendering and original coordinates. The parser's
-larger on-screen prefix remains available while the rest of the book loads.
-Unsupported or oversized complete snapshots leave that disk prefix intact.
-There is no file-size threshold restricting this path to large books.
+`ChunkedContentCache` uses one Rust FRB container format. `content.frb` stores
+complete parsed content; `opening.frb` stores a bounded opening snapshot using
+the same codec. The previous monolithic gzip cache is removed. Derived caches
+are disposable and no old format is read or migrated.
 
-The format preserves annotation ordering, paragraph/span styles, notes, tables,
-navigation, publisher boxes, embedded-font descriptors and publication metadata.
-Unsupported Compose values cause a cache miss rather than lossy rendering.
-Image/font bytes are referenced, not duplicated. Each load validates source
-path, size, timestamp, full SHA-256, format revision, gzip CRC and resource
-existence. A stale/damaged/missing cache falls back to parsing. Writes use bounded
-streams, fsync and atomic replacement, off the first-page path.
-A tiny source/version/limit-specific rejection marker avoids repeating expensive
-full serialization after a deterministic size/unsupported-style failure. IO and
-missing-resource failures remain retryable. A dedicated background-priority
-writer yields CPU time to reading; LRU recency IO does not delay opening text.
+Global navigation, notes, link targets, fonts and publisher metadata are stored
+separately from independently LZ4-compressed chapter blocks. A checked chapter
+index preserves exact element counts and flat source offsets. The native reader
+validates header/index/block CRCs, bounds, source metadata, and original source
+SHA-256; Kotlin streams the existing model serializers through bounded temporary
+files and checks resource existence and decoded chapter counts. Complete writes
+are fsynced and atomically published. Reader sessions keep a single original FD
+across replacement, and interrupted scratch files are swept without deleting
+live sessions or following links outside the cache.
 
-`ReaderCacheBudget` applies LRU limits across existing extracted images/fonts,
-pagination and parsed content: 128 MiB combined, 64 MiB parsed content, 8 MiB
-compressed snapshots per book. Expanded snapshot streams are capped at 64 MiB;
-pagination files at 16 MiB. Recent-book markers survive restarts. Originals,
-covers, custom font imports, reading progress, quotes and backups are outside
-these roots. The backup format is unchanged.
+The format preserves annotation ordering, all paragraph/span styles, notes,
+tables, navigation, publisher boxes, embedded-font descriptors and publication
+metadata. Image/font bytes remain in their existing derived-resource directory.
+Unsupported values or damaged/missing/stale cache data cause a source reparse,
+rather than a lossy cache hit or an alternative legacy codec.
 
-Readers, parsers and cache writers hold reference-counted resource leases.
-Eviction atomically detaches inactive cache paths into a private trash directory
-before deleting them; acquiring a lease never waits for a full file-tree walk.
-Interrupted trash is swept. A currently open large book can temporarily exceed
-the combined budget because its rendered resources cannot be removed safely.
-The RAM warm cache releases its lease if it prevents trimming; after the live
-reader/work finishes the ordinary limits apply again.
+`ReaderCacheBudget` retains its 128 MiB combined and 64 MiB parsed-content LRU
+quotas and reference-counted resource leases. One book may use the parsed-content
+budget; the former 8 MiB monolithic entry cap is removed. Opening snapshots have
+an 8 MiB compressed cap and share their book's quota. Each decoded block is
+limited to 64 MiB, without a 64 MiB limit on the whole publication. Active readers
+and writers can temporarily exceed the overall budget while their leases are
+held; ordinary limits apply again after they finish. Originals, covers, custom
+font imports, reading progress, quotes and backups remain outside derived roots.
+
+M1 persists the complete Re:Zero (190,851 elements) and Hebrew Bible (44,446
+elements) models without rejection markers. It still restores the full model
+for arbitrary saved positions; selective chapter loading is M2. The opening
+snapshot is still a prefix from zero, so a deep snapshot can be too large even
+though the complete indexed cache fits. Measurements, full-model differential
+checks and native page-cut evidence are in [benchmarks/M1-cache.md](benchmarks/M1-cache.md).
 
 ## Loading feedback
 

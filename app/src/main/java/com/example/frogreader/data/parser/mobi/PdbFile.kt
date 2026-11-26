@@ -3,6 +3,8 @@ package com.example.frogreader.data.parser.mobi
 import com.example.frogreader.data.parser.ReaderResourceLimits
 import com.example.frogreader.data.parser.ResourceLimitException
 import com.example.frogreader.data.parser.ResourceLimitKind
+import com.example.frogreader.engine.RustMobiNative
+import com.example.frogreader.engine.RustMobiWire
 import java.io.Closeable
 import java.io.File
 import java.io.IOException
@@ -133,38 +135,63 @@ internal class PdbFile(
     private var bytesRead = 0L
 
     init {
+        RustMobiWire.requireLibrary()
         if (source.size < HEADER_SIZE + 8) throw IOException("Damaged MOBI: file too small")
         if (source.size > Int.MAX_VALUE) throw IOException("Damaged MOBI: file too large")
         val head = readAtRequired(0, HEADER_SIZE, "PDB header")
-        name = String(head, 0, 32, Charsets.ISO_8859_1).substringBefore('\u0000').trim()
-        typeCreator = String(head, 60, 8, Charsets.ISO_8859_1)
-        recordCount = head.u16(76)
-        if (recordCount > limits.maxMobiRecords) {
-            throw ResourceLimitException(
-                ResourceLimitKind.ENTRY_COUNT,
-                "MOBI has $recordCount records; limit is ${limits.maxMobiRecords}",
-            )
-        }
-        if (recordCount <= 0 || source.size < HEADER_SIZE + 8L * recordCount) {
-            throw IOException("Damaged MOBI: bad record count $recordCount")
-        }
+        val headerWire = RustMobiWire.unwrapOrThrow(
+            RustMobiNative.parsePdbHeader(head, source.size, limits.maxMobiRecords),
+            "Damaged MOBI: invalid PDB header",
+        )!!
+        val headerInput = RustMobiWire.openReader(
+            headerWire,
+            PDB_MAGIC,
+            "Invalid PDB header protocol",
+        )
+        name = RustMobiWire.readUtf8String(
+            headerWire,
+            headerInput,
+            "Truncated PDB header",
+            "Invalid PDB header",
+        )
+        typeCreator = RustMobiWire.readUtf8String(
+            headerWire,
+            headerInput,
+            "Truncated PDB header",
+            "Invalid PDB header",
+        )
+        recordCount = RustMobiWire.readNonNegativeInt(
+            headerInput,
+            "Truncated PDB header",
+            "Invalid PDB record count",
+        )
+        if (headerInput.hasRemaining()) throw IOException("Trailing PDB header data")
+
         val table = readAtRequired(
             HEADER_SIZE.toLong(),
             8 * recordCount,
             "PDB record table",
         )
-        offsets = IntArray(recordCount + 1)
-        for (i in 0 until recordCount) {
-            offsets[i] = table.index32(8 * i)
+        val offsetsWire = RustMobiWire.unwrapOrThrow(
+            RustMobiNative.parsePdbOffsets(table, recordCount, source.size),
+            "Damaged MOBI: bad record table",
+        )!!
+        val offsetsInput = RustMobiWire.openReader(
+            offsetsWire,
+            OFS_MAGIC,
+            "Invalid PDB offset protocol",
+        )
+        val offsetCount = RustMobiWire.readNonNegativeInt(
+            offsetsInput,
+            "Truncated PDB offsets",
+            "Invalid PDB offset count",
+        )
+        if (offsetCount != recordCount + 1 ||
+            offsetsInput.remaining() != offsetCount * Int.SIZE_BYTES
+        ) {
+            throw IOException("Invalid PDB offset protocol")
         }
-        offsets[recordCount] = source.size.toInt()
-        for (i in 0 until recordCount) {
-            if (offsets[i] < HEADER_SIZE + 8 * recordCount ||
-                offsets[i] > offsets[i + 1]
-            ) {
-                throw IOException("Damaged MOBI: bad record table at $i")
-            }
-        }
+        offsets = IntArray(offsetCount) { offsetsInput.int }
     }
 
     /** True when the type/creator marks a Mobipocket or PalmDOC book. */
@@ -285,13 +312,16 @@ internal class PdbFile(
     override fun close() = source.close()
 
     companion object {
+        private const val PDB_MAGIC = 0x31424450 // PDB1
+        private const val OFS_MAGIC = 0x3153464F // OFS1
         const val HEADER_SIZE = 78
         const val TYPE_MOBI = "BOOKMOBI"
         const val TYPE_PALMDOC = "TEXtREAd"
 
         /** Sniff: is this the header of a Mobipocket/PalmDOC book? */
-        fun isPdbBook(header: ByteArray): Boolean =
-            header.size >= 68 &&
-                (header.magic(60, TYPE_MOBI) || header.magic(60, TYPE_PALMDOC))
+        fun isPdbBook(header: ByteArray): Boolean {
+            RustMobiWire.requireLibrary()
+            return RustMobiNative.isPdbBook(header)
+        }
     }
 }

@@ -1,0 +1,79 @@
+# M1 Pixel engine records
+
+2026-11-10, Pixel 9a, isolated debug APK, fixed diagnostic pagination and bounded
+CPU wake lock. Complete-model and opening-only timings are separate. Each of
+six corpus/method runs completed `OK (1 test)`. See [M1-cache.md](M1-cache.md)
+for definitions, limitations and commands.
+
+## Generated EPUB — complete model
+
+```text
+CHUNKED_DEVICE corpus=generated source_bytes=23843 native_bridge=true heap_sampling_ms=2 ui_frames=false full_model_restore=true
+CHUNKED_DEVICE phase=cold_parse position=0 elapsed_ms=3906.084 process_jvm_before_bytes=11174624 sampled_process_jvm_peak_bytes=122311392 process_native_before_bytes=8170336 sampled_process_native_peak_bytes=49077104 first_pages_ms=840.683 chapters=16 elements=1552 preview_callback_paginated=true
+CHUNKED_DEVICE phase=reference_check digest=d01ba83baa698d1eabd3afaa597283e7fe25539a81444bce9d7a0ac7b8916b4a content_signature=53247455965ab7630d3bb845e3d2e901c696ae79e0ca01a49c9fd642f9ea5b6d outside_timing=true
+CHUNKED_DEVICE phase=chunked_full_save position=all elapsed_ms=737.491 process_jvm_before_bytes=102593248 sampled_process_jvm_peak_bytes=104665824 process_native_before_bytes=8918848 sampled_process_native_peak_bytes=9860960 saved=true entry_bytes=98946 cache_bytes=98946
+CHUNKED_DEVICE phase=gc_request position=0 outside_timing=true reason=release_prior_model not_guaranteed=true
+CHUNKED_DEVICE phase=chunked_warm_open position=0 elapsed_ms=3222.626 process_jvm_before_bytes=5497568 sampled_process_jvm_peak_bytes=219583200 process_native_before_bytes=8909888 sampled_process_native_peak_bytes=9422768 cache_hit=true full_model_restore=true restore_ms=3201.795 first_pages_ms=3222.626 pages=3 entry_bytes=98946
+CHUNKED_DEVICE phase=gc_request position=85 outside_timing=true reason=release_prior_model not_guaranteed=true
+CHUNKED_DEVICE phase=chunked_warm_open position=85 elapsed_ms=2471.662 process_jvm_before_bytes=5587680 sampled_process_jvm_peak_bytes=202728160 process_native_before_bytes=8919984 sampled_process_native_peak_bytes=10021616 cache_hit=true full_model_restore=true restore_ms=2257.544 first_pages_ms=2471.662 pages=38 entry_bytes=98946
+CHUNKED_DEVICE result=passed model_digest=true content_signature=true native_page_cuts=true
+```
+
+## Generated EPUB — opening snapshot
+
+```text
+CHUNKED_DEVICE corpus=generated source_bytes=23843 native_bridge=true heap_sampling_ms=2 ui_frames=false opening_snapshot_only=true full_model_restore=false
+CHUNKED_DEVICE phase=parse_to_first_prefix position=0 elapsed_ms=703.636 process_jvm_before_bytes=13890000 sampled_process_jvm_peak_bytes=25063888 process_native_before_bytes=11491920 sampled_process_native_peak_bytes=15320144 parser_aborted_after_prefix=true source_prefix_elements=97 snapshot_elements=65
+CHUNKED_DEVICE phase=opening_save position=0 elapsed_ms=141.017 process_jvm_before_bytes=36143568 sampled_process_jvm_peak_bytes=37831120 process_native_before_bytes=15617968 sampled_process_native_peak_bytes=15650064 saved=true entry_bytes=5443 cache_bytes=5443
+CHUNKED_DEVICE phase=opening_warm_open position=0 elapsed_ms=489.020 process_jvm_before_bytes=37831120 sampled_process_jvm_peak_bytes=48042448 process_native_before_bytes=15628160 sampled_process_native_peak_bytes=15943568 cache_hit=true full_model_restore=false restore_ms=456.380 first_pages_ms=489.020 pages=3 restored_elements=65 entry_bytes=5443
+CHUNKED_DEVICE result=passed opening_snapshot=true model_digest=true content_signature=true native_page_cuts=true complete_entry_present=false
+```
+
+## Re:Zero — complete model
+
+```text
+CHUNKED_DEVICE corpus=local source_bytes=9648164 native_bridge=true heap_sampling_ms=2 ui_frames=false full_model_restore=true
+CHUNKED_DEVICE phase=cold_parse position=0 elapsed_ms=41004.460 process_jvm_before_bytes=4379360 sampled_process_jvm_peak_bytes=259375840 process_native_before_bytes=7790448 sampled_process_native_peak_bytes=47665888 first_pages_ms=812.339 chapters=677 elements=190851 preview_callback_paginated=true
+CHUNKED_DEVICE phase=reference_check digest=267bd1522ae43a38e0215d872409502d7a503b6fa079392b2f295f6bc7582665 content_signature=c46cecb31fb864cb894d977ae06c4636b7d302c93ae81265a880c824d4b7a629 outside_timing=true
+CHUNKED_DEVICE phase=chunked_full_save position=all elapsed_ms=4907.314 process_jvm_before_bytes=257270496 sampled_process_jvm_peak_bytes=264233696 process_native_before_bytes=11834544 sampled_process_native_peak_bytes=13468560 saved=true entry_bytes=19507265 cache_bytes=19507265
+CHUNKED_DEVICE phase=gc_request position=0 outside_timing=true reason=release_prior_model not_guaranteed=true
+CHUNKED_DEVICE phase=chunked_warm_open position=0 elapsed_ms=21626.114 process_jvm_before_bytes=5407456 sampled_process_jvm_peak_bytes=266400480 process_native_before_bytes=11830112 sampled_process_native_peak_bytes=12801568 cache_hit=true full_model_restore=true restore_ms=21611.497 first_pages_ms=21626.114 pages=3 entry_bytes=19507265
+CHUNKED_DEVICE phase=gc_request position=85 outside_timing=true reason=release_prior_model not_guaranteed=true
+CHUNKED_DEVICE phase=chunked_warm_open position=85 elapsed_ms=20338.235 process_jvm_before_bytes=5452512 sampled_process_jvm_peak_bytes=268403424 process_native_before_bytes=11831072 sampled_process_native_peak_bytes=12899760 cache_hit=true full_model_restore=true restore_ms=20074.577 first_pages_ms=20338.235 pages=69 entry_bytes=19507265
+CHUNKED_DEVICE result=passed model_digest=true content_signature=true native_page_cuts=true
+```
+
+## Re:Zero — opening snapshot
+
+```text
+CHUNKED_DEVICE corpus=local source_bytes=9648164 native_bridge=true heap_sampling_ms=2 ui_frames=false opening_snapshot_only=true full_model_restore=false
+CHUNKED_DEVICE phase=parse_to_first_prefix position=0 elapsed_ms=831.642 process_jvm_before_bytes=4346592 sampled_process_jvm_peak_bytes=12509920 process_native_before_bytes=7797616 sampled_process_native_peak_bytes=10343824 parser_aborted_after_prefix=true source_prefix_elements=67 snapshot_elements=65
+CHUNKED_DEVICE phase=opening_save position=0 elapsed_ms=81.722 process_jvm_before_bytes=18739936 sampled_process_jvm_peak_bytes=19026656 process_native_before_bytes=10662912 sampled_process_native_peak_bytes=10682432 saved=true entry_bytes=9099 cache_bytes=9099
+CHUNKED_DEVICE phase=opening_warm_open position=0 elapsed_ms=135.290 process_jvm_before_bytes=19026656 sampled_process_jvm_peak_bytes=20095712 process_native_before_bytes=10674160 sampled_process_native_peak_bytes=10753392 cache_hit=true full_model_restore=false restore_ms=111.934 first_pages_ms=135.290 pages=3 restored_elements=65 entry_bytes=9099
+CHUNKED_DEVICE result=passed opening_snapshot=true model_digest=true content_signature=true native_page_cuts=true complete_entry_present=false
+```
+
+## Hebrew Bible — complete model
+
+```text
+CHUNKED_DEVICE corpus=local source_bytes=33221611 native_bridge=true heap_sampling_ms=2 ui_frames=false full_model_restore=true
+CHUNKED_DEVICE phase=cold_parse position=0 elapsed_ms=32131.747 process_jvm_before_bytes=4674272 sampled_process_jvm_peak_bytes=237744864 process_native_before_bytes=8109264 sampled_process_native_peak_bytes=99550672 first_pages_ms=1908.832 chapters=122 elements=44446 preview_callback_paginated=true
+CHUNKED_DEVICE phase=reference_check digest=e4f4bd54193f2d93a064688bf097c1b5bb1d848d7360e4355620b6e156d4b35c content_signature=1fef3e05e324eb748c004175422131db5cac12502aa3123bd057879727dd0c68 outside_timing=true
+CHUNKED_DEVICE phase=chunked_full_save position=all elapsed_ms=5654.023 process_jvm_before_bytes=220742368 sampled_process_jvm_peak_bytes=265028320 process_native_before_bytes=10183280 sampled_process_native_peak_bytes=67764800 saved=true entry_bytes=15310273 cache_bytes=15310273
+CHUNKED_DEVICE phase=gc_request position=0 outside_timing=true reason=release_prior_model not_guaranteed=true
+CHUNKED_DEVICE phase=chunked_warm_open position=0 elapsed_ms=23314.418 process_jvm_before_bytes=5382880 sampled_process_jvm_peak_bytes=266556128 process_native_before_bytes=10153968 sampled_process_native_peak_bytes=42171248 cache_hit=true full_model_restore=true restore_ms=23286.720 first_pages_ms=23314.418 pages=3 entry_bytes=15310273
+CHUNKED_DEVICE phase=gc_request position=85 outside_timing=true reason=release_prior_model not_guaranteed=true
+CHUNKED_DEVICE phase=chunked_warm_open position=85 elapsed_ms=21848.865 process_jvm_before_bytes=5423840 sampled_process_jvm_peak_bytes=268432096 process_native_before_bytes=10170816 sampled_process_native_peak_bytes=42192496 cache_hit=true full_model_restore=true restore_ms=21675.021 first_pages_ms=21848.865 pages=17 entry_bytes=15310273
+CHUNKED_DEVICE result=passed model_digest=true content_signature=true native_page_cuts=true
+```
+
+## Hebrew Bible — opening snapshot
+
+```text
+CHUNKED_DEVICE corpus=local source_bytes=33221611 native_bridge=true heap_sampling_ms=2 ui_frames=false opening_snapshot_only=true full_model_restore=false
+CHUNKED_DEVICE phase=parse_to_first_prefix position=0 elapsed_ms=1536.728 process_jvm_before_bytes=4412128 sampled_process_jvm_peak_bytes=27738848 process_native_before_bytes=7769776 sampled_process_native_peak_bytes=14537104 parser_aborted_after_prefix=true source_prefix_elements=1027 snapshot_elements=65
+CHUNKED_DEVICE phase=opening_save position=0 elapsed_ms=156.391 process_jvm_before_bytes=34136800 sampled_process_jvm_peak_bytes=34382560 process_native_before_bytes=14945648 sampled_process_native_peak_bytes=14971968 saved=true entry_bytes=3114 cache_bytes=3114
+CHUNKED_DEVICE phase=opening_warm_open position=0 elapsed_ms=178.365 process_jvm_before_bytes=34415328 sampled_process_jvm_peak_bytes=35648224 process_native_before_bytes=14956144 sampled_process_native_peak_bytes=15080656 cache_hit=true full_model_restore=false restore_ms=149.047 first_pages_ms=178.365 pages=3 restored_elements=65 entry_bytes=3114
+CHUNKED_DEVICE result=passed opening_snapshot=true model_digest=true content_signature=true native_page_cuts=true complete_entry_present=false
+```
+

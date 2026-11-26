@@ -11,7 +11,7 @@ internal fun AnnotatedString.withBookFonts(
     bookFonts: Map<String, FontFamily>,
     enabled: Boolean = true,
 ): AnnotatedString {
-    if (!enabled) return this
+    if (!enabled || length == 0 || !hasStringAnnotations(INLINE_FONT_FAMILY_TAG, 0, length)) return this
     val marks = getStringAnnotations(INLINE_FONT_FAMILY_TAG, 0, length)
     if (marks.isEmpty()) return this
     val resolved = marks.mapNotNull { mark -> publisherFamilyForCss(mark.item, bookFonts)?.let { mark to it } }

@@ -3,6 +3,7 @@ package com.example.frogreader.parser
 import com.example.frogreader.data.parser.CssResolver
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
+import org.jsoup.parser.Parser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -37,6 +38,60 @@ class CssResolverAdvancedTest {
         val d = doc("<h1 id='h'>t</h1><p id='p'>a</p>")
         assertEquals("center", r.computed(d.selectFirst("#h")!!).textAlign)
         assertEquals(true, r.computed(d.selectFirst("#p")!!).italic)
+    }
+
+    @Test
+    fun `matching retains namespace and document relative attributes across chapters`() {
+        val r = resolver(
+            """
+            @namespace epub "http://www.idpf.org/2007/ops";
+            p[epub|type="poem"]:nth-last-of-type(2) + p[data-rank="2"] {
+              text-align: center;
+            }
+            p:has(+ p[data-rank="2"])::before { content: "["; }
+            a[abs:href="https://reader.example/chapters/next.xhtml"] { font-weight: bold; }
+            """.trimIndent(),
+        )
+        fun chapter(namespace: String, base: String) = Jsoup.parse(
+            """
+            <html xmlns:ops="$namespace"><body>
+              <p ops:type="poem" id="poem"/><!-- comment is not a sibling element -->
+              <p DATA-RANK="2" id="target"><a href="next.xhtml" id="link">Next</a></p>
+            </body></html>
+            """.trimIndent(),
+            base,
+            Parser.xmlParser(),
+        )
+
+        val first = chapter("http://www.idpf.org/2007/ops", "https://reader.example/chapters/first.xhtml")
+        assertEquals("center", r.computed(first.getElementById("target")!!).textAlign)
+        assertEquals(true, r.computed(first.getElementById("link")!!).bold)
+        assertEquals("[", r.generated(first.getElementById("poem")!!, after = false)?.text)
+
+        r.clearCache()
+        val second = chapter("urn:example:other-namespace", "https://reader.example/appendix/second.xhtml")
+        assertNull(r.computed(second.getElementById("target")!!).textAlign)
+        assertNull(r.computed(second.getElementById("link")!!).bold)
+        r.clearCache()
+    }
+
+    @Test
+    fun `unsupported selector members leave quoted commas and valid siblings intact`() {
+        val r = resolver(
+            """
+            p:has(> em, :hover), p:not(.a, .b), p[data-pick="a,b"] {
+                font-weight: bold;
+            }
+            .chapter\:lead { font-style: italic; }
+            """.trimIndent(),
+        )
+        val d = doc(
+            "<p id='plain'><em>Plain</em></p><p id='chosen' data-pick='a,b' class='chapter:lead'>Chosen</p>",
+        )
+        assertNull(r.computed(d.getElementById("plain")!!).bold)
+        val chosen = r.computed(d.getElementById("chosen")!!)
+        assertEquals(true, chosen.bold)
+        assertEquals(true, chosen.italic)
     }
 
     // ------------------------------------------------------------ var()
@@ -97,6 +152,32 @@ class CssResolverAdvancedTest {
         val d = doc("<body><p id='outer'>a</p><div><p id='inner'>b</p></div></body>")
         assertEquals(2f, r.computed(d.selectFirst("#outer")!!).fontSizeEm, 0.001f)
         assertEquals(3f, r.computed(d.selectFirst("#inner")!!).fontSizeEm, 0.001f)
+    }
+
+    @Test
+    fun `parent variable scope feeds delayed shorthands and computed lengths`() {
+        val r = resolver(
+            """
+            body { --tone: red; }
+            p {
+              --tone: blue;
+              --stroke: var(--tone);
+              color: var(--tone);
+              border: 2px dashed var(--stroke);
+              padding-inline: var(--gap, 1em) 2px;
+              line-height: calc(var(--line, 1em) + 4px);
+              font-size: 20px;
+            }
+            """.trimIndent(),
+        )
+        val style = r.computed(doc("<p>Text</p>").selectFirst("p")!!)
+        assertEquals(0xff0000ff.toInt(), style.foregroundColorArgb)
+        val border = checkNotNull(style.borderTop)
+        assertEquals(0xffff0000.toInt(), border.colorArgb)
+        assertEquals(0.125f, border.widthEm, 0.001f)
+        assertEquals(1.25f, style.paddingInlineStartEm, 0.001f)
+        assertEquals(0.125f, style.paddingInlineEndEm, 0.001f)
+        assertEquals(1.2f, checkNotNull(style.lineHeightMult), 0.001f)
     }
 
     // ------------------------------------------------------------ calc()

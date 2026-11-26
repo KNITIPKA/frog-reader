@@ -35,7 +35,7 @@ internal fun embeddedFontSignature(fonts: List<BookFont>): String {
             italic = font.italic,
             unicodeRange = normalizeFontUnicodeRange(font.unicodeRange).orEmpty(),
             sourceOrder = sourceOrder,
-            fileState = fileStates.getOrPut(font.path) { fontFileState(File(font.path)) },
+            fileState = fileStates.getOrPut(font.path) { layoutFileState(File(font.path)) },
         )
     }.sortedWith(
         compareBy<EmbeddedFontRecord>(
@@ -81,7 +81,7 @@ private data class EmbeddedFontRecord(
     val fileState: String,
 )
 
-private fun fontFileState(file: File): String {
+internal fun layoutFileState(file: File): String {
     if (!file.isFile) return "missing"
     return runCatching {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -100,7 +100,7 @@ private fun fontFileState(file: File): String {
 }
 
 /** Length framing makes adjacent variable-length fields unambiguous. */
-private fun MessageDigest.updateFramed(value: String) {
+internal fun MessageDigest.updateFramed(value: String) {
     val bytes = value.toByteArray(Charsets.UTF_8)
     update(byteArrayOf(
         (bytes.size ushr 24).toByte(),

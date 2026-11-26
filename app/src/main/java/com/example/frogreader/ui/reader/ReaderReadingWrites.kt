@@ -12,22 +12,3 @@ internal class ReaderReadingWriteQueue {
         }
     }
 }
-
-/** Each counter is persisted at most once, including when the second store fails. */
-internal class ReaderReadingTimeWrite(
-    private val saveBook: suspend () -> Unit,
-    private val saveStats: suspend () -> Unit,
-) {
-    private var bookCommitted = false
-    private var statsCommitted = false
-    suspend fun commit() {
-        if (!bookCommitted) {
-            saveBook()
-            bookCommitted = true
-        }
-        if (!statsCommitted) {
-            saveStats()
-            statsCommitted = true
-        }
-    }
-}

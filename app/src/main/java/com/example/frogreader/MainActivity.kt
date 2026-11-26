@@ -178,6 +178,7 @@ import com.example.frogreader.ui.nav.TabSwitchController
 import com.example.frogreader.ui.nav.ReaderRoute
 import com.example.frogreader.ui.nav.SettingsRoute
 import com.example.frogreader.ui.nav.ProfileRoute
+import com.example.frogreader.ui.nav.ProfileSearchRoute
 import com.example.frogreader.ui.nav.QuotesAndBookmarksRoute
 import com.example.frogreader.ui.nav.FrogAddFab
 import com.example.frogreader.ui.nav.FrogDockContentPadding
@@ -199,6 +200,7 @@ import com.example.frogreader.ui.nav.TrackerRoute
 import com.example.frogreader.ui.reader.ReaderScreen
 import com.example.frogreader.ui.settings.SettingsScreen
 import com.example.frogreader.ui.profile.ProfileScreen
+import com.example.frogreader.ui.profile.ProfileSearchScreen
 import com.example.frogreader.ui.profile.ProfileSectionScreen
 import com.example.frogreader.ui.stats.StatsScreen
 import com.example.frogreader.ui.theme.FrogReaderTheme
@@ -883,6 +885,7 @@ class MainActivity : ComponentActivity() {
                                 contentPadding = innerPadding,
                                 isActive = active && onTopLevel && !onLibrary,
                                 onOpenSettings = { navController.navigate(SettingsRoute) },
+                                onOpenSearch = { navController.navigate(ProfileSearchRoute) { launchSingleTop = true } },
                                 onOpenQuotesAndBookmarks = { navController.navigate(QuotesAndBookmarksRoute) { launchSingleTop = true } },
                                 onOpenStats = { navController.navigate(StatsRoute) { launchSingleTop = true } },
                                 onOpenReadingQueue = { navController.navigate(ReadingQueueRoute) { launchSingleTop = true } },
@@ -938,6 +941,35 @@ class MainActivity : ComponentActivity() {
                             restoreState = true
                         }
                     }
+                }
+
+                composable<ProfileSearchRoute> {
+                    ProfileSearchScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenQuote = { hit ->
+                            if (hit.hasBookFile) {
+                                navController.navigate(ReaderRoute(hit.bookId, quoteId = hit.quoteId))
+                            } else {
+                                navController.navigate(BookInfoRoute(hit.bookId))
+                            }
+                        },
+                        onOpenBookmark = { hit ->
+                            if (hit.hasBookFile) {
+                                navController.navigate(ReaderRoute(hit.bookId, bookmarkId = hit.bookmarkId))
+                            } else {
+                                navController.navigate(BookInfoRoute(hit.bookId))
+                            }
+                        },
+                        onOpenReadingQueue = {
+                            navController.navigate(ReadingQueueRoute) { launchSingleTop = true }
+                        },
+                        onOpenReadingLog = { hit ->
+                            navController.navigate(ReadingLogInfoRoute(hit.entryId))
+                        },
+                        onOpenAchievement = {
+                            navController.navigate(StatsRoute) { launchSingleTop = true }
+                        },
+                    )
                 }
 
                 composable<QuotesAndBookmarksRoute> {

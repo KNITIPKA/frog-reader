@@ -13,7 +13,10 @@ import com.example.frogreader.data.ReadingMode
 import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.StatsRepository
 import com.example.frogreader.data.StoreFixture
-import com.example.frogreader.data.model.BackupDocument
+import com.example.frogreader.data.backup.BackupArchive
+import com.example.frogreader.data.db.DatabaseManager
+import com.example.frogreader.data.model.BackupMode
+import com.example.frogreader.data.model.BackupSettings
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookContent
 import com.example.frogreader.data.model.BookFormat
@@ -154,11 +157,21 @@ class ReaderBookSettingsTest {
         val reloaded = BookRepository(context)
         assertEquals(edited, reloaded.bookById("a")!!.readerSettings)
         assertEquals(other, reloaded.bookById("b")!!.readerSettings)
-        val restored = StoreFixture.json.decodeFromString<BackupDocument>(
-            StoreFixture.json.encodeToString(reloaded.backupDocument()),
-        ).books.associateBy { it.id }
-        assertEquals(edited, restored.getValue("a").readerSettings)
-        assertEquals(other, restored.getValue("b").readerSettings)
+        val archive = java.io.ByteArrayOutputStream()
+        BackupArchive.write(archive, temporary.root, BackupSettings(), BackupMode.DATA, "test", 1L)
+        val restoreRoot = java.io.File(temporary.root, "restored_settings_target")
+        try {
+            BackupArchive.restore(archive.toByteArray().inputStream(), restoreRoot)
+            val restoredCtx = org.mockito.Mockito.mock(Context::class.java).also {
+                org.mockito.BDDMockito.given(it.filesDir).willReturn(restoreRoot)
+                org.mockito.BDDMockito.given(it.cacheDir).willReturn(restoreRoot)
+            }
+            val restoredRepo = BookRepository(restoredCtx)
+            assertEquals(edited, restoredRepo.bookById("a")!!.readerSettings)
+            assertEquals(other, restoredRepo.bookById("b")!!.readerSettings)
+        } finally {
+            DatabaseManager.closeAndDeleteForFilesRoot(restoreRoot)
+        }
     }
 
     @Test fun `opening pins defaults atomically without overwriting an already saved edit`() = runTest(dispatcher) {

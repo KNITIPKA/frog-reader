@@ -59,6 +59,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsIgnoringVisibility
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -153,6 +154,7 @@ import androidx.compose.ui.text.LinkInteractionListener
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.createFontFamilyResolver
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
@@ -184,6 +186,7 @@ import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.AppTheme
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.ReadingMode
+import com.example.frogreader.data.parser.EpubSourceDestination
 import com.example.frogreader.data.PageTurnAnimation
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.ContentElement
@@ -239,6 +242,13 @@ fun ReaderScreen(
     initialBookmarkId: String? = null,
     contentMotion: Modifier = Modifier,
 ) {
+    val readerApp = LocalContext.current.applicationContext as com.example.frogreader.FrogReaderApp
+    if (readerApp.bookRepository.bookById(bookId)?.format == com.example.frogreader.data.model.BookFormat.PDF) {
+        com.example.frogreader.ui.reader.pdf.PdfReaderScreen(
+            bookId, initialQuoteId, initialBookmarkId, onBack, onExitToLibrary, contentMotion,
+        )
+        return
+    }
     val viewModel: ReaderViewModel =
         viewModel(key = "reader-$bookId", factory = ReaderViewModel.factory(bookId))
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -322,6 +332,20 @@ fun ReaderScreen(
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }
             } else {
                 ReaderOpeningOverlay(opening)
+            }
+        }
+        if (appSettings.showReaderLoadHud) {
+            val debugHud by viewModel.debugLoadHud.collectAsStateWithLifecycle()
+            debugHud?.let { hud ->
+                ReaderDebugLoadOverlay(
+                    hud = hud,
+                    versionLabel = stringResource(R.string.welcome_release_label),
+                    onClear = viewModel::clearDebugLoadHudHistory,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .statusBarsPadding()
+                        .padding(start = 8.dp, top = 4.dp, end = 8.dp),
+                )
             }
         }
     }
@@ -410,13 +434,13 @@ private fun ReaderContent(
     var liveFontSize by remember(settings.fontSizeSp) { mutableFloatStateOf(settings.fontSizeSp) }
 
     // Reading position shared between modes and with the chrome.
-    val displayedIndex = remember { mutableIntStateOf(viewModel.currentFlatIndex) }
-    var seekTarget by remember { mutableStateOf<Int?>(null) }
-    var seekFraction by remember { mutableStateOf<Float?>(null) }
+    val displayedIndex = remember(ready.sourceGeneration) { mutableIntStateOf(viewModel.currentFlatIndex) }
+    var seekTarget by remember(ready.sourceGeneration) { mutableStateOf<Int?>(null) }
+    var seekFraction by remember(ready.sourceGeneration) { mutableStateOf<Float?>(null) }
     // Character-precise jump (item, char) — search results land on the exact
     // page even when the paragraph spans several pages.
-    var seekPosition by remember { mutableStateOf<ReaderReturnLocation.Main?>(null) }
-    var animateChapterSeek by remember { mutableStateOf(false) }
+    var seekPosition by remember(ready.sourceGeneration) { mutableStateOf<ReaderReturnLocation.Main?>(null) }
+    var animateChapterSeek by remember(ready.sourceGeneration) { mutableStateOf(false) }
     val latestReadingMode by rememberUpdatedState(settings.readingMode)
     var initialQuoteOrBookmarkConsumed by rememberSaveable(ready.book.id, initialQuoteId, initialBookmarkId) {
         mutableStateOf(false)
@@ -448,11 +472,12 @@ private fun ReaderContent(
     val openingPositionReady = readingSurfaceReady &&
         (initialQuoteId == null && initialBookmarkId == null || initialQuoteOrBookmarkConsumed) &&
         seekTarget == null && seekFraction == null && seekPosition == null
+    val canPrepareBook = openingPositionReady || (readingSurfaceReady && ready.epubOpening != null)
+    LaunchedEffect(canPrepareBook) {
+        if (canPrepareBook) viewModel.recordOpeningSurfaceReady()
+    }
     LaunchedEffect(openingPositionReady) {
-        if (openingPositionReady) {
-            viewModel.recordOpeningSurfaceReady()
-            opening.onContentReady()
-        }
+        if (openingPositionReady) opening.onContentReady()
     }
     // EPUB spine `linear="no"` content is a transient linked surface. It is
     // deliberately not inserted into the main item list, so opening it cannot
@@ -482,12 +507,13 @@ private fun ReaderContent(
     }
 
     // (current page, total pages) — set by paged mode for true page progress.
-    val pagePosition = remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    val pagePosition = remember(ready.sourceGeneration) { mutableStateOf<Pair<Int, Int>?>(null) }
+    val renderedPageIndex = remember(ready.sourceGeneration) { mutableStateOf<ReaderPageIndex?>(null) }
     // Continuous positions: fractional page while a swipe is in flight, and
     // fractional element while scrolling — the progress bars glide along
     // with the finger instead of jumping when a page/paragraph settles.
-    val livePagePosition = remember { mutableStateOf<Float?>(null) }
-    val liveScrollPosition = remember { mutableStateOf<Float?>(null) }
+    val livePagePosition = remember(ready.sourceGeneration) { mutableStateOf<Float?>(null) }
+    val liveScrollPosition = remember(ready.sourceGeneration) { mutableStateOf<Float?>(null) }
 
     val pinchHandlers = PinchHandlers(
         onPinch = { zoom -> liveFontSize = (liveFontSize * zoom).coerceIn(12f, 32f) },
@@ -573,21 +599,34 @@ private fun ReaderContent(
 
     // Selection in book coordinates — see ui/reader/selection. It lives here,
     // above both reading modes, so a page turn or a scroll never disturbs it.
-    val selection = remember { SelectionController() }
+    val pagination by viewModel.pagination.collectAsStateWithLifecycle()
+    val sourceLayoutVisible = settings.readingMode == ReadingMode.SCROLL || ready.sourceGeneration == 0 ||
+        pagination?.key?.endsWith(sourcePaginationSuffix(ready.sourceGeneration)) == true
+    val selection = remember(ready.sourceGeneration) { SelectionController() }
     selection.textAt = { index ->
-        ready.items.getOrNull(index)?.element?.let(SelectionText::elementText)
+        viewModel.itemAt(ready, index)?.element?.let(SelectionText::elementText)
     }
-    fun selectedText(): String =
-        selection.selectedText(ready.items.size) { ready.items[it].element }
+    fun selectedText(): String = selection.selectedText(ready.items.size) {
+        viewModel.itemAt(ready, it)?.element ?: ContentElement.Spacer()
+    }
 
     // A rebuilt item list (the hide-footnotes toggle rewrites element texts)
     // moves every character offset in the book, so old anchors mean nothing.
-    LaunchedEffect(ready.book.id, settings.hideFootnotes) { selection.clear() }
+    LaunchedEffect(ready.book.id, settings.hideFootnotes, ready.sourceGeneration) { selection.clear() }
+    LaunchedEffect(ready.windowRange, pagination) {
+        val selected = selection.selection
+        if (selected != null && (viewModel.itemAt(ready, selected.start.itemIndex) == null ||
+                viewModel.itemAt(ready, selected.end.itemIndex) == null)
+        ) selection.clear()
+    }
     // Switching between scroll and pages keeps the reading position but not
     // necessarily the view of the selection; carrying it over is confusing.
     LaunchedEffect(settings.readingMode) { selection.clear() }
     // Tappable footnote references ([53] → bottom sheet with the note).
-    var noteToShow by remember { mutableStateOf<VisibleNote?>(null) }
+    var noteToShow by remember(ready.sourceGeneration) { mutableStateOf<VisibleNote?>(null) }
+    var pendingAuxiliaryLocation by remember(ready.book.id, ready.sourceGeneration) {
+        mutableStateOf<ReaderReturnLocation?>(null)
+    }
     val completionVisible by viewModel.completionVisible.collectAsStateWithLifecycle()
     val lastPageVisible by viewModel.lastPageVisible.collectAsStateWithLifecycle()
     val offerReread by viewModel.offerReread.collectAsStateWithLifecycle()
@@ -596,7 +635,7 @@ private fun ReaderContent(
     var resumed by remember(lifecycleOwner) {
         mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
     }
-    var seekCompletion by remember { mutableStateOf(false) }
+    var seekCompletion by remember(ready.sourceGeneration) { mutableStateOf(false) }
     val reviewKeyboardVisible = completionVisible && WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var topChromeHeight by remember { mutableIntStateOf(0) }
     val completionPadding = WindowInsets.systemBarsIgnoringVisibility.only(
@@ -688,33 +727,57 @@ private fun ReaderContent(
         snackbar = snackbar,
         onLaunched = selection::clear,
     )
-    val pagination by viewModel.pagination.collectAsStateWithLifecycle()
-    val waitingForDestination = when (settings.readingMode) {
-        ReadingMode.SCROLL -> !ready.contentComplete && (
-            seekFraction != null || seekCompletion ||
-                seekTarget?.let { it !in ready.items.indices } == true ||
-                seekPosition?.let { it.flatItemIndex !in ready.items.indices } == true
-            )
+    val openingSourceSeekPending by viewModel.epubOpeningSeekPending.collectAsStateWithLifecycle()
+    val waitingForDestination = openingSourceSeekPending || pendingAuxiliaryLocation != null || when (settings.readingMode) {
+        ReadingMode.SCROLL -> (!ready.globalCoordinatesReady && (seekFraction != null || seekCompletion)) ||
+            seekTarget?.let { ready.items.getOrNull(it)?.isLoading != false } == true ||
+            seekPosition?.let { ready.items.getOrNull(it.flatItemIndex)?.isLoading != false } == true
         ReadingMode.PAGES -> {
             val currentPages = pagination
-            (seekFraction != null || seekCompletion) && currentPages?.partial != false ||
-                seekTarget?.let { target ->
-                    currentPages == null || currentPages.partial && !paginationContainsLocation(
-                        currentPages.pages, ReaderReturnLocation.Main(target, Int.MAX_VALUE),
-                    )
-                } == true || seekPosition?.let { target ->
-                    currentPages == null || currentPages.partial &&
-                        !paginationContainsLocation(currentPages.pages, target)
-                } == true
+            val exactIndex = currentPages?.exactIndex
+            if (exactIndex != null) {
+                exactIndex.seekPage(ready.items.lastIndex, seekTarget, seekFraction, seekPosition, seekCompletion)
+                    ?.let { currentPages.exactPageOffset(it) == null } == true
+            } else {
+                seekCompletion && currentPages?.partial != false ||
+                    seekFraction?.let { fraction ->
+                        if (ready.windowRange != null && ready.globalCoordinatesReady &&
+                            ready.items.isNotEmpty() && currentPages != null
+                        ) {
+                            !preparedPagesContainLocation(
+                                currentPages.pages,
+                                ReaderReturnLocation.Main(
+                                    ReaderNavigationPolicy.progressTargetIndex(fraction, 0, ready.items.lastIndex),
+                                ),
+                                currentPages.itemRange,
+                                currentPages.rangeComplete,
+                            )
+                        } else {
+                            currentPages?.partial != false
+                        }
+                    } == true ||
+                    seekTarget?.let { target ->
+                        currentPages == null || currentPages.partial && !preparedPagesContainLocation(
+                            currentPages.pages, ReaderReturnLocation.Main(target, Int.MAX_VALUE),
+                            currentPages.itemRange, currentPages.rangeComplete,
+                        )
+                    } == true || seekPosition?.let { target ->
+                        currentPages == null || currentPages.partial && !preparedPagesContainLocation(
+                            currentPages.pages, target, currentPages.itemRange, currentPages.rangeComplete,
+                        )
+                    } == true
+            }
         }
     }
     val showDestinationLoading = rememberDelayedReaderLoading(waitingForDestination)
     val returnPageNumber = if (settings.readingMode == ReadingMode.PAGES) {
         val origin = navigationReturnLocation as? ReaderReturnLocation.Main
         val pages = pagination?.takeIf { !it.partial }?.pages
-        if (origin != null && pages != null) {
-            ReaderNavigationPolicy.pageIndexForLocation(pages, origin)?.plus(1)
-        } else null
+        origin?.let {
+            val page = renderedPageIndex.value?.pageAt(it.flatItemIndex, it.charOffset ?: 0)
+                ?: pages?.let { fullPages -> ReaderNavigationPolicy.pageIndexForLocation(fullPages, origin) }
+            page?.plus(1)
+        }
     } else null
     val currentReturnLabel = returnPageNumber?.let { stringResource(R.string.reader_return_page, it) }
         ?: stringResource(R.string.reader_return)
@@ -770,6 +833,12 @@ private fun ReaderContent(
     } ?: currentBookSurfaceLocation()
 
     fun restoreReturnLocation(location: ReaderReturnLocation) {
+        if (location !is ReaderReturnLocation.Main && !ready.auxiliaryContentReady) {
+            pendingAuxiliaryLocation = location
+            viewModel.requestAuxiliaryContent()
+            return
+        }
+        pendingAuxiliaryLocation = null
         animateChapterSeek = false
         seekTarget = null
         seekFraction = null
@@ -837,8 +906,12 @@ private fun ReaderContent(
         if (target is ReaderReturnLocation.Main) onShowChrome()
     }
 
-    LaunchedEffect(ready.book.id, initialQuoteId, initialBookmarkId, ready.contentComplete) {
-        if (!ready.contentComplete) return@LaunchedEffect
+    LaunchedEffect(ready.auxiliaryContentReady, pendingAuxiliaryLocation) {
+        if (ready.auxiliaryContentReady) pendingAuxiliaryLocation?.let(::restoreReturnLocation)
+    }
+
+    LaunchedEffect(ready.book.id, initialQuoteId, initialBookmarkId, ready.globalCoordinatesReady) {
+        if (!ready.globalCoordinatesReady) return@LaunchedEffect
         if (!initialQuoteOrBookmarkConsumed && (initialQuoteId != null || initialBookmarkId != null)) {
             val target = quoteOrBookmarkTarget(liveBook ?: ready.book, initialQuoteId, initialBookmarkId, ready.items.size)
             if (target == null) {
@@ -869,7 +942,10 @@ private fun ReaderContent(
     // Turning "hide footnotes" on removes both their markers and any
     // transient note surface that was already open.
     LaunchedEffect(ready) {
-        if (ready.notes.isEmpty()) noteToShow = null
+        if (settings.hideFootnotes) {
+            noteToShow = null
+            if (pendingAuxiliaryLocation is ReaderReturnLocation.Note) pendingAuxiliaryLocation = null
+        }
     }
     // Saved quotes, resolved to book coordinates — painted by the same path
     // machinery as the live selection, so each one marks exactly its own text.
@@ -907,8 +983,17 @@ private fun ReaderContent(
             ),
         )
     }
+    val latestOnMissingNote = rememberUpdatedState<(String) -> Unit> { key ->
+        val previous = noteToShow
+        if (previous != null) viewModel.rememberNavigationOrigin(currentReturnLocation())
+        restoreReturnLocation(ReaderReturnLocation.Note(
+            noteKey = key, itemIndex = 0, scrollOffset = 0,
+            underlay = previous?.underlay ?: currentBookSurfaceLocation(),
+            contextualReturn = previous != null,
+        ))
+    }
     val footnotes = remember(ready) {
-        if (ready.notes.isEmpty() && ready.linkTargets.isEmpty() &&
+        if (ready.auxiliaryContentReady && ready.notes.isEmpty() && ready.linkTargets.isEmpty() &&
             ready.linkedDocumentTargets.isEmpty()
         ) {
             null
@@ -920,6 +1005,7 @@ private fun ReaderContent(
                 onNavigate = { itemIndex -> latestOnNavigate.value(itemIndex) },
                 linkedDocumentTargets = ready.linkedDocumentTargets,
                 onNavigateLinked = { target -> latestOnNavigateLinked.value(target) },
+                onMissingNote = if (ready.auxiliaryContentReady) null else { key -> latestOnMissingNote.value(key) },
             )
         }
     }
@@ -942,8 +1028,8 @@ private fun ReaderContent(
             modifier = Modifier
                 .fillMaxSize()
                 .onPlaced { selection.space = it }
-                .pointerInput(selection, completionVisible) {
-                    if (!completionVisible) bookSelectionGestures(selection, haptics)
+                .pointerInput(selection, completionVisible, sourceLayoutVisible) {
+                    if (!completionVisible && sourceLayoutVisible) bookSelectionGestures(selection, haptics)
                 }
                 // The loupe over the character being chosen — a fingertip
                 // covers about three words at reading size. The platform
@@ -998,6 +1084,7 @@ private fun ReaderContent(
                     viewModel = viewModel,
                     displayedIndex = displayedIndex,
                     pagePosition = pagePosition,
+                    renderedPageIndex = renderedPageIndex,
                     livePagePosition = livePagePosition,
                     seekTarget = seekTarget,
                     onSeekConsumed = { seekTarget = null },
@@ -1053,7 +1140,7 @@ private fun ReaderContent(
             onQuote = { color ->
                 val selected = selectedText()
                 val range = selection.selection
-                if (selected.isNotEmpty() && range != null) {
+                if (selected.isNotEmpty() && range != null && ready.epubOpening == null) {
                     // The chapter of the SELECTION, not of the page being
                     // shown: an auto-turning drag can end several chapters
                     // away from where the quote began.
@@ -1138,7 +1225,7 @@ private fun ReaderContent(
             },
             onClose = { searchVisible = false },
             topPadding = topBarHeight,
-            contentComplete = ready.contentComplete,
+            contentComplete = ready.globalCoordinatesReady,
         )
 
         ReaderTopBar(
@@ -1170,33 +1257,72 @@ private fun ReaderContent(
                 ready.chapterDepths, ready.items.size,
             )
         }
-        val chapterContext = remember(chapterContexts, currentChapter, chapterUiItem) {
-            chapterContexts.at(chapterUiItem, currentChapter)
+        val epubOpening = ready.epubOpening
+        val sourceNavigation = epubOpening?.navigation.orEmpty()
+        val sourceContents = remember(sourceNavigation) { ReaderContentsTree(sourceNavigation.map { it.depth }) }
+        val sourceNavigationByDocument = remember(sourceNavigation) {
+            sourceNavigation.indices.groupBy { sourceNavigation[it].destination.spineOrdinal }
+        }
+        val sourceDocumentNumbers = remember(epubOpening) {
+            epubOpening?.documents.orEmpty().mapIndexed { index, document -> document.spineOrdinal to index + 1 }.toMap()
+        }
+        fun sourceNavigationIndex(destination: EpubSourceDestination, title: String? = null): Int? {
+            val sameDocument = sourceNavigationByDocument[destination.spineOrdinal].orEmpty()
+            return sameDocument.firstOrNull { title != null && sourceNavigation[it].title == title }
+                ?: sameDocument.firstOrNull { sourceNavigation[it].destination == destination }
+                ?: sameDocument.firstOrNull()
+        }
+        fun sourceParents(index: Int): List<String> = sourceContents.ancestorsOf(index).asReversed()
+            .mapNotNull { sourceNavigation[it].title?.takeIf(String::isNotBlank) }
+        val chapterContext = remember(chapterContexts, currentChapter, chapterUiItem, ready.epubDestination) {
+            val local = chapterContexts.at(chapterUiItem, currentChapter)
+            val sourceIndex = ready.epubDestination?.let { sourceNavigationIndex(it, local.title) }
+            if (sourceIndex == null) local else local.copy(
+                title = local.title ?: sourceNavigation[sourceIndex].title,
+                parents = sourceParents(sourceIndex),
+                navigationIndex = sourceIndex,
+            )
         }
         // True page progress in paged mode; element progress when scrolling.
         val pageInfo = pagePosition.value
         val livePage = livePagePosition.value
         // The page starts remain available to the expanded table of contents.
-        val chapterStartPages = remember(pagination, ready) {
-            pagination?.takeIf { !it.partial }?.pages?.takeIf { it.isNotEmpty() }?.let { pages ->
+        val indexedPages = renderedPageIndex.value.takeIf { settings.readingMode == ReadingMode.PAGES }
+        val chapterStartPages = remember(pagination, ready, indexedPages, settings.startChaptersOnNewPage) {
+            if (indexedPages != null) ready.chapterStarts.indices.map {
+                if (settings.startChaptersOnNewPage) indexedPages.chapterStartPage(it, ready.chapterStarts) ?: -1
+                else indexedPages.pageAt(ready.chapterStarts[it])
+            }
+            else pagination?.takeIf { !it.partial }?.pages?.takeIf { it.isNotEmpty() }?.let { pages ->
                 ready.chapterStarts.map { start ->
                     ReaderNavigationPolicy.pageIndexForLocation(pages, ReaderReturnLocation.Main(start)) ?: 0
                 }
             }
         }
-        val usePages = pageInfo != null && chapterStartPages != null && settings.readingMode == ReadingMode.PAGES
-        val bookFraction = if (!ready.contentComplete) {
+        // Indexed seeks retain the source-element percentage throughout layout preparation.
+        val usePages = pageInfo != null && chapterStartPages != null && indexedPages == null &&
+            settings.readingMode == ReadingMode.PAGES
+        val bookFraction = if (epubOpening != null) {
+            viewModel.epubOpeningFraction(displayedIndex.intValue) ?: ready.book.progress.fraction
+        } else if (!ready.globalCoordinatesReady) {
             liveBook?.progress?.fraction ?: ready.book.progress.fraction
         } else if (usePages) {
             (livePage ?: pageInfo.first.toFloat()) / (pageInfo.second - 1).coerceAtLeast(1)
         } else {
-            (liveScrollPosition.value ?: displayedIndex.intValue.toFloat()) / (ready.items.size - 1).coerceAtLeast(1)
+            val item = if (settings.readingMode == ReadingMode.SCROLL) {
+                liveScrollPosition.value ?: displayedIndex.intValue.toFloat()
+            } else displayedIndex.intValue.toFloat()
+            item / (ready.items.size - 1).coerceAtLeast(1)
         }
         val bookChapterStarts = remember(ready) {
             readerBookChapterStarts(ready.navigation, ready.chapterStarts, ready.chapterDepths, ready.items.size)
         }
-        val bookChapterStops = remember(bookChapterStarts, fullPages, usePages, ready.items.size) {
-            bookChapterStarts.map { start ->
+        val bookChapterStops = remember(bookChapterStarts, fullPages, usePages, ready.items.size, epubOpening) {
+            if (epubOpening != null) {
+                val destinations = sourceNavigation.map { it.destination }
+                    .filter { it.spineOrdinal in sourceDocumentNumbers }
+                destinations.ifEmpty { epubOpening.documents }.map { epubOpening.fraction(it, 0f) }.distinct().sorted()
+            } else bookChapterStarts.map { start ->
                 if (usePages && fullPages != null) {
                     (ReaderNavigationPolicy.pageIndexForLocation(fullPages, ReaderReturnLocation.Main(start)) ?: 0)
                         .toFloat() / (fullPages.size - 1).coerceAtLeast(1)
@@ -1206,10 +1332,20 @@ private fun ReaderContent(
 
         val chapterAtFraction = remember(
             ready, chapterContexts, usePages, pageInfo, fullPages, chapterStartPages, resources,
-            pendingChapter, chapterContext,
+            pendingChapter, chapterContext, epubOpening, sourceContents,
         ) {
             { f: Float ->
-                if (pendingChapter != null) {
+                if (epubOpening != null) {
+                    val (destination, _) = epubOpening.locate(f)
+                    val index = sourceNavigationIndex(destination)
+                    val title = index?.let { sourceNavigation[it].title }?.takeIf(String::isNotBlank)
+                    val number = sourceDocumentNumbers[destination.spineOrdinal] ?: 1
+                    ReaderChapterPreview(
+                        chapterId = index?.let { "nav_$it" } ?: destination.spineOrdinal,
+                        label = title ?: resources.getString(R.string.reader_chapter_n, number),
+                        parents = index?.let { readerVisibleChapterParents(ready.book.title, sourceParents(it)) }.orEmpty(),
+                    )
+                } else if (pendingChapter != null) {
                     ReaderChapterPreview(
                         chapterId = chapterContext.navigationIndex?.let { "nav_$it" } ?: "chap_$currentChapter",
                         label = chapterContext.title
@@ -1237,15 +1373,16 @@ private fun ReaderContent(
             // Capture the exact reading origin immediately before the jump is
             // committed. Starting or cancelling a thumb gesture must not add
             // a phantom browser-history entry.
-            viewModel.rememberNavigationOrigin(currentReturnLocation(), expires = true)
+            if (epubOpening == null) viewModel.rememberNavigationOrigin(currentReturnLocation(), expires = true)
             seek()
             return true
         }
 
-        val pageCounterInfo = if (usePages) {
+        val pageCounterInfo = if (pageInfo != null && (usePages || indexedPages != null)) {
             val currentPageIndex = (livePage ?: pageInfo.first.toFloat()).roundToInt()
                 .coerceIn(0, (pageInfo.second - 1).coerceAtLeast(0))
-            pagination?.takeIf { !it.partial && it.pages.size == pageInfo.second }?.let {
+            if (indexedPages != null) indexedPages.counter(currentPageIndex, ready.chapterStarts)
+            else pagination?.takeIf { !it.partial && it.pages.size == pageInfo.second }?.let {
                 pageCounterInfoForPage(it.pages, currentPageIndex, ready::chapterAt)
             }
         } else null
@@ -1266,7 +1403,7 @@ private fun ReaderContent(
             chapterStartPages = chapterStartPages,
             bookPageCount = if (usePages) pageInfo.second else null,
             chapterStops = bookChapterStops,
-            progressValuesReady = settings.readingMode == ReadingMode.SCROLL || usePages,
+            progressValuesReady = epubOpening != null || ready.globalCoordinatesReady || settings.readingMode == ReadingMode.SCROLL,
             ready = ready,
             book = liveBook,
             currentChapter = currentChapter,
@@ -1275,9 +1412,18 @@ private fun ReaderContent(
             chapterLabel = chapterContext.title
                 ?: stringResource(R.string.reader_chapter_n, currentChapter + 1),
             bookFraction = bookFraction.coerceIn(0f, 1f),
+            seekPending = seekTarget != null || seekFraction != null || openingSourceSeekPending,
+            externalSeekActive = seekPosition != null || seekCompletion,
             chapterAtFraction = chapterAtFraction,
             onSeekBook = { f ->
-                if (!ready.contentComplete || settings.readingMode == ReadingMode.PAGES && !usePages) {
+                if (epubOpening != null) {
+                    val targetFraction = ReaderNavigationPolicy.pendingBookFractionSeek(bookFraction, f)
+                    commitProgressSeek(targetFraction != null) {
+                        selection.clear()
+                        viewModel.seekEpubOpening(checkNotNull(targetFraction))
+                    }
+                } else if (!ready.globalCoordinatesReady ||
+                    settings.readingMode == ReadingMode.PAGES && !usePages && ready.windowRange == null) {
                     // A preview has local item/page coordinates. Retain the
                     // requested book fraction until the complete book maps it.
                     val pending = ReaderNavigationPolicy.pendingBookFractionSeek(bookFraction, f)
@@ -1338,9 +1484,15 @@ private fun ReaderContent(
                             ),
                         )
                     }
+
+                    is ReaderNavigationTarget.EpubSource -> {
+                        selection.clear()
+                        viewModel.openEpubDestination(target.destination)
+                    }
                 }
             },
-            onBookmarkClick = { flatIndex ->
+            onBookmarkClick = bookmarkClick@{ flatIndex ->
+                if (ready.epubOpening != null) return@bookmarkClick
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                 navigateWithHistory(ReaderReturnLocation.Main(flatIndex))
             },
@@ -1351,7 +1503,8 @@ private fun ReaderContent(
                 }
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
             },
-            onQuoteClick = { quote ->
+            onQuoteClick = quoteClick@{ quote ->
+                if (ready.epubOpening != null) return@quoteClick
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                 // Anchored quotes know exactly where they are; the char-precise
                 // seek lands on the right page even mid-paragraph.
@@ -1361,7 +1514,8 @@ private fun ReaderContent(
             },
             onRemoveQuote = { viewModel.removeQuote(it) },
             bookmarked = bookmarked,
-            onToggleBookmark = {
+            onToggleBookmark = toggleBookmark@{
+                if (ready.epubOpening != null) return@toggleBookmark
                 haptics.performHapticFeedback(
                     if (bookmarked) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn,
                 )
@@ -1860,6 +2014,7 @@ class FootnoteHandler(
     val onNavigate: (Int) -> Unit = {},
     val linkedDocumentTargets: Map<String, LinkedDocumentTarget> = emptyMap(),
     val onNavigateLinked: (LinkedDocumentTarget) -> Unit = {},
+    internal val onMissingNote: ((String) -> Unit)? = null,
 ) {
     // One listener per book, shared by all links and recompositions. New
     // lambdas per reference make otherwise identical AnnotatedStrings unequal
@@ -1882,7 +2037,8 @@ class FootnoteHandler(
             onNavigate(it)
             return
         }
-        linkedDocumentTargets[key]?.let(onNavigateLinked)
+        val linked = linkedDocumentTargets[key]
+        if (linked != null) onNavigateLinked(linked) else onMissingNote?.invoke(key)
     }
 }
 
@@ -1898,10 +2054,9 @@ internal fun AnnotatedString.withFootnoteLinks(
     val internalRefs = if (handler == null) {
         emptyList()
     } else {
-        (
-            getStringAnnotations(FOOTNOTE_TAG, 0, length) +
-                getStringAnnotations(LINK_TAG, 0, length)
-            ).filter { handler.handles(it.item) }
+        getStringAnnotations(FOOTNOTE_TAG, 0, length).filter {
+            handler.handles(it.item) || handler.onMissingNote != null
+        } + getStringAnnotations(LINK_TAG, 0, length).filter { handler.handles(it.item) }
     }
     val externalRefs = getStringAnnotations(EXTERNAL_LINK_TAG, 0, length)
     if (internalRefs.isEmpty() && externalRefs.isEmpty()) return this
@@ -2002,16 +2157,14 @@ private fun ScrollReader(
     val reviewState by viewModel.completionReview.collectAsStateWithLifecycle()
     val rawInitialIndex = viewModel.currentFlatIndex.coerceIn(0, ready.items.size - 1)
     val initialIndex = resolvePublisherFloatTarget(ready.items, rawInitialIndex)
-    val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = initialIndex,
-        initialFirstVisibleItemScrollOffset = if (initialIndex == rawInitialIndex &&
-            rawInitialIndex == ready.book.progress.elementIndex
-        ) {
-            ready.book.progress.scrollOffset
-        } else {
-            0
-        },
-    )
+    val listState = key(ready.sourceGeneration) {
+        // The ViewModel translated the visible source leaf before publishing
+        // the new window. Reuse its pixel offset after moving that leaf.
+        rememberLazyListState(
+            initialFirstVisibleItemIndex = initialIndex,
+            initialFirstVisibleItemScrollOffset = if (initialIndex == rawInitialIndex) viewModel.currentScrollOffset else 0,
+        )
+    }
     LaunchedEffect(completionVisible) {
         // The final item becomes a fixed viewport with its own form scroll.
         if (completionVisible) listState.scrollToItem(ready.items.size)
@@ -2041,15 +2194,19 @@ private fun ScrollReader(
         )
     }
 
-    LaunchedEffect(ready) {
+    LaunchedEffect(ready, seekTarget, seekPosition, seekFraction) {
         snapshotFlow {
             listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
         }.collect { (index, offset) ->
-                displayedIndex.intValue = index.coerceAtMost(ready.items.size - 1)
-                viewModel.observeVisiblePosition(index.coerceAtMost(ready.items.size - 1), offset)
+                if (seekTarget != null || seekPosition != null || seekFraction != null) return@collect
+                val flat = index.coerceAtMost(ready.items.lastIndex)
+                if (ready.windowRange != null) viewModel.requestWindow(flat)
+                if (ready.items[flat].isLoading) return@collect
+                displayedIndex.intValue = flat
+                viewModel.observeVisiblePosition(flat, offset, sourceGeneration = ready.sourceGeneration)
                 viewModel.observeCompletionPosition(
-                    lastPage = index == ready.items.size - 1,
-                    completion = index >= ready.items.size,
+                    lastPage = ready.globalCoordinatesReady && index == ready.items.size - 1,
+                    completion = ready.globalCoordinatesReady && index >= ready.items.size,
                 )
             }
     }
@@ -2084,7 +2241,7 @@ private fun ScrollReader(
                 }
             } else {
                 val start = origin
-                if (start != null && !selection.active &&
+                if (start != null && ready.epubOpening == null && !selection.active &&
                     ReaderNavigationPolicy.isLargeScrollJump(travelledPx, viewportPx)
                 ) {
                     val end = currentScrollLocation()
@@ -2114,20 +2271,24 @@ private fun ScrollReader(
         snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
             .collectLatest { (index, offset) ->
                 delay(400.milliseconds)
-                viewModel.saveProgress(index, offset)
+                viewModel.saveProgress(index, offset, sourceGeneration = ready.sourceGeneration)
             }
     }
     LaunchedEffect(seekTarget, ready) {
         val target = seekTarget ?: return@LaunchedEffect
         if (!ready.contentComplete && target !in ready.items.indices) return@LaunchedEffect
         val sourceItem = target.coerceIn(0, ready.items.size - 1)
+        if (ready.items[sourceItem].isLoading) {
+            viewModel.requestWindow(sourceItem)
+            return@LaunchedEffect
+        }
         val visibleItem = resolvePublisherFloatTarget(ready.items, sourceItem)
         livePosition.value = sourceItem.toFloat()
         listState.scrollToItem(visibleItem)
         onSeekConsumed()
     }
-    LaunchedEffect(seekCompletion, ready.contentComplete) {
-        if (seekCompletion && ready.contentComplete) {
+    LaunchedEffect(seekCompletion, ready.globalCoordinatesReady) {
+        if (seekCompletion && ready.globalCoordinatesReady) {
             try {
                 listState.animateScrollToItem(ready.items.size)
             } finally {
@@ -2135,11 +2296,15 @@ private fun ScrollReader(
             }
         }
     }
-    LaunchedEffect(seekFraction, ready.contentComplete) {
+    LaunchedEffect(seekFraction, ready) {
         val fraction = seekFraction ?: return@LaunchedEffect
-        if (!ready.contentComplete) return@LaunchedEffect
+        if (!ready.globalCoordinatesReady) return@LaunchedEffect
         val item = (fraction * (ready.items.size - 1)).roundToInt()
             .coerceIn(0, ready.items.size - 1)
+        if (ready.items[item].isLoading) {
+            viewModel.requestWindow(item)
+            return@LaunchedEffect
+        }
         livePosition.value = item.toFloat()
         listState.scrollToItem(resolvePublisherFloatTarget(ready.items, item))
         onSeekFractionConsumed()
@@ -2148,6 +2313,10 @@ private fun ScrollReader(
         val position = seekPosition ?: return@LaunchedEffect
         if (!ready.contentComplete && position.flatItemIndex !in ready.items.indices) return@LaunchedEffect
         val sourceTarget = position.flatItemIndex.coerceIn(0, ready.items.size - 1)
+        if (ready.items[sourceTarget].isLoading) {
+            viewModel.requestWindow(sourceTarget)
+            return@LaunchedEffect
+        }
         val visibleTarget = resolvePublisherFloatTarget(ready.items, sourceTarget)
         livePosition.value = sourceTarget.toFloat()
         val charOffset = position.charOffset
@@ -2199,6 +2368,7 @@ private fun ScrollReader(
                 viewModel.saveProgress(
                     listState.firstVisibleItemIndex.coerceAtMost(ready.items.size - 1),
                     listState.firstVisibleItemScrollOffset,
+                    sourceGeneration = ready.sourceGeneration,
                 )
             }
         }
@@ -2282,6 +2452,12 @@ private fun ScrollReader(
         ) {
             items(ready.items.size, key = { it }) { index ->
                 val readerItem = ready.items[index]
+                if (readerItem.isLoading) {
+                    Box(Modifier.fillMaxWidth().heightIn(min = 180.dp), contentAlignment = Alignment.Center) {
+                        LoadingIndicator()
+                    }
+                    return@items
+                }
                 if (readerItem.suppressedByPublisherFloat && settings.bookStyles) {
                     return@items
                 }
@@ -2307,7 +2483,7 @@ private fun ScrollReader(
                     publisherFloat = readerItem.publisherFloat,
                 )
             }
-            if (ready.contentComplete) item(key = "completion") {
+            if (ready.globalCoordinatesReady) item(key = "completion") {
                 CompletionPage(
                     book = liveBook,
                     colors = colors,
@@ -2335,6 +2511,9 @@ private fun ScrollReader(
 
 // -------------------------------------------------------------------- pages
 
+private fun sourcePaginationSuffix(generation: Int): String =
+    if (generation == 0) "" else "|source=$generation"
+
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun PagedReader(
@@ -2345,6 +2524,7 @@ private fun PagedReader(
     viewModel: ReaderViewModel,
     displayedIndex: MutableIntState,
     pagePosition: androidx.compose.runtime.MutableState<Pair<Int, Int>?>,
+    renderedPageIndex: androidx.compose.runtime.MutableState<ReaderPageIndex?>,
     livePagePosition: androidx.compose.runtime.MutableState<Float?>,
     seekTarget: Int?,
     onSeekConsumed: () -> Unit,
@@ -2369,7 +2549,12 @@ private fun PagedReader(
     onExitReview: () -> Unit,
     onContentReady: () -> Unit,
 ) {
-    val measurer = rememberTextMeasurer(cacheSize = 0)
+    val appContext = LocalContext.current.applicationContext
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val measurer = remember(appContext, density, layoutDirection) {
+        createReaderTextMeasurer(createFontFamilyResolver(appContext), density, layoutDirection, cacheSize = 0)
+    }
     val liveBook by viewModel.book.collectAsStateWithLifecycle()
     val completionVisible by viewModel.completionVisible.collectAsStateWithLifecycle()
     val reviewState by viewModel.completionReview.collectAsStateWithLifecycle()
@@ -2377,13 +2562,27 @@ private fun PagedReader(
     var pageFooterVisible by remember { mutableStateOf(false) }
     // One turn is enough to express the intent to continue. It lives above
     // pager generations so an expanded preview or full layout can fulfil it.
-    var pendingForwardTurn by remember(ready.book.id, settings) {
+    var pendingForwardTurn by remember(ready.book.id, settings, ready.sourceGeneration) {
         mutableStateOf<ReaderReturnLocation.Main?>(null)
     }
+    var pendingBackwardTurn by remember(ready.book.id, settings, ready.sourceGeneration) {
+        mutableStateOf<ReaderReturnLocation.Main?>(null)
+    }
+    var pendingExactTurn by remember(ready.book.id, settings, ready.sourceGeneration) {
+        mutableStateOf<Pair<ReaderPageIndex, Int>?>(null)
+    }
+    val epubOpening = ready.epubOpening
+    val sourceOrdinal = ready.epubDestination?.spineOrdinal
+    val canTurnToPreviousSource = epubOpening?.documents?.firstOrNull()?.spineOrdinal?.let { sourceOrdinal != it } == true
+    val canTurnToNextSource = epubOpening?.documents?.lastOrNull()?.spineOrdinal?.let { sourceOrdinal != it } == true
     val explicitSeek = seekTarget != null || seekFraction != null || seekPosition != null || seekCompletion
     val latestExplicitSeek by rememberUpdatedState(explicitSeek)
     LaunchedEffect(explicitSeek) {
-        if (explicitSeek) pendingForwardTurn = null
+        if (explicitSeek) {
+            pendingForwardTurn = null
+            pendingBackwardTurn = null
+            pendingExactTurn = null
+        }
     }
     val paperCurl = settings.pageTurnAnimation == PageTurnAnimation.PAGE_CURL
     val cascade = settings.pageTurnAnimation == PageTurnAnimation.CASCADE
@@ -2391,14 +2590,32 @@ private fun PagedReader(
     val sheetPages = paperCurl || cascade
 
     // Element-based progress takes over again when paged mode leaves.
-    DisposableEffect(Unit) {
+    DisposableEffect(viewModel) {
         onDispose {
+            viewModel.cancelPageIndex()
             pagePosition.value = null
+            renderedPageIndex.value = null
             livePagePosition.value = null
         }
     }
-    val density = LocalDensity.current
-    val uiLayoutIsRtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val uiLayoutIsRtl = layoutDirection == LayoutDirection.Rtl
+    val workerCount = if (settings.startChaptersOnNewPage) {
+        LocalReaderPageWorkerCount.current.coerceIn(1, MAX_CHAPTER_LAYOUT_WORKERS)
+    } else 1
+    val indexMeasurers = remember(appContext, density, layoutDirection, workerCount) {
+        List(workerCount) {
+            createReaderTextMeasurer(
+                fontFamilyResolver = createFontFamilyResolver(appContext),
+                density = density,
+                layoutDirection = layoutDirection,
+                cacheSize = 0,
+            )
+        }
+    }
+    val localeTags = androidx.compose.ui.platform.LocalConfiguration.current.locales.toLanguageTags()
+    val layoutEnvironment = "rtl=$uiLayoutIsRtl|locale=$localeTags|${android.os.Build.FINGERPRINT}"
+    val exactPageIndex by viewModel.exactPageIndex.collectAsStateWithLifecycle()
+    val pageIndexCalculation by viewModel.pageIndexCalculation.collectAsStateWithLifecycle()
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
 
@@ -2429,38 +2646,112 @@ private fun PagedReader(
                 language = ready.language,
             )
         }
-        val paginationKey = if (ready.contentComplete) spec.key else "${spec.key}|prefix=${ready.items.size}"
-        LaunchedEffect(paginationKey, ready) {
-            val previewAnchor = ReaderReturnLocation.Main(
+        val indexedRange = ready.windowRange
+        val provisionalRange = ready.items.indices.takeIf { epubOpening != null }
+        val sourceSuffix = sourcePaginationSuffix(ready.sourceGeneration)
+        val paginationKey = when {
+            indexedRange != null -> "${spec.key}|window=${indexedRange.first}:${indexedRange.last}"
+            ready.contentComplete -> spec.key
+            else -> "${spec.key}|prefix=${ready.items.size}"
+        } + "|environment=$layoutEnvironment" + sourceSuffix
+        val needsGlobalIndex = indexedRange != null && !ready.contentComplete && epubOpening == null
+        val layout = exactPageIndex?.takeIf {
+            needsGlobalIndex && it.specKey == spec.key && it.environment == layoutEnvironment
+        }
+        val continuousLayout = layout?.takeIf { it.geometryKey != null }
+        val exactWindowKey = "${spec.key}|continuous|environment=$layoutEnvironment$sourceSuffix"
+        val requestedExactPage = continuousLayout?.index?.seekPage(
+            ready.items.lastIndex, seekTarget, seekFraction, seekPosition, seekCompletion,
+        )
+        val holder by viewModel.pagination.collectAsStateWithLifecycle()
+        LaunchedEffect(spec.key, needsGlobalIndex, layoutEnvironment, ready.book.id) {
+            if (needsGlobalIndex) {
+                val cover = ready.items.firstOrNull().takeIf { ready.chapterStarts.firstOrNull() == 1 }
+                viewModel.ensureExactPageIndex(spec, layoutEnvironment, cover, indexMeasurers)
+            } else viewModel.cancelPageIndex()
+        }
+        LaunchedEffect(continuousLayout, requestedExactPage, paginationKey) {
+            val exact = continuousLayout ?: return@LaunchedEffect
+            val visible = viewModel.pagination.value
+            if (requestedExactPage == null && (visible?.key == paginationKey || visible?.exactIndex === exact.index)) {
+                // A background layout can update the counter without replacing a visible local page.
+                return@LaunchedEffect
+            }
+            val anchor = pendingBackwardTurn ?: pendingForwardTurn ?: ReaderReturnLocation.Main(
                 viewModel.currentFlatIndex, viewModel.currentCharOffset,
             )
+            val page = requestedExactPage ?: exact.index.pageAt(anchor.flatItemIndex, anchor.charOffset ?: 0)
+            viewModel.requestExactPageWindow(exact, exactWindowKey, settings, page)
+        }
+        LaunchedEffect(paginationKey, ready, continuousLayout) {
+            if (continuousLayout != null) return@LaunchedEffect
+            if (needsGlobalIndex && !settings.startChaptersOnNewPage &&
+                viewModel.hasCachedPageLayout(spec.key, layoutEnvironment)
+            ) return@LaunchedEffect
+            val previewAnchor = resolvePreviewAnchorForSeek(
+                itemCount = ready.items.size,
+                globalCoordinatesReady = ready.globalCoordinatesReady,
+                seekPosition = seekPosition,
+                seekTarget = seekTarget,
+                seekFraction = seekFraction,
+                seekCompletion = seekCompletion,
+                pendingBackwardTurn = pendingBackwardTurn,
+                pendingForwardTurn = pendingForwardTurn,
+                currentFlatIndex = viewModel.currentFlatIndex,
+                currentCharOffset = viewModel.currentCharOffset,
+            )
+            if (indexedRange != null && ready.items.isNotEmpty() &&
+                previewAnchor.flatItemIndex.coerceIn(ready.items.indices) !in indexedRange
+            ) {
+                viewModel.requestWindow(previewAnchor.flatItemIndex)
+                return@LaunchedEffect
+            }
             // A chapter start is an exact restart boundary. Continuous and
             // single-chapter books instead start at zero; the preview stops
             // after a few closed pages past the actual saved text.
-            val quickRange = openingPaginationRange(
-                ready.chapterStarts, ready.items.size, viewModel.currentFlatIndex,
+            val nearby = openingPaginationRange(
+                ready.chapterStarts, ready.items.size, previewAnchor.flatItemIndex,
                 settings.startChaptersOnNewPage,
-            ) ?: ReaderPaginationRange(0, ready.items.size)
+            )
+            val quickRange = indexedRange?.let { range ->
+                if (previewAnchor.flatItemIndex in range && nearby != null) {
+                    ReaderPaginationRange(maxOf(range.first, nearby.fromIndex), minOf(range.last + 1, nearby.toIndex))
+                } else ReaderPaginationRange(range.first, range.last + 1)
+            } ?: nearby ?: ReaderPaginationRange(0, ready.items.size)
+            val effectiveQuickRange = if (settings.startChaptersOnNewPage && indexedRange != null) {
+                val quickStart = resolveExactQuickPaginationStart(
+                    exactIndex = layout?.index,
+                    items = ready.items,
+                    quickRange = quickRange,
+                    target = previewAnchor,
+                )
+                ReaderPaginationRange(quickStart, quickRange.toIndex)
+            } else {
+                quickRange
+            }
             val quick: (suspend () -> List<BookPage>)? =
-                quickRange.let { range ->
+                effectiveQuickRange.let { range ->
                     { paginateBook(ready.items, measurer, spec, range.fromIndex, range.toIndex,
                         stopAfterLocation = previewAnchor) }
                 }
             viewModel.ensurePagination(
                 paginationKey, settings, ready.items, quick,
-                quickRange = quickRange.fromIndex until quickRange.toIndex,
+                quickRange = effectiveQuickRange.fromIndex until effectiveQuickRange.toIndex,
                 awaitPreviewPresentation = true,
                 contentComplete = ready.contentComplete,
+                preparedRange = indexedRange ?: provisionalRange,
+                onWholeBookLayout = { viewModel.cacheExactPageIndex(ready, spec, layoutEnvironment, it) },
             ) {
-                paginateBook(ready.items, measurer, spec)
+                if (indexedRange == null) paginateBook(ready.items, measurer, spec)
+                else paginateBook(ready.items, measurer, spec, indexedRange.first, indexedRange.last + 1)
             }
         }
 
-        val holder by viewModel.pagination.collectAsStateWithLifecycle()
         val current = holder
         if (current == null || current.pages.isEmpty()) {
             SideEffect {
                 pagePosition.value = null
+                renderedPageIndex.value = null
                 livePagePosition.value = null
                 pageFooterVisible = false
             }
@@ -2473,8 +2764,32 @@ private fun PagedReader(
         // background. They render with the settings they were MEASURED with,
         // so nothing shifts twice: the text changes exactly once, when the
         // new page layout lands (the corner spinner shows the wait).
-        val recomputing = current.key != paginationKey || current.partial
-        val renderSettings = if (current.key != paginationKey) current.settings else settings
+        val matchesLocalWindow = current.key == paginationKey
+        val activeContinuousLayout = continuousLayout?.takeIf {
+            current.key == exactWindowKey && current.exactIndex === it.index
+        }
+        val matchesLayout = matchesLocalWindow || activeContinuousLayout != null
+        val sameSpecLocalWindow = indexedRange != null && isSameSpecWindowKey(
+            holderKey = current.key,
+            specKey = spec.key,
+            layoutEnvironment = layoutEnvironment,
+            sourceSuffix = sourceSuffix,
+        )
+        val sourceCoordinatesMatch = current.key.endsWith(sourceSuffix)
+        val recomputing = !matchesLayout || current.partial
+        val exactStartPage = current.exactStartPage
+        val candidate = layout?.index.takeIf { matchesLayout || sameSpecLocalWindow }
+        val globalPageOffset = remember(candidate, current, activeContinuousLayout) {
+            if (activeContinuousLayout != null) exactStartPage
+            else if (candidate != null && continuousLayout == null) {
+                current.itemRange?.first?.let { candidate.offsetOf(current.pages, it) }
+            } else null
+        }
+        val visiblePageIndex = candidate.takeIf {
+            globalPageOffset != null || continuousLayout != null && (matchesLocalWindow || sameSpecLocalWindow)
+        }
+        val pageNumbersReady = !recomputing || visiblePageIndex != null
+        val renderSettings = if (matchesLayout) settings else current.settings
         val renderContentWidth = maxWidth - ReaderMetrics.horizontalPadding(renderSettings) * 2
 
         key(current) {
@@ -2490,24 +2805,72 @@ private fun PagedReader(
                 pages,
                 ReaderReturnLocation.Main(viewModel.currentFlatIndex, viewModel.currentCharOffset),
             ) ?: 0
-            val pendingTurn = pendingForwardTurn.takeUnless { explicitSeek }
+            val preparedRange = current.itemRange ?: indexedRange
+            val indexedWindow = indexedRange != null
+            val completeAtBookEnd = if (!ready.globalCoordinatesReady) false
+            else if (exactStartPage != null && current.exactIndex != null) {
+                exactStartPage + realPageCount == current.exactIndex.size
+            } else !current.partial || indexedWindow && current.rangeComplete && preparedRange?.last == ready.items.lastIndex
+            val pageWindow = ReaderPagerWindow(
+                realPageCount = realPageCount,
+                loadingBefore = canTurnToPreviousSource ||
+                    (exactStartPage ?: if (indexedWindow) preparedRange?.first ?: 0 else 0) > 0,
+                completionAfter = completeAtBookEnd,
+            )
+            val pendingTurn = pendingForwardTurn.takeUnless { explicitSeek || exactStartPage != null }
+            val pendingBack = pendingBackwardTurn.takeUnless { explicitSeek || exactStartPage != null }
             val continuedPage = pendingTurn?.let { anchor ->
-                ReaderNavigationPolicy.pageForPreparedContinuation(pages, anchor, current.partial)
+                if (preparedPagesContainLocation(pages, anchor, preparedRange, current.rangeComplete)) {
+                    ReaderNavigationPolicy.pageIndexForLocation(pages, anchor)
+                } else ReaderNavigationPolicy.pageForPreparedContinuation(
+                    pages, anchor, partialPagination = !completeAtBookEnd,
+                )
             }
+            val backwardPage = pendingBack?.takeIf {
+                preparedPagesContainLocation(pages, it, preparedRange, current.rangeComplete)
+            }?.let { ReaderNavigationPolicy.pageIndexForLocation(pages, it) }
+            val pendingOrdinal = pendingExactTurn?.takeIf { !explicitSeek && it.first === current.exactIndex }?.second
+            val pendingSourceTurn = (pendingBackwardTurn ?: pendingForwardTurn).takeUnless { explicitSeek }
+            val exactInitialPage = (requestedExactPage ?: pendingOrdinal ?: pendingSourceTurn?.let {
+                activeContinuousLayout?.index?.pageAt(it.flatItemIndex, it.charOffset ?: 0)
+            })?.let(current::exactPageOffset)
+            val seekInitialPage = resolveSeekInitialPagerPage(
+                matchesLayout = matchesLayout,
+                usesContinuousLayout = continuousLayout != null,
+                pages = pages,
+                pageWindow = pageWindow,
+                preparedRange = preparedRange,
+                partial = current.partial,
+                rangeComplete = current.rangeComplete,
+                indexedWindow = indexedWindow,
+                globalCoordinatesReady = ready.globalCoordinatesReady,
+                completeAtBookEnd = completeAtBookEnd,
+                itemCount = ready.items.size,
+                seekPosition = seekPosition,
+                seekTarget = seekTarget,
+                seekFraction = seekFraction,
+                seekCompletion = seekCompletion,
+            )
             val initialPage = when {
-                continuedPage != null -> continuedPage
-                pendingTurn != null && current.partial -> realPageCount
-                else -> restoredPage
+                exactInitialPage != null -> pageWindow.pagerPage(exactInitialPage)
+                seekInitialPage != null -> seekInitialPage
+                backwardPage != null -> pageWindow.pagerPage(backwardPage)
+                pendingBack != null && pageWindow.loadingBefore -> 0
+                continuedPage == realPageCount -> pageWindow.afterPage
+                continuedPage != null -> pageWindow.pagerPage(continuedPage)
+                pendingTurn != null && current.partial -> pageWindow.afterPage
+                else -> pageWindow.pagerPage(restoredPage)
             }
-            // The final virtual page is a loading destination while this is
-            // a preview, and the completion form only once the book is ready.
-            // All input paths can reach it, including native accessibility.
-            val extraPages = 1
-            val pagerState = rememberPagerState(initialPage = initialPage) {
-                realPageCount + extraPages
+            // Virtual loading destinations at both boundaries let swipes,
+            // curl, accessibility and hardware keys request adjacent windows.
+            val pagerState = rememberPagerState(initialPage = initialPage) { pageWindow.pageCount }
+            var reportedPage by remember(pagerState) { mutableIntStateOf(-1) }
+            val prefetchPages = remember(pages, pageWindow.firstContentPage) {
+                if (!pageWindow.loadingBefore) pages
+                else listOf(BookPage(emptyList(), preparedRange?.first ?: 0)) + pages
             }
             ReaderPagedImagePrefetchEffect(
-                pages = pages,
+                pages = prefetchPages,
                 pagerState = pagerState,
                 settings = renderSettings,
                 contentWidth = renderContentWidth,
@@ -2543,8 +2906,8 @@ private fun PagedReader(
                     pagerState.scrollToPage(pagerState.currentPage)
                 }
             }
-            LaunchedEffect(pagerState, current.key == paginationKey) {
-                if (current.key != paginationKey) return@LaunchedEffect
+            LaunchedEffect(pagerState, matchesLayout) {
+                if (!matchesLayout) return@LaunchedEffect
                 snapshotFlow {
                     pagerState.layoutInfo.visiblePagesInfo.any { it.index == pagerState.currentPage }
                 }.first { it }
@@ -2567,44 +2930,142 @@ private fun PagedReader(
                 last
             }
 
-            LaunchedEffect(pagerState, recomputing) {
-                snapshotFlow {
-                    (curlTouch.visualPosition ?: (pagerState.currentPage + pagerState.currentPageOffsetFraction))
-                        .coerceIn(0f, (realPageCount - 1).coerceAtLeast(0).toFloat())
-                }.collect { livePagePosition.value = if (recomputing) null else it }
-            }
-            LaunchedEffect(pagerState) {
-                if (continuedPage != null && pendingForwardTurn == pendingTurn) {
-                    pendingForwardTurn = null
-                }
-                snapshotFlow { pagerState.settledPage }.collect { settled ->
-                    viewModel.observeCompletionPosition(
-                        lastPage = !current.partial && settled == realPageCount - 1,
-                        completion = !current.partial && settled >= realPageCount,
+            fun ordinalAt(contentPage: Int, anchor: ReaderReturnLocation.Main? = null): Int = when {
+                globalPageOffset != null -> globalPageOffset + contentPage
+                visiblePageIndex != null -> {
+                    val page = pages[contentPage]
+                    val location = anchor ?: if (reportedPage == contentPage) {
+                        ReaderReturnLocation.Main(viewModel.currentFlatIndex, viewModel.currentCharOffset).takeIf {
+                            paginationContainsLocation(pages.subList(contentPage, contentPage + 1), it)
+                        }
+                    } else null
+                    visiblePageIndex.pageAt(
+                        location?.flatItemIndex ?: page.firstItemIndex,
+                        location?.charOffset ?: page.firstCharOffset,
                     )
-                    if (settled >= realPageCount) {
-                        if (current.partial && !latestExplicitSeek) {
+                }
+                else -> contentPage
+            }
+
+            fun counterAt(contentPage: Int, anchor: ReaderReturnLocation.Main? = null): PageCounterInfo? {
+                if (visiblePageIndex != null) return visiblePageIndex.counter(ordinalAt(contentPage, anchor), ready.chapterStarts)
+                if (recomputing) return null
+                return PageCounterInfo(contentPage + 1, realPageCount, chapterLastPage[contentPage] - contentPage)
+            }
+
+            fun showSeekPosition(page: Int) {
+                livePagePosition.value = if (pageNumbersReady) ordinalAt(page).toFloat() else null
+            }
+
+            fun requestContinuation(location: ReaderReturnLocation.Main) {
+                val exact = continuousLayout
+                if (exact == null) viewModel.requestWindow(location.flatItemIndex.coerceIn(ready.items.indices))
+                else viewModel.requestExactPageWindow(
+                    exact, exactWindowKey, settings, exact.index.pageAt(location.flatItemIndex, location.charOffset ?: 0),
+                )
+            }
+
+            LaunchedEffect(pagerState, pageNumbersReady, globalPageOffset, visiblePageIndex) {
+                snapshotFlow {
+                    ((curlTouch.visualPosition ?: (pagerState.currentPage + pagerState.currentPageOffsetFraction)) -
+                        pageWindow.firstContentPage)
+                        .coerceIn(0f, (realPageCount - 1).coerceAtLeast(0).toFloat())
+                }.collect {
+                    livePagePosition.value = when {
+                        !pageNumbersReady -> null
+                        globalPageOffset == null && visiblePageIndex != null -> ordinalAt(it.toInt()).toFloat()
+                        else -> (globalPageOffset ?: 0) + it
+                    }
+                }
+            }
+            LaunchedEffect(pagerState, explicitSeek, visiblePageIndex, globalPageOffset, continuousLayout, matchesLocalWindow) {
+                if (continuedPage != null && pendingForwardTurn == pendingTurn) pendingForwardTurn = null
+                if (backwardPage != null && pendingBackwardTurn == pendingBack) pendingBackwardTurn = null
+                snapshotFlow { pagerState.settledPage }.collect { settled ->
+                    if (latestExplicitSeek) return@collect
+                    if (!matchesLocalWindow && activeContinuousLayout == null) return@collect
+                    val contentPage = pageWindow.contentPage(settled)
+                    viewModel.observeCompletionPosition(
+                        lastPage = completeAtBookEnd && contentPage == realPageCount - 1,
+                        completion = completeAtBookEnd && settled == pageWindow.afterPage,
+                    )
+                    if (activeContinuousLayout != null && exactStartPage != null) {
+                        val adjacentPage = when {
+                            settled < pageWindow.firstContentPage -> exactStartPage - 1
+                            settled == pageWindow.afterPage && !completeAtBookEnd -> exactStartPage + realPageCount
+                            else -> null
+                        }
+                        if (adjacentPage != null) {
+                            pendingExactTurn = activeContinuousLayout.index to adjacentPage
+                            viewModel.requestExactPageWindow(activeContinuousLayout, exactWindowKey, settings, adjacentPage)
+                            return@collect
+                        }
+                        if (contentPage != null && pendingExactTurn != null) {
+                            pendingExactTurn = null
+                            // Returning to an already displayed page supersedes a pending edge turn.
+                            viewModel.requestExactPageWindow(
+                                activeContinuousLayout, exactWindowKey, settings, exactStartPage + contentPage,
+                            )
+                        }
+                    }
+                    if (settled < pageWindow.firstContentPage) {
+                        if (canTurnToPreviousSource) {
+                            viewModel.advanceEpubOpening(forward = false)
+                            return@collect
+                        }
+                        if (!latestExplicitSeek && pendingBackwardTurn == null) {
+                            val target = ((preparedRange?.first ?: pages.first().firstItemIndex) - 1).coerceAtLeast(0)
+                            val location = ReaderReturnLocation.Main(target, Int.MAX_VALUE)
+                            pendingBackwardTurn = location
+                            pendingForwardTurn = null
+                            requestContinuation(location)
+                        }
+                        return@collect
+                    }
+                    if (settled == pageWindow.afterPage) {
+                        if (epubOpening != null && current.rangeComplete) {
+                            if (canTurnToNextSource) viewModel.advanceEpubOpening(forward = true)
+                            return@collect
+                        }
+                        if (!completeAtBookEnd && !latestExplicitSeek) {
                             if (pendingForwardTurn == null) {
-                                pendingForwardTurn = ReaderNavigationPolicy.continuationAfter(pages.last())
+                                pendingForwardTurn = if (indexedWindow && current.rangeComplete && preparedRange != null) {
+                                    ReaderReturnLocation.Main(preparedRange.last + 1)
+                                } else ReaderNavigationPolicy.continuationAfter(pages.last())
+                                pendingBackwardTurn = null
                             }
-                        } else if (!current.partial) {
+                            if (indexedWindow) pendingForwardTurn?.let(::requestContinuation)
+                        } else if (completeAtBookEnd) {
                             haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                         }
                         return@collect
                     }
-                    // Turning back from the loading page cancels that turn.
+                    if (contentPage == null) return@collect
                     pendingForwardTurn = null
-                    if (current.partial) {
-                        // Chapter-only pages: keep global progress untouched,
-                        // just remember the exact reading position.
-                        val flat = pages[settled].firstItemIndex
-                        displayedIndex.intValue = flat
-                        viewModel.saveProgress(flat, 0, pages[settled].firstCharOffset)
+                    pendingBackwardTurn = null
+                    val anchor = ReaderReturnLocation.Main(viewModel.currentFlatIndex, viewModel.currentCharOffset)
+                    val keepRestoredAnchor = (reportedPage < 0 || reportedPage == contentPage) && indexedWindow && exactStartPage == null &&
+                        !current.settings.startChaptersOnNewPage && pendingTurn == null && pendingBack == null &&
+                        paginationContainsLocation(pages.subList(contentPage, contentPage + 1), anchor)
+                    reportedPage = contentPage
+                    if (keepRestoredAnchor) {
+                        // The locally cut page can start before the saved text. Keep its exact
+                        // source anchor until the canonical page or an actual turn is presented.
+                        displayedIndex.intValue = anchor.flatItemIndex
+                        val count = counterAt(contentPage, anchor)
+                        if (count != null) viewModel.saveProgress(
+                            anchor.flatItemIndex, 0, anchor.charOffset ?: 0, count,
+                            sourceGeneration = ready.sourceGeneration,
+                        )
                         return@collect
                     }
-                    val flatIndex = pages[settled].firstItemIndex
+                    val flatIndex = pages[contentPage].firstItemIndex
                     displayedIndex.intValue = flatIndex
-                    viewModel.saveProgress(flatIndex, 0, pages[settled].firstCharOffset)
+                    viewModel.saveProgress(
+                        flatIndex, 0, pages[contentPage].firstCharOffset, counterAt(contentPage),
+                        sourceGeneration = ready.sourceGeneration,
+                    )
+                    if (indexedWindow && settings.startChaptersOnNewPage) viewModel.requestWindow(flatIndex)
                 }
             }
 
@@ -2633,13 +3094,13 @@ private fun PagedReader(
                     }
 
                     if (initialChapter == -1) {
-                        initialChapter = pages.getOrNull(current)?.let {
+                        initialChapter = pageWindow.contentPage(current)?.let(pages::getOrNull)?.let {
                             ready.chapterAt(it.firstItemIndex)
                         } ?: -1
                         lastTargetPage = target
                     }
 
-                    val page = pages.getOrNull(target) ?: return@collect
+                    val page = pageWindow.contentPage(target)?.let(pages::getOrNull) ?: return@collect
                     val chapter = ready.chapterAt(page.firstItemIndex)
 
                     // Only page turns (swipes/taps) tick; jumps from the TOC or
@@ -2656,85 +3117,139 @@ private fun PagedReader(
                     lastTargetPage = target
                 }
             }
-            LaunchedEffect(seekTarget) {
+            LaunchedEffect(seekTarget, matchesLayout, requestedExactPage) {
                 val target = seekTarget ?: return@LaunchedEffect
-                if (current.partial && (current.itemRange?.contains(target) == false ||
-                        !paginationContainsLocation(pages, ReaderReturnLocation.Main(target, Int.MAX_VALUE)))
-                ) return@LaunchedEffect
-                val page = ReaderNavigationPolicy.pageIndexForLocation(
-                    pages, ReaderReturnLocation.Main(target, Int.MAX_VALUE),
-                ) ?: 0
-                curlTouch.reset(pagerState.currentPage)
-                livePagePosition.value = page.toFloat()
-                pagerState.scrollToPage(page)
-                onSeekConsumed()
-            }
-            LaunchedEffect(seekCompletion, current.partial) {
-                if (seekCompletion && !current.partial) {
-                    try {
-                        curlTouch.reset(pagerState.currentPage)
-                        pagerState.turnReaderPage(realPageCount, settings.pageTurnAnimation, readerChapterSwitchSpec())
-                        onSeekCompletionConsumed()
-                    } catch (cancelled: CancellationException) {
-                        if (viewModel.pagination.value === current) onSeekCompletionConsumed()
-                        throw cancelled
-                    }
-                }
-            }
-            LaunchedEffect(seekFraction, current.partial) {
-                val fraction = seekFraction ?: return@LaunchedEffect
-                if (!ReaderNavigationPolicy.canConsumeBookFractionSeek(current.partial)) {
+                if (continuousLayout == null && indexedRange != null && ready.items.isNotEmpty() &&
+                    target.coerceIn(ready.items.indices) !in indexedRange
+                ) {
+                    viewModel.requestWindow(target)
                     return@LaunchedEffect
                 }
-                val page = (fraction * (realPageCount - 1)).roundToInt()
-                    .coerceIn(0, realPageCount - 1)
+                if (!matchesLayout || continuousLayout != null && activeContinuousLayout == null) return@LaunchedEffect
+                val location = ReaderReturnLocation.Main(target, Int.MAX_VALUE)
+                if (activeContinuousLayout == null && current.partial && !preparedPagesContainLocation(
+                        pages, location, preparedRange, current.rangeComplete,
+                    )
+                ) {
+                    if (indexedWindow) viewModel.requestWindow(target)
+                    return@LaunchedEffect
+                }
+                val page = if (activeContinuousLayout != null) {
+                    requestedExactPage?.let(current::exactPageOffset) ?: return@LaunchedEffect
+                } else ReaderNavigationPolicy.pageIndexForLocation(pages, location) ?: 0
+                val targetPage = pageWindow.pagerPage(page)
                 curlTouch.reset(pagerState.currentPage)
-                livePagePosition.value = page.toFloat()
-                pagerState.scrollToPage(page)
-                onSeekFractionConsumed()
+                showSeekPosition(page)
+                if (pagerState.currentPage != targetPage) {
+                    pagerState.scrollToPage(targetPage)
+                }
+                displayedIndex.intValue = pages[page].firstItemIndex
+                onSeekConsumed()
             }
-            LaunchedEffect(seekPosition) {
-                val position = seekPosition ?: return@LaunchedEffect
-                val item = position.flatItemIndex
-                if (current.partial) {
-                    // The quick holder contains only nearby chapters.
-                    // Keep a target outside that source range
-                    // pending instead of clamping a cross-chapter link/back to
-                    // the wrong edge; the full holder recreates this effect.
-                    val contains = current.itemRange?.contains(item)
-                        ?: ReaderNavigationPolicy.partialHolderContainsTarget(
-                            chapterStarts = ready.chapterStarts,
-                            itemCount = ready.items.size,
-                            partialFirstItem = pages.firstOrNull()?.firstItemIndex,
-                            targetItem = item,
-                        )
-                    if (!contains || !paginationContainsLocation(pages, position)) {
+            LaunchedEffect(seekCompletion, completeAtBookEnd, matchesLayout, requestedExactPage) {
+                if (!seekCompletion) return@LaunchedEffect
+                if (continuousLayout == null && indexedRange != null && ready.globalCoordinatesReady &&
+                    ready.items.isNotEmpty() && ready.items.lastIndex !in indexedRange
+                ) {
+                    viewModel.requestWindow(ready.items.lastIndex)
+                    return@LaunchedEffect
+                }
+                if (!matchesLayout || continuousLayout != null && activeContinuousLayout == null) return@LaunchedEffect
+                if (!completeAtBookEnd) {
+                    if (indexedWindow && activeContinuousLayout == null) viewModel.requestWindow(ready.items.lastIndex)
+                    return@LaunchedEffect
+                }
+                try {
+                    curlTouch.reset(pagerState.currentPage)
+                    if (pagerState.currentPage != pageWindow.afterPage) {
+                        pagerState.turnReaderPage(pageWindow.afterPage, settings.pageTurnAnimation, readerChapterSwitchSpec())
+                    }
+                    onSeekCompletionConsumed()
+                } catch (cancelled: CancellationException) {
+                    if (viewModel.pagination.value === current) onSeekCompletionConsumed()
+                    throw cancelled
+                }
+            }
+            LaunchedEffect(seekFraction, matchesLayout, requestedExactPage, ready.globalCoordinatesReady) {
+                val fraction = seekFraction ?: return@LaunchedEffect
+                if (continuousLayout == null && indexedRange != null && ready.globalCoordinatesReady &&
+                    ready.items.isNotEmpty()
+                ) {
+                    val target = ReaderNavigationPolicy.progressTargetIndex(fraction, 0, ready.items.lastIndex)
+                    if (target !in indexedRange) {
+                        viewModel.requestWindow(target)
                         return@LaunchedEffect
                     }
                 }
-                val page = ReaderNavigationPolicy.pageIndexForLocation(pages, position)
-                    ?: return@LaunchedEffect
+                if (!matchesLayout || continuousLayout != null && activeContinuousLayout == null) return@LaunchedEffect
+                val page = if (activeContinuousLayout != null) {
+                    requestedExactPage?.let(current::exactPageOffset) ?: return@LaunchedEffect
+                } else if (indexedWindow && ready.globalCoordinatesReady) {
+                    val target = ReaderNavigationPolicy.progressTargetIndex(fraction, 0, ready.items.lastIndex)
+                    val location = ReaderReturnLocation.Main(target)
+                    if (!preparedPagesContainLocation(pages, location, preparedRange, current.rangeComplete)) {
+                        viewModel.requestWindow(target)
+                        return@LaunchedEffect
+                    }
+                    ReaderNavigationPolicy.pageIndexForLocation(pages, location) ?: return@LaunchedEffect
+                } else {
+                    if (!ReaderNavigationPolicy.canConsumeBookFractionSeek(current.partial)) return@LaunchedEffect
+                    ReaderNavigationPolicy.progressTargetIndex(fraction, 0, realPageCount - 1)
+                }
+                val targetPage = pageWindow.pagerPage(page)
                 curlTouch.reset(pagerState.currentPage)
-                if (animateSeekPosition) {
+                showSeekPosition(page)
+                if (pagerState.currentPage != targetPage) {
+                    pagerState.scrollToPage(targetPage)
+                }
+                displayedIndex.intValue = pages[page].firstItemIndex
+                onSeekFractionConsumed()
+            }
+            LaunchedEffect(seekPosition, matchesLayout, requestedExactPage) {
+                val position = seekPosition ?: return@LaunchedEffect
+                val item = position.flatItemIndex
+                if (continuousLayout == null && indexedRange != null && ready.items.isNotEmpty() &&
+                    item.coerceIn(ready.items.indices) !in indexedRange
+                ) {
+                    viewModel.requestWindow(item)
+                    return@LaunchedEffect
+                }
+                if (!matchesLayout || continuousLayout != null && activeContinuousLayout == null) return@LaunchedEffect
+                if (activeContinuousLayout == null && current.partial && !preparedPagesContainLocation(
+                        pages, position, preparedRange, current.rangeComplete,
+                    )
+                ) {
+                    if (indexedWindow) viewModel.requestWindow(item)
+                    return@LaunchedEffect
+                }
+                val page = if (activeContinuousLayout != null) {
+                    requestedExactPage?.let(current::exactPageOffset) ?: return@LaunchedEffect
+                } else ReaderNavigationPolicy.pageIndexForLocation(pages, position) ?: return@LaunchedEffect
+                val targetPage = pageWindow.pagerPage(page)
+                curlTouch.reset(pagerState.currentPage)
+                if (pagerState.currentPage == targetPage) {
+                    showSeekPosition(page)
+                } else if (animateSeekPosition) {
                     try {
-                        pagerState.turnReaderPage(page, settings.pageTurnAnimation, readerChapterSwitchSpec())
+                        pagerState.turnReaderPage(targetPage, settings.pageTurnAnimation, readerChapterSwitchSpec())
                     } catch (cancelled: CancellationException) {
                         onChapterSeekInterrupted(position, viewModel.pagination.value !== current)
                         throw cancelled
                     }
                 } else {
-                    livePagePosition.value = page.toFloat()
-                    pagerState.scrollToPage(page)
+                    showSeekPosition(page)
+                    pagerState.scrollToPage(targetPage)
                 }
+                if (!animateSeekPosition) displayedIndex.intValue = pages[page].firstItemIndex
                 onSeekPositionConsumed(position)
             }
-            LaunchedEffect(pagerState, pageTurnSpec) {
+            LaunchedEffect(pagerState, pageTurnSpec, sourceCoordinatesMatch) {
                 turnEvents.collect { forward ->
+                    if (!sourceCoordinatesMatch) return@collect
                     curlTouch.reset(pagerState.currentPage)
                     val delta = if (forward) 1 else -1
                     pagerState.turnReaderPage(
-                        (pagerState.currentPage + delta)
-                            .coerceIn(0, realPageCount + extraPages - 1),
+                        pageWindow.clampPagerPage(pagerState.currentPage + delta),
                         animation = settings.pageTurnAnimation,
                         animationSpec = pageTurnSpec,
                     )
@@ -2754,8 +3269,11 @@ private fun PagedReader(
                             ready.pageProgression,
                         )
                         pagerState.turnReaderPage(
-                            (pagerState.currentPage + logicalDirection)
-                                .coerceIn(0, (realPageCount - 1).coerceAtLeast(0)),
+                            (pagerState.currentPage + logicalDirection).coerceIn(
+                                if (indexedWindow) 0 else pageWindow.firstContentPage,
+                                if (indexedWindow && !completeAtBookEnd) pageWindow.afterPage
+                                else pageWindow.pagerPage(realPageCount - 1),
+                            ),
                             animation = settings.pageTurnAnimation,
                             animationSpec = selectionTurnSpec,
                         )
@@ -2777,7 +3295,7 @@ private fun PagedReader(
 
             HorizontalPager(
                 state = pagerState,
-                userScrollEnabled = !paperCurl && !noAnimation,
+                userScrollEnabled = sourceCoordinatesMatch && !paperCurl && !noAnimation,
                 beyondViewportPageCount = 1,
                 flingBehavior = when {
                     paperCurl -> PagerDefaults.flingBehavior(
@@ -2797,7 +3315,9 @@ private fun PagedReader(
                 ),
                 modifier = Modifier
                     .fillMaxSize()
-                    .then(if (paperCurl) {
+                    .then(if (!sourceCoordinatesMatch) {
+                        Modifier
+                    } else if (paperCurl) {
                         Modifier
                             .pageCurlGestures(curlTouch, pagerState, ready.pageProgression == PageProgression.RTL)
                             .paperPageSemantics(pagerState, curlTouch, ready.pageProgression == PageProgression.RTL, scope)
@@ -2807,7 +3327,7 @@ private fun PagedReader(
                             .instantPageSemantics(pagerState, ready.pageProgression == PageProgression.RTL)
                     } else Modifier)
                     .readerGestures(
-                        enabled = !completionVisible,
+                        enabled = sourceCoordinatesMatch && !completionVisible,
                         tapGestureKey = pageTurnSpec,
                         onTapLeft = {
                             scope.launch {
@@ -2816,8 +3336,7 @@ private fun PagedReader(
                                     progression = ready.pageProgression,
                                 )
                                 pagerState.turnReaderPage(
-                                    (pagerState.currentPage + delta)
-                                        .coerceIn(0, realPageCount + extraPages - 1),
+                                    pageWindow.clampPagerPage(pagerState.currentPage + delta),
                                     animation = settings.pageTurnAnimation,
                                     animationSpec = pageTurnSpec,
                                 )
@@ -2830,8 +3349,7 @@ private fun PagedReader(
                                     progression = ready.pageProgression,
                                 )
                                 pagerState.turnReaderPage(
-                                    (pagerState.currentPage + delta)
-                                        .coerceIn(0, realPageCount + extraPages - 1),
+                                    pageWindow.clampPagerPage(pagerState.currentPage + delta),
                                     animation = settings.pageTurnAnimation,
                                     animationSpec = pageTurnSpec,
                                 )
@@ -2842,8 +3360,9 @@ private fun PagedReader(
                         brightnessHandlers = brightnessHandlers,
                     ),
             ) { pageIndex ->
+                val contentPageIndex = pageWindow.contentPage(pageIndex)
                 val pageContent: @Composable () -> Unit = {
-                    if (pageIndex < realPageCount) {
+                    if (contentPageIndex != null) {
                         // Both the text and its handles are captured into the
                         // same sheet, including Stack parallax and Curl folds.
                         val highlights = rememberReaderHighlights(
@@ -2854,7 +3373,7 @@ private fun PagedReader(
                         )
                         Box(Modifier.fillMaxSize()) {
                             PageView(
-                                page = pages[pageIndex],
+                                page = pages[contentPageIndex],
                                 settings = renderSettings,
                                 appSettings = appSettings,
                                 colors = colors,
@@ -2865,18 +3384,18 @@ private fun PagedReader(
                                 bookFonts = ready.bookFonts,
                                 language = ready.language,
                                 bookId = ready.book.id,
-                                footnotes = footnotes,
+                                footnotes = footnotes.takeIf { sourceCoordinatesMatch },
                                 searchHighlight = searchHighlight,
                                 highlights = highlights,
                             )
                             SelectionHandles(selection, colors.accent, pageEpoch = highlights.epoch)
-                            if (sheetPages && !recomputing && settings.showPageCounter) {
+                            val counter = if (sheetPages && settings.showPageCounter) counterAt(contentPageIndex) else null
+                            if (counter != null) {
                                 // The footer belongs to this particular sheet,
                                 // so it follows the turn together with the text.
                                 Text(
                                     text = readerPageFooterText(
-                                        pageIndex, chapterLastPage,
-                                        settings.showChapterPagesLeft, settings.showTotalPageCount, realPageCount,
+                                        counter, settings.showChapterPagesLeft, settings.showTotalPageCount,
                                     ),
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.SemiBold,
@@ -2886,7 +3405,7 @@ private fun PagedReader(
                                 )
                             }
                         }
-                    } else if (current.partial) {
+                    } else if (pageIndex < pageWindow.firstContentPage || !completeAtBookEnd) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             ReaderLoadingNextPages(colors)
                         }
@@ -2933,17 +3452,20 @@ private fun PagedReader(
                 }
             }
 
-            val shownPage = pagerState.currentPage
-            val settledPage = pagerState.settledPage
-            val footerText = if (settings.showPageCounter && !recomputing && shownPage < realPageCount) {
-                readerPageFooterText(shownPage, chapterLastPage, settings.showChapterPagesLeft, settings.showTotalPageCount, realPageCount)
+            val shownPage = pageWindow.contentPage(pagerState.currentPage)
+            val settledPage = pageWindow.contentPage(pagerState.settledPage)
+            val counter = if (settings.showPageCounter && shownPage != null) counterAt(shownPage) else null
+            val footerText = if (counter != null) {
+                readerPageFooterText(counter, settings.showChapterPagesLeft, settings.showTotalPageCount)
             } else null
             SideEffect {
                 // Old complete pages and quick chapter pages remain renderable,
                 // but publish counts only for the complete requested layout.
-                pagePosition.value = if (recomputing) null else {
-                    settledPage.coerceAtMost(realPageCount - 1) to realPageCount
-                }
+                renderedPageIndex.value = visiblePageIndex
+                val settledCounter = counterAt(
+                    settledPage ?: if (pagerState.settledPage < pageWindow.firstContentPage) 0 else realPageCount - 1,
+                )
+                pagePosition.value = settledCounter?.let { (it.currentPage - 1) to it.totalPages }
                 pageFooterVisible = !sheetPages && footerText != null
                 if (footerText != null) pageFooterText = footerText
             }
@@ -2967,8 +3489,8 @@ private fun PagedReader(
             )
         }
 
-        // Subtle corner hint while pages are being recomputed for new settings.
-        if (rememberDelayedReaderLoading(recomputing && current.key != paginationKey)) {
+        val calculatingPageCount = visiblePageIndex == null && pageIndexCalculation == (spec.key to layoutEnvironment)
+        if (rememberDelayedReaderLoading(!matchesLayout || calculatingPageCount)) {
             LoadingIndicator(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -2981,18 +3503,16 @@ private fun PagedReader(
 
 @Composable
 private fun readerPageFooterText(
-    pageIndex: Int,
-    chapterLastPage: IntArray,
+    counter: PageCounterInfo,
     showChapterPagesLeft: Boolean,
     showTotalPageCount: Boolean,
-    totalPages: Int,
 ): String {
     if (!showChapterPagesLeft) return if (showTotalPageCount) {
-        stringResource(R.string.reader_page_number_total, pageIndex + 1, totalPages)
+        stringResource(R.string.reader_page_number_total, counter.currentPage, counter.totalPages)
     } else {
-        stringResource(R.string.reader_page_number, pageIndex + 1)
+        stringResource(R.string.reader_page_number, counter.currentPage)
     }
-    val left = chapterLastPage[pageIndex] - pageIndex
+    val left = counter.pagesLeftInChapter
     return if (left == 0) {
         stringResource(R.string.reader_chapter_last_page)
     } else {
@@ -3827,11 +4347,16 @@ internal fun RenderPart(
 
 /** Hides/shows system bars with the chrome and keeps icon contrast correct. */
 @Composable
-private fun SystemBarsEffect(theme: AppTheme, chromeVisible: Boolean) {
+internal fun SystemBarsEffect(
+    theme: AppTheme,
+    chromeVisible: Boolean,
+    restoreTheme: AppTheme = theme,
+    hideStatusBar: Boolean = false,
+) {
     val activity = LocalActivity.current
-    val currentTheme by rememberUpdatedState(theme)
+    val exitTheme by rememberUpdatedState(restoreTheme)
 
-    LaunchedEffect(theme, chromeVisible) {
+    LaunchedEffect(theme, chromeVisible, hideStatusBar) {
         val window = activity?.window ?: return@LaunchedEffect
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         controller.isAppearanceLightStatusBars = !theme.isDark()
@@ -3841,10 +4366,13 @@ private fun SystemBarsEffect(theme: AppTheme, chromeVisible: Boolean) {
         // lasted about three seconds before some system event ended it.
         controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        if (chromeVisible) {
-            controller.show(WindowInsetsCompat.Type.systemBars())
-        } else {
+        if (!chromeVisible) {
             controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else if (hideStatusBar) {
+            controller.hide(WindowInsetsCompat.Type.statusBars())
+            controller.show(WindowInsetsCompat.Type.navigationBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
@@ -3860,8 +4388,8 @@ private fun SystemBarsEffect(theme: AppTheme, chromeVisible: Boolean) {
             // of the library for a tenth of a second after closing a book.
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
             controller.show(WindowInsetsCompat.Type.systemBars())
-            controller.isAppearanceLightStatusBars = !currentTheme.isDark()
-            controller.isAppearanceLightNavigationBars = !currentTheme.isDark()
+            controller.isAppearanceLightStatusBars = !exitTheme.isDark()
+            controller.isAppearanceLightNavigationBars = !exitTheme.isDark()
         }
     }
 }
@@ -4020,6 +4548,8 @@ private fun ReaderBottomBar(
     chapterLabel: String,
     bookFraction: Float,
     modifier: Modifier = Modifier,
+    seekPending: Boolean = false,
+    externalSeekActive: Boolean = false,
     chapterAtFraction: ((Float) -> ReaderChapterPreview)? = null,
     /** Returns true only when the committed value changes the discrete destination. */
     onSeekBook: (Float) -> Boolean,
@@ -4233,10 +4763,13 @@ private fun ReaderBottomBar(
                         bookPageCount = bookPageCount,
                         chapterStops = chapterStops,
                         chapterStartPages = chapterStartPages,
-                        chapterStarts = ready.chapterStarts,
-                        itemCount = ready.items.size,
+                        chapterStarts = ready.chapterStarts.takeIf { ready.epubOpening == null },
+                        itemCount = ready.items.size.takeIf { ready.epubOpening == null },
                         chapterAtFraction = chapterAtFraction,
                         progressValuesReady = progressValuesReady,
+                        approximateProgress = ready.epubOpening != null,
+                        seekPending = seekPending,
+                        externalSeekActive = externalSeekActive,
                         colors = colors,
                         chromeStyle = chromeStyle,
                         contentsSelected = panelOpen && panelContent == BarPanel.CONTENTS,

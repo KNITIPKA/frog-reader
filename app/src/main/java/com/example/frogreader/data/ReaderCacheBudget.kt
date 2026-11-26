@@ -32,7 +32,7 @@ internal class ReaderCacheBudget(
     data class Limits(
         val totalBytes: Long = 128L * 1024 * 1024,
         val contentBytes: Long = 64L * 1024 * 1024,
-        val contentEntryBytes: Long = 8L * 1024 * 1024,
+        val contentEntryBytes: Long = contentBytes,
     ) {
         init {
             require(totalBytes >= 0 && contentBytes >= 0 && contentEntryBytes >= 0)
@@ -249,7 +249,10 @@ internal class ReaderCacheBudget(
             if (child.isDirectory && !Files.isSymbolicLink(child.toPath())) add(child.name, child, content = true)
         }
         children(File(filesDir, "pagination")).forEach { child ->
-            if (child.isFile && !Files.isSymbolicLink(child.toPath())) {
+            if (Files.isSymbolicLink(child.toPath())) return@forEach
+            if (child.isDirectory) {
+                add(child.name, child, content = false)
+            } else if (child.isFile) {
                 val suffix = PAGE_SUFFIXES.firstOrNull { child.name.endsWith(it) } ?: return@forEach
                 val bookId = child.name.removeSuffix(suffix)
                 if (bookId.isNotEmpty()) add(bookId, child, content = false)
@@ -298,7 +301,7 @@ internal class ReaderCacheBudget(
 
     private companion object {
         // Most specific first: otherwise an atomic scratch file is mis-owned.
-        val PAGE_SUFFIXES = listOf(".json.tmp", ".json.bak", ".json")
+        val PAGE_SUFFIXES = listOf(".json.tmp", ".json.bak", ".json", ".rpi.tmp", ".rpi")
 
         fun requireSafeId(bookId: String) {
             require(bookId.isNotEmpty() && bookId != "." && bookId != ".." &&

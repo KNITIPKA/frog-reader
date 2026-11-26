@@ -23,6 +23,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.TextUnitType
 import com.example.frogreader.data.model.INLINE_IMAGE_TAG
+import com.example.frogreader.data.model.INLINE_MATH_TAG
+import com.example.frogreader.data.model.INLINE_RUBY_TAG
 import com.example.frogreader.data.model.INLINE_TEXT_BOX_TAG
 import com.example.frogreader.data.model.completeMathInlineMarks
 import com.example.frogreader.data.model.decodeInlineTextBoxSpec
@@ -32,6 +34,15 @@ private data class ReaderInlineEntry(val start: Int, val end: Int, val id: Strin
 private val readerInlineAnnotationTag = AnnotatedString.Builder().apply {
     appendInlineContent("reader-inline-probe")
 }.toAnnotatedString().getStringAnnotations(0, 1).single().tag
+
+internal fun hasAnyReaderInlineTag(text: AnnotatedString, publisherStyles: Boolean): Boolean {
+    val length = text.length
+    if (length == 0) return false
+    return text.hasStringAnnotations(INLINE_IMAGE_TAG, 0, length) ||
+        text.hasStringAnnotations(INLINE_MATH_TAG, 0, length) ||
+        text.hasStringAnnotations(INLINE_RUBY_TAG, 0, length) ||
+        (publisherStyles && text.hasStringAnnotations(INLINE_TEXT_BOX_TAG, 0, length))
+}
 
 /** A single native contract for measurement, page fragments and drawable text. */
 private fun readerInlineEntries(
@@ -44,29 +55,45 @@ private fun readerInlineEntries(
     publisherStyles: Boolean,
     invertImages: Boolean = false,
 ): List<ReaderInlineEntry> {
+    val length = text.length
+    if (length == 0) return emptyList()
+    val hasImages = text.hasStringAnnotations(INLINE_IMAGE_TAG, 0, length)
+    val hasMath = text.hasStringAnnotations(INLINE_MATH_TAG, 0, length)
+    val hasRuby = text.hasStringAnnotations(INLINE_RUBY_TAG, 0, length)
+    val hasTextBoxes = publisherStyles && text.hasStringAnnotations(INLINE_TEXT_BOX_TAG, 0, length)
+    if (!hasImages && !hasMath && !hasRuby && !hasTextBoxes) return emptyList()
     val entries = ArrayList<ReaderInlineEntry>()
-    val images = inlineImageContent(text, invertImages)
-    for (mark in text.getStringAnnotations(INLINE_IMAGE_TAG, 0, text.length)) {
-        images[mark.item]?.let { entries += ReaderInlineEntry(mark.start, mark.end, mark.item, it) }
+    if (hasImages) {
+        val images = inlineImageContent(text, invertImages)
+        for (mark in text.getStringAnnotations(INLINE_IMAGE_TAG, 0, length)) {
+            images[mark.item]?.let { entries += ReaderInlineEntry(mark.start, mark.end, mark.item, it) }
+        }
     }
-    for (math in mathInlinePlacements(text, style, measurer, density, maxWidthPx)) {
-        entries += ReaderInlineEntry(math.start, math.end, math.id,
-            InlineTextContent(math.placeholder) { math.Content() })
+    if (hasMath) {
+        for (math in mathInlinePlacements(text, style, measurer, density, maxWidthPx)) {
+            entries += ReaderInlineEntry(math.start, math.end, math.id,
+                InlineTextContent(math.placeholder) { math.Content() })
+        }
     }
-    for (ruby in rubyInlineLayouts(text, style, measurer, density, bookFonts.takeIf { publisherStyles }.orEmpty(), publisherStyles)) {
-        entries += ReaderInlineEntry(ruby.start, ruby.end, ruby.id,
-            InlineTextContent(ruby.placeholder) { ruby.Content() })
+    if (hasRuby) {
+        for (ruby in rubyInlineLayouts(text, style, measurer, density, bookFonts.takeIf { publisherStyles }.orEmpty(), publisherStyles)) {
+            entries += ReaderInlineEntry(ruby.start, ruby.end, ruby.id,
+                InlineTextContent(ruby.placeholder) { ruby.Content() })
+        }
     }
-    if (publisherStyles) for (box in inlineTextBoxLayouts(text, style, measurer, density)) {
-        entries += ReaderInlineEntry(box.start, box.end, box.id,
-            InlineTextContent(box.placeholder) { box.Content() })
+    if (hasTextBoxes) {
+        for (box in inlineTextBoxLayouts(text, style, measurer, density)) {
+            entries += ReaderInlineEntry(box.start, box.end, box.id,
+                InlineTextContent(box.placeholder) { box.Content() })
+        }
     }
+    if (entries.isEmpty()) return emptyList()
     // Native placeholders cannot overlap. An unsupported nested composition
     // keeps its outer admitted layout; unadmitted ranges retain source text.
     val admitted = ArrayList<ReaderInlineEntry>(entries.size)
     var end = -1
     for (entry in entries.sortedWith(compareBy<ReaderInlineEntry> { it.start }.thenByDescending { it.end })) {
-        if (entry.start < end || entry.start < 0 || entry.end > text.length || entry.start >= entry.end) continue
+        if (entry.start < end || entry.start < 0 || entry.end > length || entry.start >= entry.end) continue
         admitted += entry.copy(id = "${entry.id}:range:${entry.start}:${entry.end}")
         end = entry.end
     }
@@ -83,6 +110,7 @@ internal fun readerInlinePlaceholders(
     publisherStyles: Boolean = true,
 ): List<AnnotatedString.Range<Placeholder>> {
     val typography = readerTypographyPlan(text, style, density, publisherStyles, bookFonts)
+    if (!hasAnyReaderInlineTag(typography.text, publisherStyles)) return emptyList()
     return readerInlineEntries(typography.text, typography.style, measurer, density, bookFonts, maxWidthPx, publisherStyles)
         .map { AnnotatedString.Range(it.content.placeholder, it.start, it.end) }
 }
@@ -100,8 +128,14 @@ internal fun TextMeasurer.measureReader(
     publisherStyles: Boolean = true,
 ): TextLayoutResult {
     val typography = readerTypographyPlan(text, style, density, publisherStyles, bookFonts)
+    if (!hasAnyReaderInlineTag(typography.text, publisherStyles)) {
+        return measure(typography.text, typography.style, overflow, softWrap, maxLines, constraints = constraints)
+    }
     val entries = readerInlineEntries(typography.text, typography.style, this, density, bookFonts,
         constraints.maxWidth.takeIf { it != Constraints.Infinity }, publisherStyles)
+    if (entries.isEmpty()) {
+        return measure(typography.text, typography.style, overflow, softWrap, maxLines, constraints = constraints)
+    }
     val ranges = entries.map { it.start to it.end }
     val layoutStyle = readerInlineLayoutStyle(typography.style,
         entries.map { it.content.placeholder }, density, entries.any { it.end - it.start > 1 })
@@ -167,7 +201,13 @@ private fun readerInlineTextPlan(
     val density = LocalDensity.current
     return remember(text, style, measurer, density, bookFonts, maxWidthPx, publisherStyles, invertImages) {
         val typography = readerTypographyPlan(text, style, density, publisherStyles, bookFonts)
+        if (!hasAnyReaderInlineTag(typography.text, publisherStyles)) {
+            return@remember ReaderInlineTextPlan(typography.text, typography.style, emptyMap())
+        }
         val entries = readerInlineEntries(typography.text, typography.style, measurer, density, bookFonts, maxWidthPx, publisherStyles, invertImages)
+        if (entries.isEmpty()) {
+            return@remember ReaderInlineTextPlan(typography.text, typography.style, emptyMap())
+        }
         val layoutStyle = readerInlineLayoutStyle(typography.style, entries.map { it.content.placeholder }, density,
             entries.any { it.end - it.start > 1 })
         ReaderInlineTextPlan(readerInlineLayoutText(typography.text, entries.map { it.start to it.end },
@@ -247,11 +287,18 @@ internal fun readerInlineLayoutText(text: AnnotatedString, ranges: List<Pair<Int
 
 /** Retreat an otherwise legal word break out of an atomic authored inline run. */
 internal fun readerAtomicRanges(text: AnnotatedString): List<Pair<Int, Int>> {
+    val length = text.length
+    if (length == 0) return emptyList()
+    val hasImages = text.hasStringAnnotations(INLINE_IMAGE_TAG, 0, length)
+    val hasMath = text.hasStringAnnotations(INLINE_MATH_TAG, 0, length)
+    val hasRuby = text.hasStringAnnotations(INLINE_RUBY_TAG, 0, length)
+    val hasTextBoxes = text.hasStringAnnotations(INLINE_TEXT_BOX_TAG, 0, length)
+    if (!hasImages && !hasMath && !hasRuby && !hasTextBoxes) return emptyList()
     val marks = ArrayList<Pair<Int, Int>>()
-    text.getStringAnnotations(INLINE_IMAGE_TAG, 0, text.length).forEach { marks += it.start to it.end }
-    completeMathInlineMarks(text).forEach { marks += it.start to it.end }
-    rubyInlineSourceRanges(text).forEach { marks += it.start to it.end }
-    text.getStringAnnotations(INLINE_TEXT_BOX_TAG, 0, text.length).forEach { mark ->
+    if (hasImages) text.getStringAnnotations(INLINE_IMAGE_TAG, 0, length).forEach { marks += it.start to it.end }
+    if (hasMath) completeMathInlineMarks(text).forEach { marks += it.start to it.end }
+    if (hasRuby) rubyInlineSourceRanges(text).forEach { marks += it.start to it.end }
+    if (hasTextBoxes) text.getStringAnnotations(INLINE_TEXT_BOX_TAG, 0, length).forEach { mark ->
         val box = decodeInlineTextBoxSpec(mark.item)
         if (box != null && mark.end - mark.start == box.sourceLength) marks += mark.start to mark.end
     }
@@ -259,12 +306,14 @@ internal fun readerAtomicRanges(text: AnnotatedString): List<Pair<Int, Int>> {
 }
 
 internal fun readerAtomicBreakOffset(text: AnnotatedString, candidate: Int, start: Int = 0): Int {
+    val offset = candidate.coerceIn(start, text.length)
     val marks = readerAtomicRanges(text)
-    var offset = candidate.coerceIn(start, text.length)
+    if (marks.isEmpty()) return offset
+    var adjusted = offset
     for ((first, last) in marks.sortedByDescending { it.second - it.first }) {
-        if (offset > first && offset < last) offset = if (first > start) first else last
+        if (adjusted > first && adjusted < last) adjusted = if (first > start) first else last
     }
-    return offset
+    return adjusted
 }
 
 /** Whitespace inside an inline object does not create a column break opportunity. */

@@ -28,6 +28,7 @@ object BookParsers {
      * and rejects anything that is not a book, with a message saying so.
      */
     val SUPPORTED_MIME_TYPES = arrayOf(
+        "application/pdf",
         "application/epub+zip",
         "application/x-fictionbook+xml",
         "application/x-fictionbook",
@@ -68,13 +69,21 @@ object BookParsers {
         mimeType: String? = null,
     ): Pair<BookFormat, File> {
         targetDir.mkdirs()
+        val header = source.inputStream().use { readPrefix(it, 68) }
+        // PDF contents are opened only by isolated PDF workers. A bounded
+        // signature check is enough to route the file without touching its object
+        // graph, embedded streams or images in the app process. The loader will
+        // report damaged, encrypted and unsupported documents when opened.
+        if (isPdfHeader(header)) {
+            val target = File(targetDir, "$id.pdf")
+            moveFile(source, target)
+            return BookFormat.PDF to target
+        }
         // Text can legitimately start with "PK" or contain an XML example.
         // An explicit text extension takes precedence over container heuristics.
         TextBookParser.inferFormat(originalName, null)?.let { format ->
             return storeText(source, targetDir, id, format, limits)
         }
-        val header = source.inputStream().use { readPrefix(it, 68) }
-
         // Mobipocket/Kindle PDB container (.mobi/.azw/.azw3/.prc).
         if (PdbFile.isPdbBook(header)) {
             val target = File(targetDir, "$id.mobi")
@@ -139,6 +148,14 @@ object BookParsers {
         BookFormat.FB2 -> Fb2Parser.parseMetadata(streamOf(file))
         BookFormat.MOBI -> MobiParser.parseMetadata(file)
         BookFormat.TXT, BookFormat.MD -> TextBookParser.parseMetadata(file, format)
+        // Synchronous callers get a validated fallback. BookRepository augments it
+        // with metadata and first-page art from the isolated worker during staging.
+        BookFormat.PDF -> {
+            if (!file.inputStream().use { isPdfHeader(readPrefix(it, 9)) }) {
+                throw IOException("This file does not have a PDF header")
+            }
+            BookMetadata(title = null, author = null, coverBytes = null)
+        }
     }
 
     fun parseContent(file: File, format: BookFormat, imagesDir: File): BookContent = when (format) {
@@ -146,7 +163,16 @@ object BookParsers {
         BookFormat.FB2 -> Fb2Parser.parseContent(streamOf(file), imagesDir)
         BookFormat.MOBI -> MobiParser.parseContent(file, imagesDir)
         BookFormat.TXT, BookFormat.MD -> TextBookParser.parseContent(file, format)
+        BookFormat.PDF -> throw IOException("PDF documents use the native PDF reader")
     }
+
+    /** Recognizes a PDF header; document validity belongs to the sandboxed loader. */
+    internal fun isPdfHeader(header: ByteArray): Boolean = header.size >= 9 &&
+        header[0] == '%'.code.toByte() && header[1] == 'P'.code.toByte() &&
+        header[2] == 'D'.code.toByte() && header[3] == 'F'.code.toByte() &&
+        header[4] == '-'.code.toByte() && header[5] in '0'.code.toByte()..'9'.code.toByte() &&
+        header[6] == '.'.code.toByte() && header[7] in '0'.code.toByte()..'9'.code.toByte() &&
+        (header[8] == '\r'.code.toByte() || header[8] == '\n'.code.toByte())
 
     private fun storeText(
         source: File,

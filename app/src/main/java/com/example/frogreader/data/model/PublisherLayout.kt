@@ -33,6 +33,7 @@ data class PublisherBorderSide(
  * element-relative `em`/`ch`/`ex` against the element's computed font size.
  */
 @Serializable
+@InternedFrbStyle
 data class PublisherBoxStyle(
     val marginTopEm: Float = 0f,
     val marginRightEm: Float = 0f,

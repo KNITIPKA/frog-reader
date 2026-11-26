@@ -4,9 +4,7 @@ import com.example.frogreader.data.model.Chapter
 import com.example.frogreader.data.model.ContentElement
 import com.example.frogreader.data.model.NoteDocument
 import com.example.frogreader.data.model.slicePublisherBoxSpans
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
-import org.jsoup.parser.Parser
 
 /**
  * Helpers shared by the HTML-based parsers (EPUB, MOBI6, KF8). Moved
@@ -30,27 +28,10 @@ internal fun looksLikeFont(bytes: ByteArray): Boolean {
  * Parses a chapter document. XHTML must be parsed with the XML parser
  * first: real books often use self-closed tags like `<title/>`, which the
  * lenient HTML parser treats as an unterminated rawtext element that
- * swallows the whole file. The HTML parser remains a fallback for
- * genuinely malformed files.
+ * swallows the whole file. The Rust parser selects HTML recovery when the
+ * XML tree has no usable body or DTBook reading root.
  */
-internal fun parseChapterDocument(bytes: ByteArray): Document? {
-    val xmlDoc = runCatching {
-        Jsoup.parse(bytes.inputStream(), null, "", Parser.xmlParser())
-    }.getOrNull()
-    // EPUB 2 also permits DAISY DTBook documents, whose reading root is
-    // `<book>` rather than XHTML `<body>`. Keep those in XML mode: reparsing
-    // them as tag-soup HTML loses DTBook hierarchy and namespace semantics.
-    val xmlReadingRoot = xmlDoc?.selectFirst("body, book")
-    if (xmlReadingRoot != null &&
-        (xmlReadingRoot.text().isNotBlank() || xmlReadingRoot.children().isNotEmpty())
-    ) {
-        return xmlDoc
-    }
-
-    return runCatching {
-        Jsoup.parse(bytes.inputStream(), null, "")
-    }.getOrNull() ?: xmlDoc
-}
+internal fun parseChapterDocument(bytes: ByteArray): Document? = RustChapterMarkup.parse(bytes)
 
 /**
  * Extracts every referenced anchor into a complete rich note document.

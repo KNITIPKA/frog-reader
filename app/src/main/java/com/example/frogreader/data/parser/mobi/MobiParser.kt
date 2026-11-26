@@ -14,6 +14,7 @@ import com.example.frogreader.data.parser.LanguageTag
 import com.example.frogreader.data.parser.ReaderResourceLimits
 import com.example.frogreader.data.parser.ResourceLimitException
 import com.example.frogreader.data.parser.ResourceLimitKind
+import com.example.frogreader.data.parser.RustChapterMarkup
 import com.example.frogreader.data.parser.Woff2Decoder
 import com.example.frogreader.data.parser.WoffDecoder
 import com.example.frogreader.data.parser.buildNotes
@@ -275,7 +276,8 @@ object MobiParser {
 
         for (chunk in chunks) {
             val html = decodeText(chunk.bytes, mobi.charset)
-            val document = Jsoup.parse(html)
+            val document = RustChapterMarkup.parse(html.encodeToByteArray(), htmlOnly = true)
+                ?: throw IOException("Unable to parse MOBI6 chapter at ${chunk.startPos}")
             rewriteMobiDom(document)
 
             val mapper = HtmlMapper(
@@ -291,7 +293,6 @@ object MobiParser {
             mapper.noteDocuments.forEach { (id, note) ->
                 exactNoteDocuments.putIfAbsent("#$id", note)
             }
-            resolver.clearCache()
             if (elements.isEmpty()) continue
 
             val ncxEntry = ncx[chunk.startPos]
@@ -546,7 +547,6 @@ object MobiParser {
             mapper.noteDocuments.forEach { (id, note) ->
                 exactNoteDocuments.putIfAbsent("#$id", note)
             }
-            resolver?.clearCache()
             if (elements.isEmpty()) continue
 
             val chapterIndex = chapters.size

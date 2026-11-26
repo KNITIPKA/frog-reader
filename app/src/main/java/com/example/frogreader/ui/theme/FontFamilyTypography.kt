@@ -12,6 +12,10 @@ import com.example.frogreader.data.model.FontTypography
 import java.io.File
 import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 import kotlin.math.ceil
 import kotlin.math.floor
 
@@ -56,41 +60,56 @@ private class FamilyReference(family: FontFamily, queue: ReferenceQueue<FontFami
     WeakReference<FontFamily>(family, queue) {
     private val identityHash = System.identityHashCode(family)
     override fun hashCode(): Int = identityHash
-    override fun equals(other: Any?): Boolean = this === other ||
-        other is FamilyReference && get() != null && get() === other.get()
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is FamilyReference) return false
+        val referent = get()
+        return referent != null && referent === other.get()
+    }
 }
 
 private class TypographyRegistry {
+    private val lock = ReentrantReadWriteLock()
     private val queue = ReferenceQueue<FontFamily>()
     private val families = HashMap<FamilyReference, RegisteredTypography>()
-    private fun collect() {
+
+    private fun collectLocked() {
         while (true) families.remove(queue.poll() as? FamilyReference ?: return)
     }
-    operator fun get(family: FontFamily): RegisteredTypography? {
-        collect()
-        return families[FamilyReference(family)]
+
+    operator fun get(family: FontFamily): RegisteredTypography? = lock.read {
+        families[FamilyReference(family)]
     }
-    operator fun set(family: FontFamily, registered: RegisteredTypography) {
-        collect()
+
+    operator fun set(family: FontFamily, registered: RegisteredTypography) = lock.write {
+        collectLocked()
         families[FamilyReference(family, queue)] = registered
     }
-    fun removeFiles(paths: List<String>) {
-        collect()
-        families.entries.removeAll { (_, registered) -> (registered.plan.faces + registered.plan.sourcePlan?.faces.orEmpty()).any { it.path in paths } }
+
+    fun removeFiles(paths: List<String>) = lock.write {
+        collectLocked()
+        families.entries.removeAll { (_, registered) ->
+            (registered.plan.faces + registered.plan.sourcePlan?.faces.orEmpty()).any { it.path in paths }
+        }
     }
 }
+
+private const val MAX_TYPOGRAPHY_FAMILIES = 48
+private const val MAX_FALLBACK_FACES = 128
+private val NULL_FALLBACK_SENTINEL = Any()
 
 // Identity matters: optical auto and none can produce equal descriptors at 12 sp,
 // yet must resolve differently after a nested font-size change.
 private val typographyRegistry = TypographyRegistry()
-private val typographyFamilies = object : LinkedHashMap<TypographyCacheKey, FontFamily>(16, .75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<TypographyCacheKey, FontFamily>?): Boolean = size > 48
-}
+private val typographyFamilies = ConcurrentHashMap<TypographyCacheKey, FontFamily>()
+private val typographyFamiliesWriteLock = Any()
+private val typographyFamiliesOrder = ArrayDeque<TypographyCacheKey>(MAX_TYPOGRAPHY_FAMILIES + 1)
+
 private data class FallbackCacheKey(val plan: TypographyFamilyPlan, val request: FontTypography,
     val size: Float, val weight: Int, val italic: Boolean)
-private val fallbackFaces = object : LinkedHashMap<FallbackCacheKey, FileFontFallback?>(16, .75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<FallbackCacheKey, FileFontFallback?>?): Boolean = size > 128
-}
+private val fallbackFaces = ConcurrentHashMap<FallbackCacheKey, Any>()
+private val fallbackFacesWriteLock = Any()
+private val fallbackFacesOrder = ArrayDeque<FallbackCacheKey>(MAX_FALLBACK_FACES + 1)
 
 internal fun registerFontTypography(
     family: FontFamily,
@@ -99,48 +118,67 @@ internal fun registerFontTypography(
     request: FontTypography = FontTypography(),
     sourcePlan: TypographyFamilyPlan? = null,
 ): FontFamily {
-    synchronized(typographyRegistry) {
-        typographyRegistry[family] = RegisteredTypography(TypographyFamilyPlan(faces, defaultStretch, sourcePlan), request)
-    }
+    typographyRegistry[family] = RegisteredTypography(TypographyFamilyPlan(faces, defaultStretch, sourcePlan), request)
     return family
 }
 
-internal fun sourceFontTypography(family: FontFamily): RegisteredTypography? = synchronized(typographyRegistry) {
+internal fun sourceFontTypography(family: FontFamily): RegisteredTypography? =
     typographyRegistry[family]?.let { registered ->
         registered.plan.sourcePlan?.let { RegisteredTypography(it, registered.request) } ?: registered
     }
-}
 
 internal fun forgetFontTypographyFiles(paths: List<String>) {
     forgetFontFaceResolutionFiles(paths)
-    synchronized(fallbackFaces) { fallbackFaces.keys.removeAll { key -> key.plan.faces.any { it.path in paths } } }
-    synchronized(typographyFamilies) {
-        typographyFamilies.keys.removeAll { key -> key.plan.faces.any { it.path in paths } }
+    synchronized(fallbackFacesWriteLock) {
+        val iter = fallbackFacesOrder.iterator()
+        while (iter.hasNext()) {
+            val key = iter.next()
+            if (key.plan.faces.any { it.path in paths }) {
+                fallbackFaces.remove(key)
+                iter.remove()
+            }
+        }
     }
-    synchronized(typographyRegistry) {
-        typographyRegistry.removeFiles(paths)
+    synchronized(typographyFamiliesWriteLock) {
+        val iter = typographyFamiliesOrder.iterator()
+        while (iter.hasNext()) {
+            val key = iter.next()
+            if (key.plan.faces.any { it.path in paths }) {
+                typographyFamilies.remove(key)
+                iter.remove()
+            }
+        }
     }
+    typographyRegistry.removeFiles(paths)
 }
 
 /** The inherited request survives font-family and font-size changes in nested inline spans. */
-fun fontTypographyRequest(family: FontFamily): FontTypography? = synchronized(typographyRegistry) {
+fun fontTypographyRequest(family: FontFamily): FontTypography? =
     typographyRegistry[family]?.request
-}
 
 internal data class FileFontFallback(val path: String, val category: String, val weight: Int, val italic: Boolean)
 
 /** Match the same logical face as Compose, then retain its physical manual/variable style. */
 internal fun fileFontFallback(family: FontFamily, fontSizeSp: Float, weight: Int, italic: Boolean): FileFontFallback? {
-    val registered = synchronized(typographyRegistry) { typographyRegistry[family] } ?: return null
+    val registered = typographyRegistry[family] ?: return null
     if (!registered.plan.hasFiles) return null
     val key = FallbackCacheKey(registered.plan, registered.request, fontSizeSp, weight, italic)
-    synchronized(fallbackFaces) {
-        if (fallbackFaces.containsKey(key)) return fallbackFaces[key]
+    fallbackFaces[key]?.let { cached ->
+        return if (cached === NULL_FALLBACK_SENTINEL) null else cached as FileFontFallback
+    }
+    synchronized(fallbackFacesWriteLock) {
+        fallbackFaces[key]?.let { cached ->
+            return if (cached === NULL_FALLBACK_SENTINEL) null else cached as FileFontFallback
+        }
         val candidates = matchFontStretch(registered.plan.faces,
             registered.request.stretchPercent ?: registered.plan.defaultStretch)
         val face = matchingTypographyFace(candidates, weight, italic) ?: return null
         val result = fileFontFallbackForFace(face, fontSizeSp, registered.request, weight, italic) ?: return null
+        while (fallbackFacesOrder.size >= MAX_FALLBACK_FACES) {
+            fallbackFaces.remove(fallbackFacesOrder.removeFirst())
+        }
         fallbackFaces[key] = result
+        fallbackFacesOrder.addLast(key)
         return result
     }
 }
@@ -173,7 +211,7 @@ internal fun matchingTypographyFace(faces: List<TypographyFontFace>, weight: Int
 }
 
 fun fontTypographyCapabilities(family: FontFamily): FontTypographyCapabilities {
-    val faces = synchronized(typographyRegistry) { typographyRegistry[family]?.plan?.faces }.orEmpty()
+    val faces = typographyRegistry[family]?.plan?.faces.orEmpty()
     val widths = faces.mapNotNull { it.ranges["wdth"] }
     return FontTypographyCapabilities(
         opticalSizing = faces.any { "opsz" in it.ranges },
@@ -194,24 +232,42 @@ fun resolveFontTypography(
     typography: FontTypography? = null,
 ): FontFamily {
     val registered = sourceFontTypography(family) ?: return family
+    return resolveRegisteredFontTypography(family, registered, fontSizeSp, typography)
+}
+
+internal fun resolveRegisteredFontTypography(
+    family: FontFamily,
+    registered: RegisteredTypography,
+    fontSizeSp: Float,
+    typography: FontTypography? = null,
+): FontFamily {
     val inherited = registered.request
-    val request = FontTypography(
-        variationAxes = typography?.variationAxes?.let(::normalizedFontAxes) ?: inherited.variationAxes,
-        stretchPercent = typography?.stretchPercent?.takeIf { it.isFinite() && it > 0f } ?: inherited.stretchPercent,
-        opticalSizing = typography?.opticalSizing ?: inherited.opticalSizing,
+    val request = if (typography == null) inherited else FontTypography(
+        variationAxes = typography.variationAxes?.let(::normalizedFontAxes) ?: inherited.variationAxes,
+        stretchPercent = typography.stretchPercent?.takeIf { it.isFinite() && it > 0f } ?: inherited.stretchPercent,
+        opticalSizing = typography.opticalSizing ?: inherited.opticalSizing,
     )
     val size = fontSizeSp.takeIf { it.isFinite() && it > 0f } ?: 12f
     // Size has no effect when every optical axis is fixed or disabled.
-    val sizeKey = if (registered.plan.faces.any {
-        "opsz" in it.ranges && request.variationAxes?.containsKey("opsz") != true &&
-            request.opticalSizing != false && (!it.preserveOpticalSize || request.opticalSizing == true)
-    }) size else 0f
+    val faces = registered.plan.faces
+    var opticalSizeSensitive = false
+    if (request.opticalSizing != false && request.variationAxes?.containsKey("opsz") != true) {
+        for (i in faces.indices) {
+            val face = faces[i]
+            if ("opsz" in face.ranges && (!face.preserveOpticalSize || request.opticalSizing == true)) {
+                opticalSizeSensitive = true
+                break
+            }
+        }
+    }
+    val sizeKey = if (opticalSizeSensitive) size else 0f
     val key = TypographyCacheKey(registered.plan, sizeKey, request)
-    synchronized(typographyFamilies) {
+    typographyFamilies[key]?.let { return it }
+    synchronized(typographyFamiliesWriteLock) {
         typographyFamilies[key]?.let { return it }
-        val faces = matchFontStretch(registered.plan.faces, request.stretchPercent ?: registered.plan.defaultStretch)
+        val matchedFaces = matchFontStretch(faces, request.stretchPercent ?: registered.plan.defaultStretch)
         val axisRequest = request.copy(stretchPercent = request.stretchPercent ?: registered.plan.defaultStretch)
-        val fonts = faces.mapNotNull { face ->
+        val fonts = matchedFaces.mapNotNull { face ->
             val axes = resolvedFontAxes(face, size, axisRequest)
             if (face.resource != null) {
                 Font(face.resource, FontWeight(face.weight), if (face.italic) FontStyle.Italic else FontStyle.Normal,
@@ -226,8 +282,12 @@ fun resolveFontTypography(
         }
         if (fonts.isEmpty()) return family
         val resolved = FontFamily(fonts)
-        synchronized(typographyRegistry) { typographyRegistry[resolved] = RegisteredTypography(registered.plan, request) }
+        typographyRegistry[resolved] = RegisteredTypography(registered.plan, request)
+        while (typographyFamiliesOrder.size >= MAX_TYPOGRAPHY_FAMILIES) {
+            typographyFamilies.remove(typographyFamiliesOrder.removeFirst())
+        }
         typographyFamilies[key] = resolved
+        typographyFamiliesOrder.addLast(key)
         return resolved
     }
 }

@@ -11,6 +11,8 @@ class HtmlExpansionBudget(
     private val maxGeneratedTotalChars: Long = DEFAULT_MAX_GENERATED_TOTAL_CHARS,
 ) {
     private var generatedChars: Long = 0
+    internal var wasAggregateLimited: Boolean = false
+        private set
 
     init {
         require(maxGeneratedRunChars > 0)
@@ -21,7 +23,10 @@ class HtmlExpansionBudget(
     internal fun acceptGenerated(charCount: Int): Boolean {
         if (charCount <= 0 || charCount > maxGeneratedRunChars) return false
         val count = charCount.toLong()
-        if (generatedChars > maxGeneratedTotalChars - count) return false
+        if (generatedChars > maxGeneratedTotalChars - count) {
+            wasAggregateLimited = true
+            return false
+        }
         generatedChars += count
         return true
     }

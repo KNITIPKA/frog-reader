@@ -7,11 +7,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.frogreader.FrogReaderApp
 import com.example.frogreader.data.AppSettings
 import com.example.frogreader.data.effectiveTheme
+import com.example.frogreader.ui.reader.LocalReaderPageWorkerCount
 import com.example.frogreader.ui.reader.ReaderScreen
 import com.example.frogreader.ui.theme.FrogReaderTheme
 
@@ -38,12 +40,16 @@ class ReaderOpeningTestActivity : ComponentActivity() {
                 theme = settings.effectiveTheme(isSystemInDarkTheme()),
                 dynamicColor = settings.dynamicColor,
             ) {
-                ReaderScreen(bookId = bookId, onBack = ::finish)
+                val pageWorkers = intent.getIntExtra(EXTRA_PAGE_WORKERS, LocalReaderPageWorkerCount.current)
+                CompositionLocalProvider(LocalReaderPageWorkerCount provides pageWorkers) {
+                    ReaderScreen(bookId = bookId, onBack = ::finish)
+                }
             }
         }
     }
 
     companion object {
         const val EXTRA_BOOK_ID = "reader_test_book_id"
+        const val EXTRA_PAGE_WORKERS = "reader_test_page_workers"
     }
 }

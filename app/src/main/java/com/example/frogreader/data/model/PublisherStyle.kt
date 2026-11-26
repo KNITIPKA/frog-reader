@@ -1,5 +1,7 @@
 package com.example.frogreader.data.model
 
+import kotlinx.serialization.Serializable
+
 /**
  * What the book itself asks for, summarized across its whole text.
  *
@@ -9,6 +11,7 @@ package com.example.frogreader.data.model
  * dominant choice; a null field means the book never says anything about
  * that property and the reader's setting keeps ruling it.
  */
+@Serializable
 class PublisherStyle(
     /** true = the book sets its body text justified, false = ragged edge. */
     val justify: Boolean? = null,
@@ -40,6 +43,7 @@ class PublisherStyle(
 }
 
 /** One typeface shipped inside the book: its name and its extracted file. */
+@Serializable
 class EmbeddedFont(val name: String, val path: String)
 
 /** The book's dominant typography, or null when it dictates nothing. */

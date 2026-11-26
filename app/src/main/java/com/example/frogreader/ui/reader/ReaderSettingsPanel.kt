@@ -68,7 +68,7 @@ fun ReaderSettingsPanel(
 }
 
 @Composable
-private fun ReaderSettingsScrollbar(
+internal fun ReaderSettingsScrollbar(
     scrollState: ScrollState,
     colors: ReaderColors,
     modifier: Modifier = Modifier,

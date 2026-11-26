@@ -303,7 +303,7 @@ private fun ContentsTab(
             .clip(RoundedCornerShape(20.dp))
             .background(scheme.surfaceContainerLow),
     ) {
-        if (!ready.contentComplete) Row(
+        if (!ready.globalCoordinatesReady) Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -376,6 +376,7 @@ private fun ContentsTab(
                     }
                     val page = (entry.target as? ReaderNavigationTarget.ReadingOrder)
                         ?.chapterIndex?.let { chapterStartPages?.getOrNull(it) }
+                        ?.takeIf { it >= 0 }
                     if (page != null) {
                         Spacer(Modifier.width(12.dp))
                         Text(
@@ -1313,21 +1314,32 @@ fun ReaderSettingsControls(
 
         Spacer(Modifier.height(20.dp))
 
-        PanelSectionLabel(stringResource(R.string.settings_reader_chrome_title), colors)
-        ChipRow(
-            options = listOf(
-                stringResource(R.string.reader_chrome_floating),
-                stringResource(R.string.reader_chrome_classic),
-            ),
-            selectedIndex = ReaderChromeStyle.entries.indexOf(appSettings.readerChromeStyle),
+        ReaderChromeStyleSetting(
+            style = appSettings.readerChromeStyle,
             colors = colors,
-            onSelect = { index ->
-                onUpdateApp { it.copy(readerChromeStyle = ReaderChromeStyle.entries[index]) }
-            },
+            onSelect = { style -> onUpdateApp { it.copy(readerChromeStyle = style) } },
         )
 
         Spacer(Modifier.height(24.dp))
     }
+}
+
+@Composable
+internal fun ReaderChromeStyleSetting(
+    style: ReaderChromeStyle,
+    colors: ReaderColors,
+    onSelect: (ReaderChromeStyle) -> Unit,
+) {
+    PanelSectionLabel(stringResource(R.string.settings_reader_chrome_title), colors)
+    ChipRow(
+        options = listOf(
+            stringResource(R.string.reader_chrome_floating),
+            stringResource(R.string.reader_chrome_classic),
+        ),
+        selectedIndex = ReaderChromeStyle.entries.indexOf(style),
+        colors = colors,
+        onSelect = { index -> onSelect(ReaderChromeStyle.entries[index]) },
+    )
 }
 
 /** Preview the real regular face without adding selection weight to the typeface. */
@@ -1463,7 +1475,7 @@ private fun StepperGroup(
 
 /** Pill of equal chips; the selected one fills with the accent color. */
 @Composable
-private fun ChipRow(
+internal fun ChipRow(
     options: List<String>,
     selectedIndex: Int,
     colors: ReaderColors,
@@ -1537,7 +1549,7 @@ internal fun brightnessFromPosition(position: Float): Float =
 
 /** Full-width slider with the reader's pill thumb; reports values in 0..1. */
 @Composable
-private fun SettingSlider(
+internal fun SettingSlider(
     value: Float,
     onChange: (Float) -> Unit,
     colors: ReaderColors,
@@ -1589,7 +1601,7 @@ private fun SettingSlider(
 }
 
 @Composable
-private fun PanelSectionLabel(
+internal fun PanelSectionLabel(
     text: String,
     colors: ReaderColors,
     icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
@@ -1617,7 +1629,7 @@ private fun PanelSectionLabel(
 }
 
 @Composable
-private fun SettingsGroup(colors: ReaderColors, content: @Composable () -> Unit) {
+internal fun SettingsGroup(colors: ReaderColors, content: @Composable () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1629,7 +1641,7 @@ private fun SettingsGroup(colors: ReaderColors, content: @Composable () -> Unit)
 }
 
 @Composable
-private fun PanelDivider(colors: ReaderColors) {
+internal fun PanelDivider(colors: ReaderColors) {
     HorizontalDivider(
         color = colors.controlStrong,
         modifier = Modifier.padding(start = 54.dp),
@@ -1637,7 +1649,7 @@ private fun PanelDivider(colors: ReaderColors) {
 }
 
 @Composable
-private fun SettingToggleRow(
+internal fun SettingToggleRow(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     colors: ReaderColors,
@@ -1651,6 +1663,7 @@ private fun SettingToggleRow(
      * simply steps out of publisher's formatting.
      */
     fromBook: Boolean = false,
+    switchModifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
     val lockedNote = stringResource(R.string.reader_set_by_book)
@@ -1683,6 +1696,7 @@ private fun SettingToggleRow(
         Switch(
             checked = checked,
             enabled = enabled,
+            modifier = switchModifier,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = colors.onAccent,
                 checkedTrackColor = colors.accent,

@@ -33,19 +33,21 @@ class FrogReaderApp : Application(), SingletonImageLoader.Factory {
     @OptIn(ExperimentalFoundationApi::class)
     override fun onCreate() {
         super.onCreate()
+        // AndroidX PDF and the compatibility text parser run in isolated processes. Their
+        // Application must not initialize app-private libraries, preferences, or backup work.
+        if (getProcessName() != packageName) return
         // Compose 1.12 enables a new selection context menu that ignores
         // LocalTextToolbar, which hides the reader's "Add quote" action.
         // Keep the legacy toolbar until the new menu exposes the selection
         // to custom items (b/455589857).
         ComposeFoundationFlags.isNewContextMenuEnabled = false
 
-        // Read library.json off the main thread, now, in parallel with
-        // DataStore and Compose starting up. The flows behind it are backed by
-        // a synchronized `lazy`, so whoever asks first pays for the read — and
-        // that used to be the library screen's first composition, on the main
-        // thread, blocking the frame it was trying to draw.
+        // Warm SQLite off the main thread in parallel with DataStore and Compose startup.
         CoroutineScope(Dispatchers.IO).launch {
-            runCatching { bookRepository.books.value }
+            runCatching {
+                bookRepository.books.value
+                statsRepository.stats.value
+            }
         }
     }
 
@@ -64,6 +66,7 @@ class FrogReaderApp : Application(), SingletonImageLoader.Factory {
      */
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
+        if (getProcessName() != packageName) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return
         trimLegacyContentCache(level)
     }

@@ -10,7 +10,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.frogreader.data.ReaderFont
 import com.example.frogreader.data.ReaderSettings
-import com.example.frogreader.data.ParsedContentCache
+import com.example.frogreader.data.ChunkedContentCache
 import com.example.frogreader.data.openingContentSnapshot
 import com.example.frogreader.data.model.BookContent
 import com.example.frogreader.data.model.Chapter
@@ -121,7 +121,7 @@ class LargeBookOpeningTest {
             val original = EpubParser.parseContent(source, File(root, "images"),
                 ReaderResourceLimits.DEFAULT, onPreview = { prefix = it })
             val parsed = System.nanoTime()
-            val cache = ParsedContentCache(File(root, "reader-content"))
+            val cache = ChunkedContentCache(File(root, "reader-content"))
             assertTrue(cache.save("ordinary", source, openingContentSnapshot(checkNotNull(prefix), 0), complete = false))
             assertTrue(cache.save("ordinary", source, original))
             val saved = System.nanoTime()
@@ -129,15 +129,14 @@ class LargeBookOpeningTest {
             val prefixLoaded = System.nanoTime()
             val restored = checkNotNull(cache.load("ordinary", source))
             val loaded = System.nanoTime()
-            assertTrue(restored.complete)
-            assertEquals(original.totalElements, restored.content.totalElements)
+            assertEquals(original.totalElements, restored.totalElements)
             val measurer = measurer()
             val originalPages = paginateBook(ReaderChapterItems(original.chapters), measurer, spec(),
                 stopAfterLocation = ReaderReturnLocation.Main(0))
-            val restoredPages = paginateBook(ReaderChapterItems(restored.content.chapters), measurer, spec(),
+            val restoredPages = paginateBook(ReaderChapterItems(restored.chapters), measurer, spec(),
                 stopAfterLocation = ReaderReturnLocation.Main(0))
             assertEquals(cuts(originalPages), cuts(restoredPages))
-            val prefixPages = paginateBook(ReaderChapterItems(restoredPrefix.content.chapters), measurer, spec(),
+            val prefixPages = paginateBook(ReaderChapterItems(restoredPrefix.chapters), measurer, spec(),
                 stopAfterLocation = ReaderReturnLocation.Main(0))
             assertEquals(cuts(originalPages), cuts(prefixPages))
             Log.i("FrogReaderPerf", "ordinary_parse_ms=${(parsed - started) / 1_000_000} " +
@@ -147,103 +146,4 @@ class LargeBookOpeningTest {
         } finally { root.deleteRecursively() }
     }
 
-    /** Measures the bounded cold-opening snapshot without parsing the remaining publication. */
-    @Test fun profileLocalOpeningSnapshot() = runBlocking<Unit> {
-        val name = InstrumentationRegistry.getArguments().getString("profileEpub")
-        assumeTrue("Pass profileEpub to measure a local opening snapshot", !name.isNullOrBlank())
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val source = File(context.filesDir, checkNotNull(name))
-        class PrefixCaptured : RuntimeException()
-        var prefix: BookContent? = null
-        try {
-            EpubParser.parseContent(source, File(context.cacheDir, "profile-images"),
-                ReaderResourceLimits.DEFAULT, onPreview = {
-                    prefix = it
-                    throw PrefixCaptured()
-                })
-        } catch (_: PrefixCaptured) { }
-        val original = checkNotNull(prefix)
-        val snapshot = openingContentSnapshot(original, 0)
-        val cacheRoot = File(context.cacheDir, "profile-opening-cache").apply { deleteRecursively() }
-        try {
-            val cache = ParsedContentCache(cacheRoot)
-            assertTrue(cache.save("opening", source, snapshot, complete = false))
-            val started = System.nanoTime()
-            val restored = checkNotNull(cache.loadPreview("opening", source))
-            val loaded = System.nanoTime()
-            val measurer = measurer()
-            val originalPages = paginateBook(ReaderChapterItems(original.chapters), measurer, spec(),
-                stopAfterLocation = ReaderReturnLocation.Main(0))
-            val cachedPages = paginateBook(ReaderChapterItems(restored.content.chapters), measurer, spec(),
-                stopAfterLocation = ReaderReturnLocation.Main(0))
-            assertEquals(cuts(originalPages), cuts(cachedPages))
-            Log.i("FrogReaderPerf", "opening_snapshot_load_ms=${(loaded - started) / 1_000_000} " +
-                "source_prefix_items=${original.totalElements} cached_items=${snapshot.totalElements} " +
-                "cache_bytes=${cacheRoot.walkTopDown().filter { it.isFile }.sumOf { it.length() }}")
-        } finally { cacheRoot.deleteRecursively() }
-    }
-
-    /** Optional private local publication, supplied in the target app's files directory. */
-    @Test fun profileLocalEpub() = runBlocking {
-        val name = InstrumentationRegistry.getArguments().getString("profileEpub")
-        assumeTrue("Pass profileEpub to measure a local EPUB", !name.isNullOrBlank())
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val source = File(context.filesDir, checkNotNull(name))
-        val measurer = measurer()
-        val started = System.nanoTime()
-        var previewPages = 0
-        var firstPrefix: BookContent? = null
-        val content = EpubParser.parseContent(source, File(context.cacheDir, "profile-images"),
-            ReaderResourceLimits.DEFAULT, onPreview = { prefix ->
-                firstPrefix = prefix
-                val parsed = System.nanoTime()
-                var preparedCount = 0
-                val items = ReaderChapterItems(prefix.chapters, adjustElement = { element ->
-                    preparedCount++
-                    when (element) {
-                        is ContentElement.Paragraph -> element.copy(text = element.text.withFootnoteRefStyle())
-                        is ContentElement.Heading -> element.copy(styledText = element.styledText.withFootnoteRefStyle())
-                        else -> element
-                    }
-                })
-                items.prepareAt(0)
-                val ready = System.nanoTime()
-                val range = openingPaginationRange(items.chapterStarts, items.size, 0, true)
-                val preview = runBlocking {
-                    paginateBook(items, measurer, spec(),
-                        fromIndex = range?.fromIndex ?: 0, toIndex = range?.toIndex ?: items.size,
-                        stopAfterLocation = ReaderReturnLocation.Main(0))
-                }
-                previewPages = preview.size
-                val finished = System.nanoTime()
-                Log.i("FrogReaderPerf", "progressive_parse_ms=${(parsed - started) / 1_000_000} " +
-                    "prepare_ms=${(ready - parsed) / 1_000_000} preview_ms=${(finished - ready) / 1_000_000} " +
-                    "first_pages_ms=${(finished - started) / 1_000_000} prefix_items=${items.size} " +
-                    "prepared=$preparedCount preview_pages=${preview.size}")
-            }
-        )
-        Log.i("FrogReaderPerf", "full_parse_ms=${(System.nanoTime() - started) / 1_000_000} " +
-            "chapters=${content.chapters.size} items=${content.totalElements}")
-        assertTrue(previewPages > 0)
-        val cacheRoot = File(context.cacheDir, "profile-content-cache").apply { deleteRecursively() }
-        try {
-            val cache = ParsedContentCache(cacheRoot)
-            assertTrue(cache.save("profile", source, checkNotNull(firstPrefix), complete = false))
-            val saveStarted = System.nanoTime()
-            val fullSaved = cache.save("profile", source, content)
-            val loadStarted = System.nanoTime()
-            val restoredPrefix = checkNotNull(cache.loadPreview("profile", source))
-            val prefixLoaded = System.nanoTime()
-            val restored = checkNotNull(cache.load("profile", source))
-            val finished = System.nanoTime()
-            Log.i("FrogReaderPerf", "cache_full_saved=$fullSaved cache_complete=${restored.complete} " +
-                "cache_save_ms=${(loadStarted - saveStarted) / 1_000_000} " +
-                "cache_prefix_ms=${(prefixLoaded - loadStarted) / 1_000_000} " +
-                "cache_load_ms=${(finished - prefixLoaded) / 1_000_000} cached_items=${restored.content.totalElements} " +
-                "cache_bytes=${cacheRoot.walkTopDown().filter { it.isFile }.sumOf { it.length() }}")
-            assertEquals(checkNotNull(firstPrefix).totalElements, restoredPrefix.content.totalElements)
-            assertEquals(if (fullSaved) content.totalElements else checkNotNull(firstPrefix).totalElements,
-                restored.content.totalElements)
-        } finally { cacheRoot.deleteRecursively() }
-    }
 }

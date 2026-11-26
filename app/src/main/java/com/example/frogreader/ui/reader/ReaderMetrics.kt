@@ -50,7 +50,7 @@ object ReaderMetrics {
 
     val maxImageHeight = 520.dp
 
-    private fun blockOf(element: ContentElement): BlockStyle? = when (element) {
+    internal fun blockOf(element: ContentElement): BlockStyle? = when (element) {
         is ContentElement.Paragraph -> element.block
         is ContentElement.Heading -> element.block
         is ContentElement.Table -> element.block
@@ -212,6 +212,41 @@ object ReaderMetrics {
     ): TextStyle {
         val block = blockOf(element)
         val resolvedLanguage = block?.language ?: language
+        return buildTextStyle(
+            element = element,
+            block = block,
+            settings = settings,
+            fontSize = fontSize,
+            isParagraphStart = isParagraphStart,
+            bookFonts = bookFonts,
+            resolvedLanguage = resolvedLanguage,
+            baseFontFamily = null,
+            platformStyle = if (settings.bookStyles) {
+                PlatformTextStyle(includeFontPadding = false)
+            } else null,
+            lineHeightStyle = if (settings.bookStyles) {
+                LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.None,
+                )
+            } else null,
+            localeList = resolvedLanguage?.let { LocaleList(it) },
+        )
+    }
+
+    internal fun buildTextStyle(
+        element: ContentElement,
+        block: BlockStyle?,
+        settings: ReaderSettings,
+        fontSize: Float,
+        isParagraphStart: Boolean,
+        bookFonts: Map<String, FontFamily>,
+        resolvedLanguage: String?,
+        baseFontFamily: FontFamily?,
+        platformStyle: PlatformTextStyle?,
+        lineHeightStyle: LineHeightStyle?,
+        localeList: LocaleList?,
+    ): TextStyle {
         val hyphenate = if (settings.bookStyles && block?.hyphens != null) {
             block.hyphens == true
         } else {
@@ -223,16 +258,10 @@ object ReaderMetrics {
             // CSS line boxes include leading above the first and below the
             // last line. Compose's default Trim.Both removes it at each Text
             // boundary, squeezing zero-margin publisher paragraphs together.
-            platformStyle = if (settings.bookStyles) {
-                PlatformTextStyle(includeFontPadding = false)
-            } else null,
-            lineHeightStyle = if (settings.bookStyles) {
-                LineHeightStyle(
-                    alignment = LineHeightStyle.Alignment.Center,
-                    trim = LineHeightStyle.Trim.None,
-                )
-            } else null,
+            platformStyle = platformStyle,
+            lineHeightStyle = lineHeightStyle,
             fontFamily = bookFamilyFor(block, settings, bookFonts)
+                ?: baseFontFamily
                 ?: fontFamilyFor(settings.font, settings.customFontPath, settings.customFontAxes,
                     settings.customFontAuto, settings.customFontFamilyPaths),
             fontFeatureSettings = block?.fontFeatureSettings.takeIf { settings.bookStyles },
@@ -240,7 +269,7 @@ object ReaderMetrics {
             lineBreak = LineBreak.Paragraph,
             // The book's language picks the hyphenation patterns; without it
             // a Russian book on an en-US device never hyphenates at all.
-            localeList = resolvedLanguage?.let { LocaleList(it) },
+            localeList = localeList,
             textDirection = when (block?.direction) {
                 BookTextDirection.LTR -> TextDirection.Ltr
                 BookTextDirection.RTL -> TextDirection.Rtl
@@ -545,4 +574,134 @@ object ReaderMetrics {
 
     private fun autoTextDirection(language: String?): TextDirection =
         if (LanguageTag.isRtl(language)) TextDirection.ContentOrRtl else TextDirection.ContentOrLtr
+}
+
+/**
+ * Per-pagination-pass cache for [ReaderMetrics.textStyle].
+ *
+ * Precomputes the base user [FontFamily] and static publisher style objects
+ * once per pass, caches [LocaleList] per language tag, and memoizes resolved
+ * [TextStyle] instances. Always produces a [TextStyle] equal (`==`) to
+ * [ReaderMetrics.textStyle].
+ */
+internal class ReaderTextStyleCache(
+    private val settings: ReaderSettings,
+    private val bookFonts: Map<String, FontFamily> = emptyMap(),
+    private val defaultLanguage: String? = null,
+) {
+    private data class StyleKey(
+        val block: BlockStyle?,
+        val paragraphStyle: ParagraphStyle?,
+        val headingLevel: Int,
+        val isOrnament: Boolean,
+        val isParagraphStart: Boolean,
+        val fontSizeBits: Int,
+    )
+
+    private val baseFontFamily: FontFamily = fontFamilyFor(
+        settings.font,
+        settings.customFontPath,
+        settings.customFontAxes,
+        settings.customFontAuto,
+        settings.customFontFamilyPaths,
+    )
+    private val platformStyle: PlatformTextStyle? = if (settings.bookStyles) {
+        PlatformTextStyle(includeFontPadding = false)
+    } else null
+    private val lineHeightStyle: LineHeightStyle? = if (settings.bookStyles) {
+        LineHeightStyle(
+            alignment = LineHeightStyle.Alignment.Center,
+            trim = LineHeightStyle.Trim.None,
+        )
+    } else null
+    private val localeCache = HashMap<String, LocaleList>()
+    private val styleCache = HashMap<StyleKey, TextStyle>()
+
+    // Fast path for consecutive identical blocks (zero allocations on hit).
+    private var lastBlock: BlockStyle? = null
+    private var lastParagraphStyle: ParagraphStyle? = null
+    private var lastHeadingLevel: Int = -1
+    private var lastOrnament: Boolean = false
+    private var lastParagraphStart: Boolean = false
+    private var lastFontSizeBits: Int = 0
+    private var lastStyle: TextStyle? = null
+
+    fun textStyle(
+        element: ContentElement,
+        fontSize: Float,
+        isParagraphStart: Boolean = true,
+    ): TextStyle {
+        val block = ReaderMetrics.blockOf(element)
+        val paragraphStyle: ParagraphStyle?
+        val headingLevel: Int
+        val isOrnament: Boolean
+        val effectiveParagraphStart: Boolean
+        when (element) {
+            is ContentElement.Paragraph -> {
+                paragraphStyle = element.style
+                headingLevel = 0
+                isOrnament = false
+                effectiveParagraphStart = isParagraphStart
+            }
+            is ContentElement.Heading -> {
+                paragraphStyle = null
+                headingLevel = element.level.coerceIn(1, 6)
+                isOrnament = block?.align == null && HeadingDefaults.isOrnament(element.text)
+                effectiveParagraphStart = false
+            }
+            else -> {
+                paragraphStyle = null
+                headingLevel = 0
+                isOrnament = false
+                effectiveParagraphStart = false
+            }
+        }
+        val fontSizeBits = fontSize.toBits()
+        val recent = lastStyle
+        if (recent != null &&
+            lastBlock === block &&
+            lastParagraphStyle == paragraphStyle &&
+            lastHeadingLevel == headingLevel &&
+            lastOrnament == isOrnament &&
+            lastParagraphStart == effectiveParagraphStart &&
+            lastFontSizeBits == fontSizeBits
+        ) {
+            return recent
+        }
+        val key = StyleKey(
+            block = block,
+            paragraphStyle = paragraphStyle,
+            headingLevel = headingLevel,
+            isOrnament = isOrnament,
+            isParagraphStart = effectiveParagraphStart,
+            fontSizeBits = fontSizeBits,
+        )
+        val resolved = styleCache[key] ?: run {
+            val resolvedLanguage = block?.language ?: defaultLanguage
+            val localeList = resolvedLanguage?.let { tag ->
+                localeCache.getOrPut(tag) { LocaleList(tag) }
+            }
+            ReaderMetrics.buildTextStyle(
+                element = element,
+                block = block,
+                settings = settings,
+                fontSize = fontSize,
+                isParagraphStart = isParagraphStart,
+                bookFonts = bookFonts,
+                resolvedLanguage = resolvedLanguage,
+                baseFontFamily = baseFontFamily,
+                platformStyle = platformStyle,
+                lineHeightStyle = lineHeightStyle,
+                localeList = localeList,
+            ).also { styleCache[key] = it }
+        }
+        lastBlock = block
+        lastParagraphStyle = paragraphStyle
+        lastHeadingLevel = headingLevel
+        lastOrnament = isOrnament
+        lastParagraphStart = effectiveParagraphStart
+        lastFontSizeBits = fontSizeBits
+        lastStyle = resolved
+        return resolved
+    }
 }

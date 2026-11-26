@@ -27,15 +27,6 @@ internal object EpubRenditionParser {
     ) {
         /** Resolve valid EPUB 3 itemref overrides over the package defaults. */
         fun resolveItemRef(
-            itemRef: Element,
-            documentViewport: PublisherViewport? = null,
-        ): PublisherRendition = resolveItemRef(
-            properties = itemRef.attr("properties"),
-            documentViewport = documentViewport,
-        )
-
-        /** Resolve an itemref after its DOM has been discarded. */
-        fun resolveItemRef(
             properties: String,
             documentViewport: PublisherViewport? = null,
         ): PublisherRendition {
@@ -57,19 +48,15 @@ internal object EpubRenditionParser {
      * only for an EPUB 2 package, where rendition metadata is not standardized.
      * Invalid declarations resolve to the specification defaults.
      */
-    fun parsePackage(opf: Document): PackageRendition {
-        val packageElement = opf.firstElementByName("package")
-        val versionMajor = packageElement?.attr("version")
-            ?.trim()
-            ?.substringBefore('.')
-            ?.toIntOrNull()
+    fun parsePackage(opf: RustEpubPackage.Package): PackageRendition {
+        val versionMajor = opf.version.trim().substringBefore('.').toIntOrNull()
         val format = if (versionMajor != null && versionMajor >= 3) {
             PublisherFormat.EPUB_3
         } else {
             PublisherFormat.EPUB_2
         }
 
-        val metadata = packageElement?.children()?.firstOrNull { it.localName() == "metadata" }
+        val metadata = opf.metadata.filter { it.tag.substringAfterLast(':').equals("meta", ignoreCase = true) }
         val standardLayout = metadata.propertyValue("rendition:layout")
             ?.let(::parseLayout)
         val standardOrientation = metadata.propertyValue("rendition:orientation")
@@ -103,8 +90,7 @@ internal object EpubRenditionParser {
             viewport = amazonViewport,
             primaryWritingMode = writingMode,
         )
-        val spine = packageElement?.children()?.firstOrNull { it.localName() == "spine" }
-        val progression = when (spine?.attr("page-progression-direction")?.normalized()) {
+        val progression = when (opf.pageProgressionDirection.normalized()) {
             "ltr" -> PageProgression.LTR
             "rtl" -> PageProgression.RTL
             else -> PageProgression.DEFAULT
@@ -254,21 +240,13 @@ internal object EpubRenditionParser {
 
     private fun String.normalized(): String = trim().lowercase(Locale.ROOT)
 
-    private fun Element?.propertyValue(property: String): String? = this
-        ?.children()
-        ?.firstOrNull {
-            it.localName() == "meta" && it.attr("property").equals(property, ignoreCase = true)
-        }
-        ?.let { meta -> meta.text().ifBlank { meta.attr("content") }.trim() }
+    private fun List<RustEpubPackage.Metadata>.propertyValue(property: String): String? =
+        firstOrNull { it.property.equals(property, ignoreCase = true) }
+            ?.let { meta -> meta.text.ifBlank { meta.content }.trim() }
 
-    private fun Element?.nameContent(name: String): String? = this
-        ?.children()
-        ?.firstOrNull {
-            it.localName() == "meta" && it.attr("name").equals(name, ignoreCase = true)
-        }
-        ?.attr("content")
-        ?.trim()
-        ?.takeIf(String::isNotEmpty)
+    private fun List<RustEpubPackage.Metadata>.nameContent(name: String): String? =
+        firstOrNull { it.name.equals(name, ignoreCase = true) }
+            ?.content?.trim()?.takeIf(String::isNotEmpty)
 
     private fun Document.firstElementByName(name: String): Element? =
         getAllElements().firstOrNull { it.localName() == name }

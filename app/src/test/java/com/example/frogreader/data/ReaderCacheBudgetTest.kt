@@ -192,8 +192,8 @@ class ReaderCacheBudgetTest {
     fun `budget only touches derived roots and recognized cache entries`() {
         val originals = listOf(
             "books/original.epub", "covers/cover.jpg", "fonts/custom.ttf",
-            "library.json", "userdata.json", "progress.json", "pagination/README",
-            "images/README", "reader-content/README",
+            "databases/frogreader.db", "databases/frogreader.db-wal", "databases/frogreader.db-shm",
+            "pagination/README", "images/README", "reader-content/README",
         ).map { put(it, 30) }
         put("images/cache/source/image.jpg", 5)
 

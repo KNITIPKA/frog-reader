@@ -105,14 +105,18 @@ internal class Fb2Stylesheet private constructor(
         val node = Element(element).attr("style",
             "font-size:${computed.fontScale ?: 1f}em;$declarations")
         val resolver = CssResolver(emptyList())
-        val resolved = resolver.computed(node)
-        return computed.copy(
-            publisherBox = resolver.publisherBoxStyle(node),
-            borderSpecified = resolved.borderSpecified,
-            borderless = resolved.borderSpecified && listOf(
-                resolved.borderTop, resolved.borderRight, resolved.borderBottom, resolved.borderLeft,
-            ).none { it != null && (it.usesCurrentColor || (it.colorArgb ushr 24) != 0) },
-        )
+        try {
+            val resolved = resolver.computed(node)
+            return computed.copy(
+                publisherBox = resolver.publisherBoxStyle(node),
+                borderSpecified = resolved.borderSpecified,
+                borderless = resolved.borderSpecified && listOf(
+                    resolved.borderTop, resolved.borderRight, resolved.borderBottom, resolved.borderLeft,
+                ).none { it != null && (it.usesCurrentColor || (it.colorArgb ushr 24) != 0) },
+            )
+        } finally {
+            resolver.clearCache()
+        }
     }
 
     /** CSS for `<style name="…">`; `.name` is its conventional selector. */

@@ -1,6 +1,7 @@
 package com.example.frogreader.data.parser
 
 import androidx.compose.ui.text.AnnotatedString
+import com.example.frogreader.data.FrbModelCodec
 import com.example.frogreader.data.model.BookContent
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.BookMetadata
@@ -8,34 +9,26 @@ import com.example.frogreader.data.model.BookNavigationEntry
 import com.example.frogreader.data.model.BookNavigationTarget
 import com.example.frogreader.data.model.Chapter
 import com.example.frogreader.data.model.ContentElement
-import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
-import org.commonmark.ext.gfm.tables.TablesExtension
-import org.commonmark.node.Node
-import org.commonmark.parser.Parser
-import org.commonmark.renderer.html.HtmlRenderer
-import org.jsoup.Jsoup
-import org.jsoup.nodes.TextNode
+import com.example.frogreader.engine.RustBridge
+import com.example.frogreader.engine.RustFb2TxtNative
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
-import java.nio.charset.CharacterCodingException
-import java.nio.charset.Charset
-import java.util.ArrayDeque
+import java.nio.ByteOrder
 import java.util.Locale
 
 /** Standalone text files use the same native element stream as packaged books. */
 internal object TextBookParser {
-    private const val MAX_MARKDOWN_DEPTH = 128
-    private val extensions = listOf(TablesExtension.create(), StrikethroughExtension.create())
-    // CommonMark 0.30 defaults to flattening nesting after 100 levels. Let the
-    // bounded AST reach our rejection threshold, so valid structure is retained
-    // and excessive nesting still fails before the recursive HTML renderer.
-    private val markdown = Parser.builder().extensions(extensions)
-        .maxOpenBlockParsers(MAX_MARKDOWN_DEPTH + 1)
-        .maxInlineNesting(MAX_MARKDOWN_DEPTH + 1)
-        .build()
-    private val html = HtmlRenderer.builder().extensions(extensions)
-        .escapeHtml(true).sanitizeUrls(true).build()
+    private const val TEXT_MAGIC = 0x31545854 // TXT1
+    private const val SLUG_MAGIC = 0x31474C53 // SLG1
+    private const val STATUS_OK = 0
+    private const val STATUS_ERR = 1
+    private const val STATUS_FALLBACK = 2
+
+    internal const val MD_FRB_STATUS_OK = 0
+    internal const val MD_FRB_STATUS_ERR = 1
+    internal const val MD_FRB_STATUS_FALLBACK = 2
 
     fun inferFormat(name: String?, mimeType: String?): BookFormat? {
         val extension = name?.substringAfterLast('.', "")?.lowercase(Locale.ROOT)
@@ -53,75 +46,72 @@ internal object TextBookParser {
     /** Strict Unicode decoding; legacy Cyrillic text falls back to Windows-1251. */
     fun readText(file: File, maxBytes: Long = ReaderResourceLimits.DEFAULT.maxTextBytes): String {
         val bytes = file.inputStream().use { it.readBytesBounded(maxBytes, "text document") }
-        fun prefix(vararg values: Int) = values.size <= bytes.size &&
-            values.indices.all { (bytes[it].toInt() and 0xff) == values[it] }
-        val (charset, offset) = when {
-            prefix(0xff, 0xfe, 0, 0) || prefix(0, 0, 0xfe, 0xff) ->
-                throw IOException("UTF-32 text is not supported. Save the file as UTF-8.")
-            prefix(0xef, 0xbb, 0xbf) -> Charsets.UTF_8 to 3
-            prefix(0xff, 0xfe) -> Charsets.UTF_16LE to 2
-            prefix(0xfe, 0xff) -> Charsets.UTF_16BE to 2
-            else -> Charsets.UTF_8 to 0
+        if (!RustBridge.shared.isLibraryReady) {
+            throw IOException("Native text decoder is unavailable")
         }
-        fun decode(encoding: Charset): String = encoding.newDecoder()
-            .decode(ByteBuffer.wrap(bytes, offset, bytes.size - offset)).toString()
-        val text = try {
-            decode(charset)
-        } catch (error: CharacterCodingException) {
-            if (offset != 0) throw IOException("Invalid ${charset.name()} text", error)
-            decode(Charset.forName("windows-1251"))
-        }
-        if (text.any { (it < ' ' && it !in "\n\r\t\u000c") || it in '\u007f'..'\u009f' }) {
-            throw IOException("The file contains binary data, not readable text.")
-        }
-        if (text.isBlank()) throw IOException("The text document is empty.")
-        return text.replace("\r\n", "\n").replace('\r', '\n').replace('\u000c', '\n')
+        val wire = RustFb2TxtNative.decodeText(bytes)
+            ?: throw IOException("Native text decoder rejected document")
+        return decodeTextWire(wire)
     }
 
     fun parseMetadata(file: File, format: BookFormat): BookMetadata {
-        val text = readText(file)
-        val title = if (format == BookFormat.MD) markdownBody(text).selectFirst("h1, h2, h3, h4, h5, h6")
-            ?.text()?.takeIf { it.isNotBlank() } else null
+        val title = if (format == BookFormat.MD) {
+            val bytes = file.inputStream().use {
+                it.readBytesBounded(ReaderResourceLimits.DEFAULT.maxTextBytes, "text document")
+            }
+            if (!RustBridge.shared.isLibraryReady) {
+                throw IOException("Native Markdown parser is unavailable")
+            }
+            val wire = RustFb2TxtNative.parseMarkdownTitle(bytes)
+                ?: throw IOException("Native Markdown parser rejected document")
+            decodeTextWire(wire).takeIf { it.isNotBlank() }
+        } else {
+            readText(file)
+            null
+        }
         // Filename titles are assigned by the repository before the original name is lost.
         return BookMetadata(title = title, author = null, coverBytes = null)
     }
 
     fun parseContent(file: File, format: BookFormat): BookContent {
-        val text = readText(file)
+        val bytes = file.inputStream().use {
+            it.readBytesBounded(ReaderResourceLimits.DEFAULT.maxTextBytes, "text document")
+        }
         if (format == BookFormat.TXT) {
-            val elements = mutableListOf<ContentElement>()
-            val paragraph = StringBuilder()
-            fun flush() {
-                if (paragraph.isNotEmpty()) {
-                    elements += ContentElement.Paragraph(AnnotatedString(paragraph.toString()))
-                    paragraph.setLength(0)
-                }
+            if (!RustBridge.shared.isLibraryReady) {
+                throw IOException("Native TXT parser is unavailable")
             }
-            for (line in text.lineSequence()) {
-                if (line.isBlank()) flush() else {
-                    if (paragraph.isNotEmpty()) paragraph.append('\n')
-                    paragraph.append(line)
-                }
-            }
-            flush()
+            val wire = RustFb2TxtNative.parseTxtParagraphs(bytes)
+                ?: throw IOException("Native TXT parser rejected document")
+            val paragraphs = decodeTxtParagraphsWire(wire)
+            val elements = paragraphs.map { ContentElement.Paragraph(AnnotatedString(it)) }
             val chapters = listOf(Chapter(null, elements))
             return BookContent(chapters, language = LanguageTag.detectFromChapters(chapters))
         }
 
-        val body = markdownBody(text)
-        val usedIds = mutableSetOf<String>()
-        for (heading in body.select("h1, h2, h3, h4, h5, h6")) {
-            val base = heading.text().lowercase(Locale.ROOT)
-                .replace(Regex("[^\\p{L}\\p{N}\\p{M}_\\-\\s]"), "")
-                .trim().replace(Regex("\\s"), "-")
-            var id = base
-            var suffix = 0
-            while (!usedIds.add(id)) id = "$base-${++suffix}"
-            heading.attr("id", id)
+        if (!RustBridge.shared.isLibraryReady) {
+            throw IOException("Native Markdown parser is unavailable")
         }
-        // A standalone SAF document grants no access to neighbouring image files.
-        // Preserve descriptions without accessing arbitrary paths or the network.
-        body.select("img").forEach { it.replaceWith(TextNode(it.attr("alt"))) }
+        val nativeWire = RustFb2TxtNative.parseMarkdownContent(bytes)
+        if (nativeWire != null) {
+            val encoded = decodeBytesOrFallbackWire(nativeWire)
+            if (encoded != null) {
+                return FrbModelCodec.decode(encoded, BookContent.serializer())
+            }
+        }
+        return parseMarkdownMarkupFallback(bytes)
+    }
+
+    internal fun parseMarkdownMarkupFallback(bytes: ByteArray): BookContent {
+        val wire = RustFb2TxtNative.parseMarkdownMarkup(bytes)
+            ?: throw IOException("Native Markdown parser rejected document")
+        val mrk2Bytes = decodeBytesWire(wire)
+        val body = if (mrk2Bytes.isEmpty()) {
+            org.jsoup.nodes.Element("body")
+        } else {
+            RustChapterMarkup.decodeSnapshot(mrk2Bytes)?.body()
+                ?: throw IOException("Invalid native Markdown markup snapshot")
+        }
         val mapper = HtmlMapper(resolveImage = { null }, resolveLink = { href ->
             if (href.startsWith('#')) {
                 runCatching { "#" + java.net.URI(href).fragment }.getOrDefault(href)
@@ -145,21 +135,176 @@ internal object TextBookParser {
         )
     }
 
-    private fun markdownBody(text: String): org.jsoup.nodes.Element {
-        val document = markdown.parse(text)
-        // The HTML renderer traverses recursively. Reject pathological nesting
-        // before entering it, rather than overflowing the Android thread stack.
-        val pending = ArrayDeque<Pair<Node, Int>>()
-        pending.add(document to 0)
-        while (pending.isNotEmpty()) {
-            val (node, depth) = pending.removeLast()
-            if (depth > MAX_MARKDOWN_DEPTH) throw IOException("Markdown nesting is too deep.")
-            var child = node.firstChild
-            while (child != null) {
-                pending.add(child to depth + 1)
-                child = child.next
-            }
+    internal fun renderMarkdownHtmlNative(markdown: String): String {
+        if (!RustBridge.shared.isLibraryReady) {
+            throw IOException("Native Markdown parser is unavailable")
         }
-        return Jsoup.parseBodyFragment(html.render(document)).body()
+        val wire = RustFb2TxtNative.renderMarkdownHtml(markdown.toByteArray(Charsets.UTF_8))
+            ?: throw IOException("Native Markdown parser rejected document")
+        return decodeTextWire(wire)
+    }
+
+    internal fun headingSlugsNative(headings: List<String>): List<String>? {
+        val encoded = encodeStringList(headings)
+        val wire = RustFb2TxtNative.headingSlugs(encoded) ?: return null
+        return decodeHeadingSlugsWire(wire, headings.size)
+    }
+
+    /**
+     * Decodes a standalone TXT file, splits paragraphs, and writes a complete,
+     * CRC-checked `.frb` v2 (revision 5) container directly in Rust without
+     * materializing `ContentElement.Paragraph` lists in JVM.
+     */
+    fun writeTxtFrb(
+        file: File,
+        destFile: File,
+        sourceMetadata: ByteArray,
+        language: String? = null,
+        maxBytes: Long = ReaderResourceLimits.DEFAULT.maxTextBytes,
+    ): Boolean {
+        val bytes = file.inputStream().use {
+            it.readBytesBounded(maxBytes, "text document")
+        }
+        if (!RustBridge.shared.isLibraryReady) {
+            throw IOException("Native TXT FRB writer is unavailable")
+        }
+        return RustFb2TxtNative.writeTxtFrb(bytes, destFile.path, sourceMetadata, language)
+    }
+
+    /**
+     * Parses a standalone Markdown file and writes a complete, CRC-checked `.frb` v2
+     * container directly in Rust without materializing `BookContent` on the JVM heap.
+     * Returns `false` when the document requires Kotlin fallback (e.g. GFM tables) or fails.
+     */
+    fun writeMdFrb(
+        file: File,
+        destFile: File,
+        sourceMetadata: ByteArray,
+        maxBytes: Long = ReaderResourceLimits.DEFAULT.maxTextBytes,
+    ): Boolean {
+        val bytes = file.inputStream().use {
+            it.readBytesBounded(maxBytes, "text document")
+        }
+        if (!RustBridge.shared.isLibraryReady) {
+            throw IOException("Native Markdown FRB writer is unavailable")
+        }
+        return RustFb2TxtNative.writeMdFrb(bytes, destFile.path, sourceMetadata) == MD_FRB_STATUS_OK
+    }
+
+    private fun decodeTextWire(wire: ByteArray): String {
+        val reader = WireReader(wire)
+        if (reader.int() != TEXT_MAGIC) throw IOException("Invalid native text protocol")
+        return when (reader.byte()) {
+            STATUS_OK -> reader.string().also { reader.finish() }
+            STATUS_ERR -> throw IOException(reader.string().also { reader.finish() })
+            else -> throw IOException("Invalid native text status")
+        }
+    }
+
+    private fun decodeBytesWire(wire: ByteArray): ByteArray {
+        val reader = WireReader(wire)
+        if (reader.int() != TEXT_MAGIC) throw IOException("Invalid native text protocol")
+        return when (reader.byte()) {
+            STATUS_OK -> reader.bytes().also { reader.finish() }
+            STATUS_ERR -> throw IOException(reader.string().also { reader.finish() })
+            else -> throw IOException("Invalid native text status")
+        }
+    }
+
+    private fun decodeBytesOrFallbackWire(wire: ByteArray): ByteArray? {
+        val reader = WireReader(wire)
+        if (reader.int() != TEXT_MAGIC) throw IOException("Invalid native text protocol")
+        return when (reader.byte()) {
+            STATUS_OK -> reader.bytes().also { reader.finish() }
+            STATUS_FALLBACK -> null.also { reader.finish() }
+            STATUS_ERR -> throw IOException(reader.string().also { reader.finish() })
+            else -> throw IOException("Invalid native text status")
+        }
+    }
+
+    private fun decodeTxtParagraphsWire(wire: ByteArray): List<String> {
+        val reader = WireReader(wire)
+        if (reader.int() != TEXT_MAGIC) throw IOException("Invalid native text protocol")
+        return when (reader.byte()) {
+            STATUS_OK -> {
+                val count = reader.count(Int.SIZE_BYTES)
+                List(count) { reader.string() }.also { reader.finish() }
+            }
+            STATUS_ERR -> throw IOException(reader.string().also { reader.finish() })
+            else -> throw IOException("Invalid native text status")
+        }
+    }
+
+    private fun encodeStringList(items: List<String>): ByteArray {
+        val out = ByteArrayOutputStream(4 + items.size * 32)
+        fun writeInt(v: Int) {
+            out.write(v and 0xff)
+            out.write((v ushr 8) and 0xff)
+            out.write((v ushr 16) and 0xff)
+            out.write((v ushr 24) and 0xff)
+        }
+        writeInt(items.size)
+        for (item in items) {
+            val bytes = item.toByteArray(Charsets.UTF_8)
+            writeInt(bytes.size)
+            out.write(bytes)
+        }
+        return out.toByteArray()
+    }
+
+    private fun decodeHeadingSlugsWire(wire: ByteArray, expectedCount: Int): List<String>? {
+        val reader = WireReader(wire)
+        if (reader.int() != SLUG_MAGIC) return null
+        val count = reader.count(Int.SIZE_BYTES)
+        if (count != expectedCount) return null
+        val list = List(count) { reader.string() }
+        reader.finish()
+        return list
+    }
+
+    private class WireReader(private val bytes: ByteArray) {
+        private val input = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+
+        fun byte(): Int {
+            if (input.remaining() < 1) throw IOException("Truncated native wire payload")
+            return input.get().toInt() and 0xff
+        }
+
+        fun int(): Int {
+            if (input.remaining() < Int.SIZE_BYTES) throw IOException("Truncated native wire payload")
+            return input.int
+        }
+
+        fun count(minItemBytes: Int): Int {
+            val value = int()
+            if (value !in 0..(input.remaining() / minItemBytes)) {
+                throw IOException("Invalid native wire count")
+            }
+            return value
+        }
+
+        fun string(): String {
+            val size = int()
+            if (size !in 0..input.remaining()) throw IOException("Invalid native wire string length")
+            if (size == 0) return ""
+            val start = input.position()
+            val end = start + size
+            input.position(end)
+            return bytes.decodeToString(start, end, throwOnInvalidSequence = true)
+        }
+
+        fun bytes(): ByteArray {
+            val size = int()
+            if (size !in 0..input.remaining()) throw IOException("Invalid native wire byte length")
+            if (size == 0) return ByteArray(0)
+            val start = input.position()
+            val end = start + size
+            input.position(end)
+            return bytes.copyOfRange(start, end)
+        }
+
+        fun finish() {
+            if (input.hasRemaining()) throw IOException("Trailing native wire bytes")
+        }
     }
 }

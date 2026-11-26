@@ -55,12 +55,12 @@ internal class ReaderChapterItems(
     }
 }
 
-private class PreparedReaderChapter(
+internal class PreparedReaderChapter(
     val items: List<ReaderItem>,
     val floatTargetsBySource: Map<Int, Int>,
 )
 
-private fun prepareChapter(
+internal fun prepareChapter(
     chapter: Chapter,
     chapterIndex: Int,
     itemOffset: Int,

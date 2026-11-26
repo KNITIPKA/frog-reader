@@ -89,7 +89,7 @@ class ReaderRereadTest {
     }
 
     private suspend fun open(repo: BookRepository, id: String = "book"): ReaderViewModel {
-        val model = ReaderViewModel(repo, settings, mock(StatsRepository::class.java), id, temporary.root)
+        val model = ReaderViewModel(repo, settings, StatsRepository(context), id, temporary.root)
         models += model
         model.state.first { it is ReaderState.Ready || it is ReaderState.Error }
         assertTrue(model.state.value is ReaderState.Ready)
@@ -133,16 +133,19 @@ class ReaderRereadTest {
         val original = repo.readingLog.value.single()
         model.setCompletionRating(7)
         model.setCompletionReview("Keep this draft")
-        val blockedTemporaryFile = File(temporary.root, "userdata.json.tmp").apply { mkdir() }
+        StoreFixture.blockWrites(temporary.root)
         var exits = 0
-        model.saveCompletionReview { exits++ }
-        model.completionReview.first { it.error }
-        assertEquals(0, exits)
-        assertEquals(original, repo.readingLog.value.single())
-        assertEquals(7, model.completionReview.value.draft.ratingHalfStars)
-        assertEquals("Keep this draft", model.completionReview.value.draft.review)
-        assertTrue(model.completionReview.value.dirty)
-        assertTrue(blockedTemporaryFile.delete())
+        try {
+            model.saveCompletionReview { exits++ }
+            model.completionReview.first { it.error }
+            assertEquals(0, exits)
+            assertEquals(original, repo.readingLog.value.single())
+            assertEquals(7, model.completionReview.value.draft.ratingHalfStars)
+            assertEquals("Keep this draft", model.completionReview.value.draft.review)
+            assertTrue(model.completionReview.value.dirty)
+        } finally {
+            StoreFixture.unblockWrites(temporary.root)
+        }
         model.saveCompletionReview { exits++ }
         model.completionReview.first { it.savedGeneration == 1 }
         assertEquals(1, exits)
@@ -155,11 +158,11 @@ class ReaderRereadTest {
         val repo = repository()
         val model = open(repo)
         model.keepPreviousReading()
-        val before = File(temporary.root, "userdata.json").readBytes()
+        val stampBefore = StoreFixture.bookEntityOnDisk(temporary.root, "book")?.updatedAtMillis
         var exits = 0
         model.saveCompletionReview { exits++ }
         assertEquals(1, exits)
-        assertArrayEquals(before, File(temporary.root, "userdata.json").readBytes())
+        assertEquals(stampBefore, StoreFixture.bookEntityOnDisk(temporary.root, "book")?.updatedAtMillis)
     }
 
     @Test fun `exit without a rating or review waits for completion and saves the finished book and log`() = runTest(dispatcher) {
@@ -338,14 +341,17 @@ class ReaderRereadTest {
         val repo = repository()
         val completed = repo.readingLog.value.single()
         val model = open(repo)
-        val blockedTemporaryFile = File(temporary.root, "userdata.json.tmp").apply { mkdir() }
-        model.beginReadingAgain()
-        model.rereadError.first { it }
-        assertTrue(model.offerReread.value)
-        assertEquals(ReadingStatus.FINISHED, repo.bookById("book")!!.status)
-        assertEquals(listOf(completed), repo.readingLog.value)
-        assertEquals(0, model.readingGeneration.value)
-        assertTrue(blockedTemporaryFile.delete())
+        StoreFixture.blockWrites(temporary.root)
+        try {
+            model.beginReadingAgain()
+            model.rereadError.first { it }
+            assertTrue(model.offerReread.value)
+            assertEquals(ReadingStatus.FINISHED, repo.bookById("book")!!.status)
+            assertEquals(listOf(completed), repo.readingLog.value)
+            assertEquals(0, model.readingGeneration.value)
+        } finally {
+            StoreFixture.unblockWrites(temporary.root)
+        }
         model.beginReadingAgain()
         model.readingGeneration.first { it == 1 }
         assertFalse(model.rereadError.value)
@@ -393,13 +399,16 @@ class ReaderRereadTest {
         val repo = repository()
         val abandoned = repo.readingLog.value.single()
         val model = open(repo)
-        val blockedTemporaryFile = File(temporary.root, "userdata.json.tmp").apply { mkdir() }
-        model.resumeReading()
-        model.rereadError.first { it }
-        assertEquals(listOf(abandoned), repo.readingLog.value)
-        assertEquals(ReadingStatus.ABANDONED, repo.bookById("book")!!.status)
-        assertTrue(model.offerReread.value)
-        assertTrue(blockedTemporaryFile.delete())
+        StoreFixture.blockWrites(temporary.root)
+        try {
+            model.resumeReading()
+            model.rereadError.first { it }
+            assertEquals(listOf(abandoned), repo.readingLog.value)
+            assertEquals(ReadingStatus.ABANDONED, repo.bookById("book")!!.status)
+            assertTrue(model.offerReread.value)
+        } finally {
+            StoreFixture.unblockWrites(temporary.root)
+        }
         model.resumeReading()
         model.readingGeneration.first { it == 1 }
         assertEquals(abandoned.id, repo.readingLog.value.single().id)

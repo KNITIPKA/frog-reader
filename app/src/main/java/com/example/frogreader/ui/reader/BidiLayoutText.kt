@@ -43,9 +43,14 @@ class BidiLayoutText private constructor(
 
     companion object {
         fun of(source: AnnotatedString): BidiLayoutText {
-            val rawRanges = source.getStringAnnotations(BIDI_TAG, 0, source.length)
+            val hasBidi = source.hasStringAnnotations(BIDI_TAG, 0, source.length)
             val paragraphs = source.paragraphStyles
-            if (rawRanges.isEmpty() && paragraphs.size < 2) return identity(source)
+            if (!hasBidi && paragraphs.size < 2) return identity(source)
+            val rawRanges = if (hasBidi) {
+                source.getStringAnnotations(BIDI_TAG, 0, source.length)
+            } else {
+                emptyList()
+            }
             val paragraphBreaks = if (paragraphs.size < 2) emptySet() else {
                 val paragraphStarts = paragraphs.map { it.start }.toHashSet()
                 paragraphs.mapNotNull { range ->

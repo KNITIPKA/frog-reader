@@ -1,6 +1,7 @@
 package com.example.frogreader.parser
 
 import com.example.frogreader.data.parser.CssResolver
+import com.example.frogreader.data.parser.RustChapterMarkup
 import org.jsoup.Jsoup
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
@@ -58,6 +59,32 @@ class CssResolverSharingTest {
     }
 
     @Test
+    fun `retained chapter matcher keeps structural indices across interleaved markup`() {
+        val css = resolver("""
+            #first.intro { font-style:italic; }
+            section > p:nth-child(even) { font-size:1.5em; }
+            p + p[data-position=second] { text-indent:2em; }
+        """.trimIndent())
+        val bytes = """
+            <html><head><title>Chapter</title></head><body><section>
+            <p ID="first" CLASS="intro intro">First</p>
+            <!-- between siblings -->
+            <p data-position="second">Second</p>
+            </section></body></html>
+        """.trimIndent().encodeToByteArray()
+        checkNotNull(RustChapterMarkup.parseRetained(bytes)).use { chapter ->
+            try {
+                val styles = chapter.select("p").map(css::computed)
+                assertEquals(true, styles[0].italic)
+                assertEquals(1.5f, styles[1].fontSizeEm, 0f)
+                assertEquals(3f, styles[1].textIndentEm!!, 0f)
+            } finally {
+                css.clearCache()
+            }
+        }
+    }
+
+    @Test
     fun `sharing retains inherited styles and custom property scopes`() {
         val css = resolver("""
             .small { --indent:1em; font-size:1em; color:red; }
@@ -76,6 +103,24 @@ class CssResolverSharingTest {
         assertEquals(1.5f, styles[2].fontSizeEm, 0f)
         assertEquals(3f, styles[2].textIndentEm!!, 0f)
         assertEquals(0xff0000ff.toInt(), styles[2].foregroundColorArgb)
+    }
+
+    @Test
+    fun `computed native styles reuse inherited variable scopes across chapter lifetimes`() {
+        val css = resolver("body { --size:2em; } p { font-size:var(--size); }")
+        val document = Jsoup.parse("<body><p>Inherited scope</p></body>")
+        val body = css.computed(document.body())
+        val paragraph = css.computed(document.selectFirst("p")!!)
+        assertSame(body.customProps, paragraph.customProps)
+        assertEquals(2f, paragraph.fontSizeEm, 0f)
+
+        css.clearCache()
+        document.body().attr("style", "--size:1.5em")
+        val reopened = css.computed(document.selectFirst("p")!!)
+        assertNotSame(paragraph, reopened)
+        assertEquals(1.5f, reopened.fontSizeEm, 0f)
+        assertSame(css.computed(document.body()).customProps, reopened.customProps)
+        css.clearCache()
     }
 
     @Test
@@ -116,6 +161,19 @@ class CssResolverSharingTest {
         assertEquals(2f, styles[0].marginInlineStartEm, 0f)
         assertEquals(3f, styles[1].marginStartEm, 0f)
         assertEquals(0f, styles[1].marginInlineStartEm, 0f)
+    }
+
+    @Test
+    fun `inline only cascade keeps winner order and reuses identical declarations`() {
+        val css = CssResolver(emptyList())
+        val inline = "margin-left:3em!important; margin-inline-start:2em!important; " +
+            "margin-left:7em; text-align:center; text-align:right"
+        val paragraphs = Jsoup.parse("<p style='$inline'>A</p><p style='$inline'>B</p>").select("p")
+        val first = css.computed(paragraphs[0])
+        assertEquals("right", first.textAlign)
+        assertEquals(0f, first.marginStartEm, 0f)
+        assertEquals(2f, first.marginInlineStartEm, 0f)
+        assertSame(first, css.computed(paragraphs[1]))
     }
 
     @Test

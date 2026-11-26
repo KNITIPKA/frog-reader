@@ -3,12 +3,14 @@ package com.example.frogreader.data.parser
 import com.example.frogreader.data.model.BookTextDirection
 import com.example.frogreader.data.model.FirstLetterStyle
 import com.example.frogreader.data.model.FontTypography
+import com.example.frogreader.data.model.encode
 import com.example.frogreader.data.model.normalizeFontUnicodeRange
-import com.example.frogreader.data.model.HeadingDefaults
 import com.example.frogreader.data.model.PublisherBorderSide
 import com.example.frogreader.data.model.PublisherBorderStyle
 import com.example.frogreader.data.model.PublisherBoxAlign
 import com.example.frogreader.data.model.PublisherBoxStyle
+import com.example.frogreader.data.parser.RustCssValues.Declaration
+import com.example.frogreader.data.parser.RustCssValues.lengthEm
 import org.jsoup.nodes.Element
 import java.util.IdentityHashMap
 
@@ -38,13 +40,15 @@ import java.util.IdentityHashMap
  * unsupported pseudo-class drops only itself, not its comma-group siblings —
  * stricter than the spec, kinder to books.
  */
-class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
+class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) : AutoCloseable {
 
     /** Optional known CSS viewport. No parse-time guess is made for device size. */
     class Viewport(val widthPx: Float, val heightPx: Float? = null, val dark: Boolean? = null)
 
     /** One stylesheet text plus the directory its relative urls resolve from. */
-    class Sheet(val text: String, val baseDir: String = "")
+    class Sheet(val text: String, val baseDir: String = "") {
+        internal val syntax by lazy { RustCssSyntax.sheet(text) }
+    }
 
     /** One `@font-face` rule: a face of [family] at [src] (url as written). */
     class FontFace(
@@ -63,337 +67,90 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
 
     // ------------------------------------------------------------- model
 
-    private enum class MarginSide { TOP, RIGHT, BOTTOM, LEFT, INLINE_START, INLINE_END }
-    private enum class FontPart { STYLE, WEIGHT, SIZE, LINE_HEIGHT, FAMILY, VARIANT, STRETCH, FEATURES, KERNING, OPTICAL, VARIATIONS, LIGATURES }
-    private enum class BorderPart { WIDTH, STYLE, COLOR }
-
-    private class Declaration(
-        val value: String,
-        val important: Boolean,
-        /** Non-null when an inline/physical box shorthand awaits value expansion. */
-        val marginSide: MarginSide? = null,
-        /** Non-null for a `font: var(...)` pending computed-value expansion. */
-        val fontPart: FontPart? = null,
-        /** Non-null for a border shorthand pending computed-value expansion. */
-        val borderPart: BorderPart? = null,
-        /** True for `background`, whose retained native subset is its color. */
-        val backgroundShorthand: Boolean = false,
-    )
-
-    private class MutableBorder(colorArgb: Int, usesCurrentColor: Boolean = false) {
-        var widthEm: Float = MEDIUM_BORDER_EM
-        var colorArgb: Int = colorArgb
-        var style: PublisherBorderStyle = PublisherBorderStyle.NONE
-        var usesCurrentColor: Boolean = usesCurrentColor
-
-        fun toPublisherSide(): PublisherBorderSide? =
-            takeIf { widthEm > 0f && style != PublisherBorderStyle.NONE }
-                ?.let { PublisherBorderSide(widthEm, colorArgb, style, usesCurrentColor) }
-    }
-
-    /** One parsed declaration block for one selector. */
     private class Rule(
-        /** Compound chain; the last entry must match the element itself. */
-        val chain: List<Compound>,
-        val specificity: Int,
+        val selector: RustCssSelectors.Compiled,
         val order: Int,
-        val declarations: Map<String, Declaration>,
+        val declarations: List<Pair<String, Declaration>>,
     )
 
-    private enum class Combinator { DESCENDANT, CHILD, NEXT_SIBLING, SUBSEQUENT_SIBLING }
+    /** Applies the stylesheet limits before selectors are sent to Rust. */
+    private class RulePool(val id: Int) {
+        val entries = mutableListOf<Rule>()
+        val size: Int get() = entries.size
+        private val bucketSizes = mutableMapOf<String, Int>()
 
-    private enum class AttrOp { EXISTS, EQUALS, INCLUDES, DASH, PREFIX, SUFFIX, SUBSTRING }
-
-    private class AttrSelector(
-        val name: String,
-        val op: AttrOp,
-        val value: String?,
-        val namespaceUri: String? = null,
-    ) {
-        fun matches(element: Element): Boolean {
-            val actual = if (namespaceUri == null) {
-                if (!element.hasAttr(name)) return false
-                element.attr(name)
-            } else {
-                val localName = name.substringAfter(':')
-                element.attributes().firstOrNull { attribute ->
-                    val key = attribute.key
-                    key.contains(':') && key.substringAfter(':') == localName &&
-                        attributeNamespace(element, key.substringBefore(':')) == namespaceUri
-                }?.value ?: return false
+        fun add(rule: Rule) {
+            val key = rule.selector.bucket.orEmpty()
+            val cap = if (key.isEmpty()) MAX_UNIVERSAL_RULES else MAX_RULES_PER_INDEX_BUCKET
+            val count = bucketSizes[key] ?: 0
+            if (count < cap) {
+                bucketSizes[key] = count + 1
+                entries += rule
             }
-            val expected = value ?: return true
-            return when (op) {
-                AttrOp.EXISTS -> true
-                AttrOp.EQUALS -> actual == expected
-                AttrOp.INCLUDES ->
-                    expected.isNotEmpty() && actual.split(whitespaceRegex).contains(expected)
-                AttrOp.DASH -> actual == expected || actual.startsWith("$expected-")
-                AttrOp.PREFIX -> expected.isNotEmpty() && actual.startsWith(expected)
-                AttrOp.SUFFIX -> expected.isNotEmpty() && actual.endsWith(expected)
-                AttrOp.SUBSTRING -> expected.isNotEmpty() && actual.contains(expected)
-            }
-        }
-
-        private fun attributeNamespace(element: Element, prefix: String): String? {
-            if (prefix == "xml") return "http://www.w3.org/XML/1998/namespace"
-            var owner: Element? = element
-            while (owner != null) {
-                val declaration = owner.attr("xmlns:$prefix")
-                if (declaration.isNotEmpty()) return declaration
-                owner = owner.parent()
-            }
-            return null
         }
     }
 
-    private sealed interface PseudoClass {
-        fun matches(element: Element, context: SelectorMatchContext): Boolean
+    private class SelectorProgram(
+        val rules: ByteArray,
+        val absoluteKeys: Set<String>,
+        val propertyIds: Map<String, Int>,
+        val declarations: List<Pair<String, Declaration>>,
+    )
 
-        object FirstChild : PseudoClass {
-            override fun matches(element: Element, context: SelectorMatchContext) =
-                element.previousElementSibling() == null
-        }
+    // Serialize the rule set once, sharing each declaration block across its selectors.
+    // Rust returns indices into the original declarations to preserve their identity.
+    private class SelectorProgramWriter {
+        private val writer = CssMatchWireWriter(128 * 1024 * 1024)
+        private val absoluteKeys = linkedSetOf<String>()
 
-        object LastChild : PseudoClass {
-            override fun matches(element: Element, context: SelectorMatchContext) =
-                element.nextElementSibling() == null
-        }
-
-        object OnlyChild : PseudoClass {
-            override fun matches(element: Element, context: SelectorMatchContext) =
-                element.previousElementSibling() == null && element.nextElementSibling() == null
-        }
-
-        object FirstOfType : PseudoClass {
-            override fun matches(element: Element, context: SelectorMatchContext) =
-                context.siblingIndex(element, ofType = true) == 1
-        }
-
-        /** `:nth-child(an+b)` / `:nth-of-type(an+b)`, 1-based sibling index. */
-        class Nth(
-            private val a: Int,
-            private val b: Int,
-            private val ofType: Boolean,
-            private val fromEnd: Boolean = false,
-        ) : PseudoClass {
-            override fun matches(element: Element, context: SelectorMatchContext): Boolean {
-                val index = context.siblingIndex(element, ofType, fromEnd) ?: return false
-                // Valid CSS integers can span Int's full range; subtraction
-                // and division must not overflow while testing an+b.
-                val diff = index.toLong() - b
-                return if (a == 0) diff == 0L else diff % a == 0L && diff / a >= 0L
-            }
-        }
-
-        /** Relative selector lists, anchored at the element owning `:has()`. */
-        class Has(val relatives: List<List<Compound>>) : PseudoClass {
-            override fun matches(element: Element, context: SelectorMatchContext) =
-                context.has(this, element)
-        }
-
-        /** `:not(simple-compound)` — no combinators or nested functions. */
-        class Not(private val inner: Simple) : PseudoClass {
-            override fun matches(element: Element, context: SelectorMatchContext) =
-                !inner.matches(element, context)
-        }
-    }
-
-    private class Simple(
-        val tag: String?,
-        val id: String?,
-        val classes: List<String>,
-        val attrs: List<AttrSelector>,
-        val pseudos: List<PseudoClass>,
-    ) {
-        fun matches(element: Element, context: SelectorMatchContext): Boolean {
-            if (!context.consume(1 + classes.size + attrs.size + pseudos.size)) return false
-            if (tag != null && tag != "*" && element.normalName() != tag) return false
-            if (id != null && element.id() != id) return false
-            if (classes.isNotEmpty()) {
-                val names = element.classNames()
-                if (classes.any { it !in names }) return false
-            }
-            if (attrs.any { !it.matches(element) }) return false
-            if (pseudos.any { !it.matches(element, context) }) return false
-            return true
-        }
-    }
-
-    /** [combinator] relates this compound to the PREVIOUS one in the chain. */
-    private class Compound(val combinator: Combinator, val simple: Simple)
-
-    /**
-     * Per-resolver work ceiling plus a linear-time cache for structural
-     * pseudo-classes. Without the cache, resolving `:nth-child` for every
-     * member of one large sibling list is quadratic even with a rule cap.
-     */
-    private class SelectorMatchContext(maxOperations: Int) {
-        private data class SiblingPosition(
-            val child: Int,
-            val ofType: Int,
-            val total: Int,
-            val totalOfType: Int,
-        )
-
-        private var remaining = maxOperations
-        private val positionsByParent =
-            IdentityHashMap<Element, IdentityHashMap<Element, SiblingPosition>>()
-        private val hasResults = IdentityHashMap<PseudoClass.Has, IdentityHashMap<Element, Boolean>>()
-
-        val exhausted: Boolean get() = remaining <= 0
-
-        fun consume(cost: Int = 1): Boolean {
-            if (cost <= 0) return true
-            if (remaining < cost) {
-                remaining = 0
-                return false
-            }
-            remaining -= cost
-            return true
-        }
-
-        fun clearCaches() {
-            positionsByParent.clear()
-            hasResults.clear()
-        }
-
-        fun siblingIndex(element: Element, ofType: Boolean, fromEnd: Boolean = false): Int? {
-            val parent = element.parent() ?: return 1
-            var positions = positionsByParent[parent]
-            if (positions == null) {
-                val children = parent.children()
-                if (!consume(children.size)) return null
-                positions = IdentityHashMap(children.size)
-                val typeCounts = HashMap<String, Int>()
-                children.forEach { child ->
-                    val tag = child.normalName()
-                    typeCounts[tag] = (typeCounts[tag] ?: 0) + 1
-                }
-                val typeIndices = HashMap<String, Int>()
-                children.forEachIndexed { index, child ->
-                    val tag = child.normalName()
-                    val typeIndex = (typeIndices[tag] ?: 0) + 1
-                    typeIndices[tag] = typeIndex
-                    positions[child] = SiblingPosition(
-                        index + 1, typeIndex, children.size, typeCounts.getValue(tag),
-                    )
-                }
-                positionsByParent[parent] = positions
-            }
-            val position = positions[element] ?: return null
-            val index = if (ofType) position.ofType else position.child
-            val total = if (ofType) position.totalOfType else position.total
-            return if (fromEnd) total - index + 1 else index
-        }
-
-        fun has(pseudo: PseudoClass.Has, element: Element): Boolean {
-            val results = hasResults.getOrPut(pseudo) { IdentityHashMap() }
-            results[element]?.let { return it }
-            val result = pseudo.relatives.any { chain ->
-                relativeMatches(chain, 0, element, IdentityHashMap())
-            }
-            results[element] = result
-            return result
-        }
-
-        /** Walk forward from the anchor without materializing its subtree. */
-        private fun relativeMatches(
-            chain: List<Compound>,
-            index: Int,
-            anchor: Element,
-            memo: IdentityHashMap<Element, ByteArray>,
-        ): Boolean {
-            if (!consume()) return false
-            val states = memo.getOrPut(anchor) { ByteArray(chain.size) }
-            when (states[index].toInt()) {
-                1 -> return false
-                2 -> return true
-            }
-            val compound = chain[index]
-            fun candidateMatches(candidate: Element): Boolean =
-                compound.simple.matches(candidate, this) &&
-                    (index == chain.lastIndex || relativeMatches(chain, index + 1, candidate, memo))
-
-            var candidate = when (compound.combinator) {
-                Combinator.CHILD, Combinator.DESCENDANT -> anchor.firstElementChild()
-                Combinator.NEXT_SIBLING, Combinator.SUBSEQUENT_SIBLING ->
-                    anchor.nextElementSibling()
-            }
-            var matched = false
-            while (candidate != null && consume()) {
-                if (candidateMatches(candidate)) {
-                    matched = true
-                    break
-                }
-                candidate = when (compound.combinator) {
-                    Combinator.NEXT_SIBLING -> null
-                    Combinator.CHILD, Combinator.SUBSEQUENT_SIBLING ->
-                        candidate.nextElementSibling()
-                    Combinator.DESCENDANT -> {
-                        val child = candidate.firstElementChild()
-                        if (child != null) child else {
-                            var cursor: Element? = candidate
-                            while (cursor !== anchor && cursor?.nextElementSibling() == null) {
-                                if (!consume()) break
-                                cursor = cursor?.parent()
-                            }
-                            if (cursor === anchor || exhausted) null else cursor?.nextElementSibling()
-                        }
+        fun encode(pools: List<RulePool>): SelectorProgram {
+            val blockIds = IdentityHashMap<List<Pair<String, Declaration>>, Int>()
+            val blocks = mutableListOf<List<Pair<String, Declaration>>>()
+            for (pool in pools) {
+                for (rule in pool.entries) {
+                    if (!blockIds.containsKey(rule.declarations)) {
+                        blockIds[rule.declarations] = blocks.size
+                        blocks += rule.declarations
                     }
                 }
             }
-            states[index] = if (matched) 2 else 1
-            return matched
+            val declarations = ArrayList<Pair<String, Declaration>>()
+            val propertyIds = mutableMapOf<String, Int>()
+            writer.int(blocks.size)
+            for (block in blocks) {
+                writer.int(block.size)
+                for ((property, declaration) in block) {
+                    writer.int(propertyIds.getOrPut(property) { propertyIds.size })
+                    writer.int(if (declaration.important) 1 else 0)
+                }
+                declarations.addAll(block)
+            }
+            for (pool in pools) {
+                writer.int(pool.size)
+                for (rule in pool.entries) {
+                    writer.int(blockIds.getValue(rule.declarations))
+                    writer.int(rule.selector.specificity)
+                    writer.int(rule.order)
+                    writer.raw(rule.selector.chain)
+                    absoluteKeys.addAll(rule.selector.absoluteKeys)
+                }
+            }
+            return SelectorProgram(writer.toByteArray(), absoluteKeys, propertyIds, declarations)
         }
     }
 
-    /**
-     * Rules are bucketed by the most selective cheap part of their subject.
-     * A chapter element therefore never scans an attacker-controlled global
-     * rule list just to reject every selector at its rightmost compound.
-     */
-    private class RuleIndex {
-        private val universal = mutableListOf<Rule>()
-        private val byTag = mutableMapOf<String, MutableList<Rule>>()
-        private val byClass = mutableMapOf<String, MutableList<Rule>>()
-        private val byId = mutableMapOf<String, MutableList<Rule>>()
-        var size: Int = 0
-            private set
-
-        fun add(rule: Rule) {
-            val subject = rule.chain.last().simple
-            val id = subject.id
-            val tag = subject.tag
-            val bucket = when {
-                id != null -> byId.getOrPut(id) { mutableListOf() }
-                subject.classes.isNotEmpty() ->
-                    byClass.getOrPut(subject.classes.first()) { mutableListOf() }
-                tag != null && tag != "*" ->
-                    byTag.getOrPut(tag) { mutableListOf() }
-                else -> universal
-            }
-            val cap = if (bucket === universal) MAX_UNIVERSAL_RULES else MAX_RULES_PER_INDEX_BUCKET
-            if (bucket.size >= cap) return
-            bucket.add(rule)
-            size++
+    private class InlineStyle(
+        val declarations: List<Pair<String, Declaration>>,
+        propertyIds: Map<String, Int>,
+    ) {
+        // IDs below zero are unique to a block and cannot collide with sheet property IDs.
+        val wire = declarationFields(declarations) { index, property ->
+            propertyIds[property] ?: (-1 - index)
         }
 
-        fun visitCandidates(element: Element, visitor: (Rule) -> Boolean) {
-            fun visit(bucket: List<Rule>?) {
-                if (bucket == null) return
-                for (rule in bucket) if (!visitor(rule)) return
-            }
-
-            for (rule in universal) if (!visitor(rule)) return
-            val tag = byTag[element.normalName()]
-            if (tag != null) for (rule in tag) if (!visitor(rule)) return
-            for (name in element.classNames()) {
-                val classes = byClass[name] ?: continue
-                for (rule in classes) if (!visitor(rule)) return
-            }
-            val id = element.id()
-            if (id.isNotEmpty()) visit(byId[id])
+        val winners by lazy(LazyThreadSafetyMode.NONE) {
+            if (declarations.isEmpty()) null
+            else cascadeDeclarations(RustCssMatch.cascadeInline(wire), emptyList(), declarations)
         }
     }
 
@@ -527,18 +284,111 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         val minHeightOffsetEm: Float = 0f,
         val centerContentVertically: Boolean = false,
         val borderBox: Boolean = false,
-    )
+        internal val nativeStyleId: Int = -1,
+    ) {
+        internal val encodedFontTypography: String = fontTypography.encode()
+
+        internal val standardBoxStyle: PublisherBoxStyle? by lazy(LazyThreadSafetyMode.NONE) {
+            buildPublisherBoxStyle(
+                rtl = direction == "rtl",
+                horizontalAlign = when {
+                    floatSide != null -> PublisherBoxAlign.START
+                    centeredBox -> PublisherBoxAlign.CENTER
+                    else -> PublisherBoxAlign.START
+                },
+            )
+        }
+
+        internal fun buildPublisherBoxStyle(
+            rtl: Boolean,
+            horizontalAlign: PublisherBoxAlign,
+        ): PublisherBoxStyle? = PublisherBoxStyle(
+            marginTopEm = marginTopEm,
+            marginRightEm = (marginEndEm + if (rtl) {
+                marginInlineStartEm
+            } else {
+                marginInlineEndEm
+            }).coerceIn(0f, MAX_BOX_INLINE_EM),
+            marginRightFrac = (marginEndFrac + if (rtl) {
+                marginInlineStartFrac
+            } else {
+                marginInlineEndFrac
+            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            marginBottomEm = marginBottomEm,
+            marginLeftEm = (marginStartEm + if (rtl) {
+                marginInlineEndEm
+            } else {
+                marginInlineStartEm
+            }).coerceIn(0f, MAX_BOX_INLINE_EM),
+            marginLeftFrac = (marginStartFrac + if (rtl) {
+                marginInlineEndFrac
+            } else {
+                marginInlineStartFrac
+            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            paddingTopEm = paddingTopEm,
+            paddingRightEm = (paddingEndEm + if (rtl) {
+                paddingInlineStartEm
+            } else {
+                paddingInlineEndEm
+            }).coerceIn(0f, MAX_BOX_INLINE_EM),
+            paddingRightFrac = (paddingEndFrac + if (rtl) {
+                paddingInlineStartFrac
+            } else {
+                paddingInlineEndFrac
+            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            paddingBottomEm = paddingBottomEm,
+            paddingLeftEm = (paddingStartEm + if (rtl) {
+                paddingInlineEndEm
+            } else {
+                paddingInlineStartEm
+            }).coerceIn(0f, MAX_BOX_INLINE_EM),
+            paddingLeftFrac = (paddingStartFrac + if (rtl) {
+                paddingInlineEndFrac
+            } else {
+                paddingInlineStartFrac
+            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
+            backgroundColorArgb = backgroundColorArgb
+                ?.takeIf { (it ushr 24) != 0 },
+            borderTop = borderTop,
+            borderRight = borderRight,
+            borderBottom = borderBottom,
+            borderLeft = borderLeft,
+            widthFrac = widthFrac,
+            widthEm = widthEm,
+            shrinkToFit = display == "inline-block" &&
+                widthEm == null && widthFrac == null,
+            hangingIndentEm = textIndentEm?.takeIf { it < 0f }?.let { -it } ?: 0f,
+            horizontalAlign = horizontalAlign,
+            breakInsideAvoid = breakInsideAvoid,
+            pageBreakBefore = pageBreakBefore,
+            pageBreakAfter = pageBreakAfter,
+            minHeightEm = minHeightEm,
+            maxWidthEm = maxWidthEm,
+            maxWidthFrac = maxWidthFrac,
+            minHeightViewportFrac = minHeightViewportFrac,
+            minHeightOffsetEm = minHeightOffsetEm,
+            centerContentVertically = centerContentVertically,
+            borderBox = borderBox,
+        ).takeUnless(PublisherBoxStyle::isDefault)
+    }
 
     private val mutableFontFaces = mutableListOf<FontFace>()
     private val fontFaceKeys = mutableSetOf<String>()
-    private val rules = RuleIndex()
-    private val firstLetterRules = RuleIndex()
-    private val beforeRules = RuleIndex()
-    private val afterRules = RuleIndex()
+    private val rules = RulePool(0)
+    private val firstLetterRules = RulePool(1)
+    private val beforeRules = RulePool(2)
+    private val afterRules = RulePool(3)
+    private val rulePools = listOf(rules, firstLetterRules, beforeRules, afterRules)
+    private val selectorProgram by lazy(LazyThreadSafetyMode.NONE) {
+        SelectorProgramWriter().encode(rulePools)
+    }
+    private var selectorSession: RustCssMatch? = null
+    private var computedSession: RustCssComputed? = null
+    private var computedSessionResolutions = 0
+    private var selectorBudget = MAX_SELECTOR_MATCH_OPERATIONS
     private var orderCounter = 0
     private var ruleCount = 0
     private var stylesheetDeclarationCount = 0
-    private val selectorMatchContext = SelectorMatchContext(MAX_SELECTOR_MATCH_OPERATIONS)
     private val cache = HashMap<Element, Computed>()
     /**
      * Resolution depends on the inherited style, tag defaults, presentational
@@ -562,18 +412,82 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         val declarations: List<Pair<String, Declaration>>,
     )
 
+    private class WinnerKey(
+        var ids: IntArray,
+        var offset: Int,
+        var hash: Int,
+    ) {
+        override fun hashCode(): Int = hash
+
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is WinnerKey) return false
+            val a = ids
+            val aOff = offset
+            val aLen = a.size - aOff
+            val b = other.ids
+            val bOff = other.offset
+            if (aLen != b.size - bOff) return false
+            for (i in 0 until aLen) {
+                if (a[aOff + i] != b[bOff + i]) return false
+            }
+            return true
+        }
+    }
+
+    private class CascadedDeclarations(
+        val map: Map<String, Declaration>,
+        val pairs: List<Pair<String, Declaration>>,
+    ) {
+        companion object {
+            val EMPTY = CascadedDeclarations(emptyMap(), emptyList())
+        }
+    }
+
     private val sharedComputed = HashMap<SharedComputedKey, Computed>()
+    private val cascadeWinnerCache = HashMap<WinnerKey, CascadedDeclarations>()
+    private val winnerProbe = WinnerKey(EMPTY_INT_ARRAY, 0, 0)
+    private val inlineDeclarations = HashMap<String, InlineStyle>()
+    private var inlineCacheKeyBytes = 0
     private val parsingNamespaces = mutableMapOf<String, String>()
     private val sourceSheets = sheets.toList()
     private var darkImageResolver: CssResolver? = null
     private val simpleMaxWidthBreakpoints = linkedSetOf<Float>()
     private val responsiveResolvers = mutableMapOf<Float, CssResolver>()
 
+    internal val hasDisplayRules: Boolean
+    internal val hasPageBreakBeforeRules: Boolean
+    private val hasFlexCenteringRules: Boolean
+
     init {
         for (sheet in sheets) {
+            if (!canAcceptStylesheetRules()) break
             parsingNamespaces.clear()
-            parseSheetText(sheet.text, sheet.baseDir)
+            addSheetRules(sheet.syntax, sheet.baseDir)
         }
+        var displayRules = false
+        var pageBreakBeforeRules = false
+        var flexCenteringRules = false
+        for (rule in rules.entries) {
+            for ((property, _) in rule.declarations) {
+                if (!displayRules && (property == "display" || property.startsWith("--"))) {
+                    displayRules = true
+                }
+                if (!pageBreakBeforeRules &&
+                    (property == "page-break-before" || property == "break-before" || property.startsWith("--"))
+                ) {
+                    pageBreakBeforeRules = true
+                }
+                if (!flexCenteringRules && (property == "align-items" || property.startsWith("--"))) {
+                    flexCenteringRules = true
+                }
+                if (displayRules && pageBreakBeforeRules && flexCenteringRules) break
+            }
+            if (displayRules && pageBreakBeforeRules && flexCenteringRules) break
+        }
+        hasDisplayRules = displayRules
+        hasPageBreakBeforeRules = pageBreakBeforeRules
+        hasFlexCenteringRules = flexCenteringRules
     }
 
     /** Every `@font-face` declared by the sheets (for embedded fonts). */
@@ -607,36 +521,104 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
     /**
      * Drops per-element computed styles. Chapters are parsed one after
      * another with a shared resolver; clearing between chapters keeps the
-     * cache from pinning every DOM node of the whole book in memory.
+     * cache from pinning every DOM node of the whole book in memory while
+     * retaining DOM-free shared computed styles across chapters.
      */
     fun clearCache() {
         cache.clear()
-        sharedComputed.clear()
-        // Structural selectors retain DOM elements too. Clear all chapter
-        // caches while preserving the resolver's whole-book work ceiling.
-        selectorMatchContext.clearCaches()
+        // Release the chapter snapshot and its structural selector memo.
+        // The resolver keeps the remaining budget and bounded shared styles across chapters.
+        selectorSession?.close()
+        selectorSession = null
+        if (sharedComputed.size >= MAX_SHARED_COMPUTED_STYLES ||
+            computedSessionResolutions >= MAX_SHARED_COMPUTED_STYLES
+        ) {
+            sharedComputed.clear()
+            cascadeWinnerCache.clear()
+            computedSession?.close()
+            computedSession = null
+            computedSessionResolutions = 0
+        }
         darkImageResolver?.clearCache()
         responsiveResolvers.values.forEach(CssResolver::clearCache)
     }
 
+    override fun close() {
+        clearCache()
+        sharedComputed.clear()
+        cascadeWinnerCache.clear()
+        computedSession?.close()
+        computedSession = null
+        computedSessionResolutions = 0
+        darkImageResolver?.close()
+        responsiveResolvers.values.forEach(CssResolver::close)
+    }
+
+    internal val sharedComputedStyleCount: Int get() = sharedComputed.size
+    internal val cascadeWinnerCacheSize: Int get() = cascadeWinnerCache.size
+    internal val hasActiveComputedSession: Boolean get() = computedSession != null
+    internal val hasActiveSelectorSession: Boolean get() = selectorSession != null
+    internal val cachedElementCount: Int get() = cache.size
+
+    private fun preindexedElement(element: Element): RustChapterMarkup.PreindexedElement? {
+        val pre = element as? RustChapterMarkup.PreindexedElement ?: return null
+        val doc = pre.owner ?: return null
+        return if (!doc.treeMutated) pre else null
+    }
+
+    private fun styleAttrOf(element: Element): String {
+        val pre = preindexedElement(element)
+        if (pre != null) {
+            val doc = pre.owner!!
+            if ((doc.mutatedAttrs and RustChapterMarkup.MUTATED_STYLE) == 0 &&
+                !pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_STYLE)
+            ) {
+                return ""
+            }
+        }
+        return element.attr("style")
+    }
+
+    private fun dirAttrOf(element: Element): String {
+        val pre = preindexedElement(element)
+        if (pre != null) {
+            val doc = pre.owner!!
+            if ((doc.mutatedAttrs and RustChapterMarkup.MUTATED_OTHER) == 0 &&
+                !pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_DIR)
+            ) {
+                return ""
+            }
+        }
+        return element.attr("dir")
+    }
+
+    private fun hasPresentationalAttrs(element: Element): Boolean {
+        val pre = preindexedElement(element) ?: return true
+        val doc = pre.owner!!
+        return (doc.mutatedAttrs and RustChapterMarkup.MUTATED_PRESENTATIONAL) != 0 ||
+            pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_PRESENTATIONAL)
+    }
+
     private fun resolveShared(element: Element, parent: Computed?): Computed {
-        val declared = declarationsFor(element)
-        val direction = element.attr("dir")
+        val cascaded = cascadedFor(element)
+        val declared = cascaded.map
+        val direction = dirAttrOf(element)
         // An auto direction can inspect this element's actual text while
         // resolving logical margins/padding. Text is deliberately absent
         // from the shared key, so keep that path element-specific.
         if (parent?.direction == "auto" || direction.trim().equals("auto", ignoreCase = true)) {
             return resolve(element, parent, declared)
         }
+        val hasPresentational = hasPresentationalAttrs(element)
         val key = SharedComputedKey(
             parent = parent,
             tag = element.normalName(),
-            align = element.attr("align"),
+            align = if (hasPresentational) element.attr("align") else "",
             direction = direction,
-            foreground = element.attr("color"),
-            bodyForeground = element.attr("text"),
-            background = element.attr("bgcolor"),
-            declarations = declared.map { (property, declaration) -> property to declaration },
+            foreground = if (hasPresentational) element.attr("color") else "",
+            bodyForeground = if (hasPresentational) element.attr("text") else "",
+            background = if (hasPresentational) element.attr("bgcolor") else "",
+            declarations = cascaded.pairs,
         )
         sharedComputed[key]?.let { return it }
         return resolve(element, parent, declared).also { resolved ->
@@ -679,80 +661,21 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
     }
 
     private fun publisherBoxStyle(element: Element, value: Computed): PublisherBoxStyle? {
+        val horizontalAlign = publisherHorizontalAlign(element, value)
+        val defaultAlign = when {
+            value.floatSide != null -> PublisherBoxAlign.START
+            value.centeredBox -> PublisherBoxAlign.CENTER
+            else -> PublisherBoxAlign.START
+        }
+        if (value.direction != "auto" && horizontalAlign == defaultAlign) {
+            return value.standardBoxStyle
+        }
         val rtl = when (value.direction) {
             "rtl" -> true
             "auto" -> firstStrongRtl(element.text()) ?: false
             else -> false
         }
-        val style = PublisherBoxStyle(
-            marginTopEm = value.marginTopEm,
-            marginRightEm = (value.marginEndEm + if (rtl) {
-                value.marginInlineStartEm
-            } else {
-                value.marginInlineEndEm
-            }).coerceIn(0f, MAX_BOX_INLINE_EM),
-            marginRightFrac = (value.marginEndFrac + if (rtl) {
-                value.marginInlineStartFrac
-            } else {
-                value.marginInlineEndFrac
-            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            marginBottomEm = value.marginBottomEm,
-            marginLeftEm = (value.marginStartEm + if (rtl) {
-                value.marginInlineEndEm
-            } else {
-                value.marginInlineStartEm
-            }).coerceIn(0f, MAX_BOX_INLINE_EM),
-            marginLeftFrac = (value.marginStartFrac + if (rtl) {
-                value.marginInlineEndFrac
-            } else {
-                value.marginInlineStartFrac
-            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            paddingTopEm = value.paddingTopEm,
-            paddingRightEm = (value.paddingEndEm + if (rtl) {
-                value.paddingInlineStartEm
-            } else {
-                value.paddingInlineEndEm
-            }).coerceIn(0f, MAX_BOX_INLINE_EM),
-            paddingRightFrac = (value.paddingEndFrac + if (rtl) {
-                value.paddingInlineStartFrac
-            } else {
-                value.paddingInlineEndFrac
-            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            paddingBottomEm = value.paddingBottomEm,
-            paddingLeftEm = (value.paddingStartEm + if (rtl) {
-                value.paddingInlineEndEm
-            } else {
-                value.paddingInlineStartEm
-            }).coerceIn(0f, MAX_BOX_INLINE_EM),
-            paddingLeftFrac = (value.paddingStartFrac + if (rtl) {
-                value.paddingInlineEndFrac
-            } else {
-                value.paddingInlineStartFrac
-            }).coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            backgroundColorArgb = value.backgroundColorArgb
-                ?.takeIf { (it ushr 24) != 0 },
-            borderTop = value.borderTop,
-            borderRight = value.borderRight,
-            borderBottom = value.borderBottom,
-            borderLeft = value.borderLeft,
-            widthFrac = value.widthFrac,
-            widthEm = value.widthEm,
-            shrinkToFit = value.display == "inline-block" &&
-                value.widthEm == null && value.widthFrac == null,
-            hangingIndentEm = value.textIndentEm?.takeIf { it < 0f }?.let { -it } ?: 0f,
-            horizontalAlign = publisherHorizontalAlign(element, value),
-            breakInsideAvoid = value.breakInsideAvoid,
-            pageBreakBefore = value.pageBreakBefore,
-            pageBreakAfter = value.pageBreakAfter,
-            minHeightEm = value.minHeightEm,
-            maxWidthEm = value.maxWidthEm,
-            maxWidthFrac = value.maxWidthFrac,
-            minHeightViewportFrac = value.minHeightViewportFrac,
-            minHeightOffsetEm = value.minHeightOffsetEm,
-            centerContentVertically = value.centerContentVertically,
-            borderBox = value.borderBox,
-        )
-        return style.takeUnless(PublisherBoxStyle::isDefault)
+        return value.buildPublisherBoxStyle(rtl = rtl, horizontalAlign = horizontalAlign)
     }
 
     /**
@@ -772,22 +695,25 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
     ): PublisherBoxAlign {
         if (value.floatSide != null) return PublisherBoxAlign.START
         if (value.centeredBox) return PublisherBoxAlign.CENTER
-        val container = element.parent()
+        val parent = element.parent()
             ?.takeIf { it.normalName() != "#root" }
-            ?.let(::computed)
             ?: return PublisherBoxAlign.START
+        val isBlockAligned = (element.normalName() !in INLINE_REPLACED_TAGS && value.display != "inline-block") ||
+            value.display in BLOCK_LEVEL_DISPLAY_VALUES
+        if (isBlockAligned && !hasFlexCenteringRules && styleAttrOf(parent).isEmpty()) {
+            return PublisherBoxAlign.START
+        }
+        val container = computed(parent)
         if (container.centerContentVertically && container.alignItems == "center") {
             return PublisherBoxAlign.CENTER
         }
-        if ((element.normalName() !in INLINE_REPLACED_TAGS && value.display != "inline-block") ||
-            value.display in BLOCK_LEVEL_DISPLAY_VALUES
-        ) {
+        if (isBlockAligned) {
             return PublisherBoxAlign.START
         }
 
         val containerRtl = when (container.direction) {
             "rtl" -> true
-            "auto" -> firstStrongRtl(element.parent()?.text().orEmpty()) ?: false
+            "auto" -> firstStrongRtl(parent.text()) ?: false
             else -> false
         }
         return when (container.textAlign) {
@@ -850,7 +776,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         for ((property, declaration) in merged) {
             val value = declaration.value.trim().lowercase()
             when (property) {
-                "font-size" -> fontSizeFactor(value, 1f)?.let { scale = it }
+                "font-size" -> RustCssValues.fontSize(value, 1f)?.let { scale = it }
                 "font-weight" -> cssFontWeight(value, inherited.fontWeight)?.let { fontWeight = it }
 
                 "font-style" -> when {
@@ -916,24 +842,12 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         // cascaded size before applying the drop-cap-specific 4em ceiling.
         val declaration = declarationsFor(element)["font-size"]
         val declaredAbsolute = declaration?.let {
-            val original = it.value
-            val raw = if ("var(" in original) {
-                substituteVars(original, own.customProps)
-            } else {
-                original
-            } ?: return@let null
-            val normalized = raw.trim().lowercase()
-            val value = it.fontPart?.let { part ->
-                fontShorthandValues(normalized)?.value(part)
-            } ?: if (it.fontPart != null) {
-                return@let null
-            } else {
-                normalized
-            }
+            val variables = RustCssValues.variables(own.customProps, mapOf("font-size" to it))
+            val value = resolvedDeclarationValue(it, variables) ?: return@let null
             when (value) {
                 "inherit", "unset" -> baseSize
                 "initial" -> 1f
-                else -> fontSizeFactor(value, baseSize)
+                else -> RustCssValues.fontSize(value, baseSize)
             }
         }
         val scale = ((declaredAbsolute ?: own.fontSizeEm) / baseSize).coerceIn(1f, 4f)
@@ -1078,118 +992,85 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         this in '0'..'9' || this in 'a'..'f' || this in 'A'..'F'
 
     /** Declarations that directly apply to [element], cascade-ordered. */
-    private fun declarationsFor(element: Element): Map<String, Declaration> {
-        val inline = element.attr("style")
+    private fun declarationsFor(element: Element): Map<String, Declaration> =
+        cascadedFor(element).map
+
+    private fun cascadedFor(element: Element): CascadedDeclarations {
+        val inline = styleAttrOf(element)
             .takeIf { it.isNotEmpty() }
-            ?.let { parseDeclarations(it, stylesheet = false) }
-        return cascade(rules, element, inline) ?: emptyMap()
+            ?.let(::declarationsForInlineStyle)
+        if (inline == null) {
+            if (rules.size == 0 || selectorBudget <= 0) return CascadedDeclarations.EMPTY
+            val winners = matchWinners(rules, element, null)
+            if (winners.size == 1) return CascadedDeclarations.EMPTY
+            var hash = 1
+            for (index in 1 until winners.size) {
+                hash = 31 * hash + winners[index]
+            }
+            winnerProbe.ids = winners
+            winnerProbe.offset = 1
+            winnerProbe.hash = hash
+            val cached = cascadeWinnerCache[winnerProbe]
+            winnerProbe.ids = EMPTY_INT_ARRAY
+            if (cached != null) return cached
+            val map = cascadeDeclarations(winners, selectorProgram.declarations, emptyList())
+                ?: return CascadedDeclarations.EMPTY
+            val pairs = map.map { (property, declaration) -> property to declaration }
+            val result = CascadedDeclarations(map, pairs)
+            if (cascadeWinnerCache.size < MAX_SHARED_COMPUTED_STYLES) {
+                cascadeWinnerCache[WinnerKey(winners, 1, hash)] = result
+            }
+            return result
+        }
+        val map = cascade(rules, element, inline) ?: emptyMap()
+        val pairs = if (map.isEmpty()) emptyList() else map.map { (property, declaration) -> property to declaration }
+        return CascadedDeclarations(map, pairs)
     }
 
-    /**
-     * CSS 2.1 author-level cascade over the matching rules: normal sheet
-     * declarations → normal inline → important sheet → important inline,
-     * each layer sorted by (specificity, source order).
-     */
+    private fun declarationsForInlineStyle(style: String): InlineStyle {
+        inlineDeclarations[style]?.let { return it }
+        val declarations = compileDeclarations(RustCssSyntax.inline(style), stylesheet = false)
+        val propertyIds = if (rules.size == 0) emptyMap() else selectorProgram.propertyIds
+        val inline = InlineStyle(declarations, propertyIds)
+        // Use the maximum UTF-16 storage of a Java String without allocating
+        // an encoded copy just to check cache admission.
+        val availableBytes = minOf(MAX_INLINE_CACHE_KEY_BYTES, MAX_INLINE_CACHE_BYTES - inlineCacheKeyBytes)
+        if (inlineDeclarations.size < MAX_INLINE_CACHE_ENTRIES && style.length <= availableBytes / Char.SIZE_BYTES) {
+            inlineDeclarations[style] = inline
+            inlineCacheKeyBytes += style.length * Char.SIZE_BYTES
+        }
+        return inline
+    }
+
+    private fun matchWinners(
+        pool: RulePool,
+        element: Element,
+        inlineWire: IntArray?,
+    ): IntArray {
+        val program = selectorProgram
+        var session = selectorSession
+        var node = session?.nodeId(element)
+        if (session == null || node == null) {
+            selectorSession = null
+            session?.close()
+            session = RustCssMatch.open(element, program.rules, program.absoluteKeys)
+            selectorSession = session
+            node = checkNotNull(session.nodeId(element))
+        }
+        val winners = session.cascade(pool.id, node, selectorBudget, inlineWire)
+        selectorBudget = winners[0]
+        return winners
+    }
+
+    /** Matches rules and returns their winning declarations in application order. */
     private fun cascade(
-        pool: RuleIndex,
+        pool: RulePool,
         element: Element,
-        inline: Map<String, Declaration>?,
+        inline: InlineStyle?,
     ): Map<String, Declaration>? {
-        val matched = ArrayList<Rule>(4)
-        pool.visitCandidates(element) { rule ->
-            if (selectorMatchContext.exhausted) return@visitCandidates false
-            if (matches(rule.chain, rule.chain.lastIndex, element)) matched.add(rule)
-            !selectorMatchContext.exhausted
-        }
-        if (matched.isEmpty() && inline.isNullOrEmpty()) return null
-        matched.sortWith(compareBy({ it.specificity }, { it.order }))
-        val merged = LinkedHashMap<String, Declaration>()
-        fun putInCascadeOrder(property: String, declaration: Declaration) {
-            // LinkedHashMap replacement keeps the old insertion slot. Moving
-            // the winner lets equivalent logical/physical properties be
-            // resolved in their actual final cascade order later.
-            merged.remove(property)
-            merged[property] = declaration
-        }
-        for (rule in matched) {
-            for ((property, decl) in rule.declarations) {
-                if (!decl.important) putInCascadeOrder(property, decl)
-            }
-        }
-        inline?.forEach { (property, decl) ->
-            if (!decl.important) putInCascadeOrder(property, decl)
-        }
-        for (rule in matched) {
-            for ((property, decl) in rule.declarations) {
-                if (decl.important) putInCascadeOrder(property, decl)
-            }
-        }
-        inline?.forEach { (property, decl) ->
-            if (decl.important) putInCascadeOrder(property, decl)
-        }
-        return merged
-    }
-
-    /** Selector matching memoizes every (element, compound) state. */
-    private fun matches(chain: List<Compound>, index: Int, element: Element): Boolean =
-        matches(chain, index, element, IdentityHashMap())
-
-    private fun matches(
-        chain: List<Compound>,
-        index: Int,
-        element: Element,
-        memo: IdentityHashMap<Element, ByteArray>,
-    ): Boolean {
-        if (!selectorMatchContext.consume()) return false
-        val states = memo.getOrPut(element) { ByteArray(chain.size) }
-        when (states[index].toInt()) {
-            1 -> return false
-            2 -> return true
-        }
-        if (!chain[index].simple.matches(element, selectorMatchContext)) {
-            states[index] = 1
-            return false
-        }
-        val matched = if (index == 0) {
-            true
-        } else when (chain[index].combinator) {
-            Combinator.CHILD -> {
-                val parent = element.parent()
-                parent != null && parent.normalName() != "#root" &&
-                    matches(chain, index - 1, parent, memo)
-            }
-
-            Combinator.DESCENDANT -> {
-                var ancestor = element.parent()
-                while (ancestor != null && ancestor.normalName() != "#root") {
-                    if (matches(chain, index - 1, ancestor, memo)) {
-                        states[index] = 2
-                        return true
-                    }
-                    ancestor = ancestor.parent()
-                }
-                false
-            }
-
-            Combinator.NEXT_SIBLING -> {
-                val sibling = element.previousElementSibling()
-                sibling != null && matches(chain, index - 1, sibling, memo)
-            }
-
-            Combinator.SUBSEQUENT_SIBLING -> {
-                var sibling = element.previousElementSibling()
-                while (sibling != null) {
-                    if (matches(chain, index - 1, sibling, memo)) {
-                        states[index] = 2
-                        return true
-                    }
-                    sibling = sibling.previousElementSibling()
-                }
-                false
-            }
-        }
-        states[index] = if (matched) 2 else 1
-        return matched
+        if (pool.size == 0 || selectorBudget <= 0) return inline?.winners
+        val winners = matchWinners(pool, element, inline?.wire)
+        return cascadeDeclarations(winners, selectorProgram.declarations, inline?.declarations.orEmpty())
     }
 
     // ------------------------------------------------------------- resolve
@@ -1200,854 +1081,25 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         declared: Map<String, Declaration>? = null,
         pseudoElement: Boolean = false,
     ): Computed {
-        val decl = declared ?: declarationsFor(element)
-
-        // Custom properties cascade like inherited values; own declarations
-        // shadow the parent's. Their values may reference other vars.
-        val parentProps = parent?.customProps ?: emptyMap()
-        var customProps = parentProps
-        if (decl.keys.any { it.startsWith("--") }) {
-            val own = LinkedHashMap(parentProps)
-            for ((property, declaration) in decl) {
-                if (property.startsWith("--")) {
-                    val value = declaration.value
-                    own[property] = substituteVars(value, parentProps) ?: value
-                }
-            }
-            customProps = own
+        val declarations = declared ?: declarationsFor(element)
+        val session = computedSession ?: RustCssComputed().also {
+            computedSession = it
+            computedSessionResolutions = 0
         }
-
-        var italic = parent?.italic
-        var fontWeight = parent?.fontWeight
-        val inheritedFontSize = parent?.fontSizeEm ?: 1f
-        val tagFontScale = when (if (pseudoElement) "" else element.normalName()) {
-            "h1" -> HeadingDefaults.scale(1)
-            "h2" -> HeadingDefaults.scale(2)
-            "h3" -> HeadingDefaults.scale(3)
-            "h4" -> HeadingDefaults.scale(4)
-            "h5" -> HeadingDefaults.scale(5)
-            "h6" -> HeadingDefaults.scale(6)
-            "small" -> 0.85f
-            "big" -> 1.2f
-            "rt" -> 0.5f
-            else -> 1f
-        }
-        // Author CSS overrides the UA/tag font-size instead of multiplying
-        // on top of it. Resolve it against the inherited size before other
-        // properties, since CSS computed values do not depend on declaration
-        // order (`line-height` must see the final font size either way).
-        val declaredFontSize = decl["font-size"]?.let { declaration ->
-            val value = resolvedDeclarationValue(declaration, customProps) ?: return@let null
-            when (value) {
-                "inherit", "unset" -> inheritedFontSize
-                "initial" -> 1f
-                else -> fontSizeFactor(value, inheritedFontSize)
-            }
-        }
-        val fontSize = (declaredFontSize ?: inheritedFontSize * tagFontScale)
-            .coerceIn(0.5f, 3f)
-        // Legacy book HTML uses align= and <center>. Resolve these at the
-        // owning element, before its CSS, so inherited body alignment cannot
-        // erase a heading's own presentational hint. Table/image align= has
-        // different box semantics and stays with the corresponding mapper.
-        val alignmentHint = when (if (pseudoElement) "" else element.normalName()) {
-            "div", "p", "h1", "h2", "h3", "h4", "h5", "h6", "center" ->
-                element.attr("align").trim().lowercase().let {
-                    when (it) {
-                        "left", "right", "center", "justify" -> it
-                        else -> null
-                    }
-                }
-            else -> null
-        }
-        var align = alignmentHint
-            ?: if (!pseudoElement && element.normalName() == "center") "center" else parent?.textAlign
-        var indent = parent?.textIndentEm
-        var hidden = parent?.hidden ?: false
-        var display: String? = null
-        var underline = parent?.underline ?: false
-        var strike = parent?.strike ?: false
-        var monospace = parent?.monospace ?: false
-        var fontFamilyName = parent?.fontFamilyName
-        var fontVariantCaps = parent?.fontVariantCaps
-        var fontVariantNumeric = parent?.fontVariantNumeric
-        var explicitFontFeatures = parent?.explicitFontFeatures
-        var fontKerning = parent?.fontKerning
-        var fontVariantLigatures = parent?.fontVariantLigatures
-        var variationAxes = parent?.fontTypography?.variationAxes
-        var stretchPercent = parent?.fontTypography?.stretchPercent
-        var opticalSizing = parent?.fontTypography?.opticalSizing
-        var textTransform = parent?.textTransform
-        var visibilityHidden = parent?.visibilityHidden ?: false
-        var lineHeightNumber = parent?.lineHeightNumber
-        var lineHeightAbsoluteEm = parent?.lineHeightAbsoluteEm
-        var lineHeightMult = safeLineHeightMultiplier(
-            when {
-                lineHeightNumber != null -> lineHeightNumber
-                lineHeightAbsoluteEm != null -> lineHeightAbsoluteEm / fontSize
-                else -> null
-            },
-        )
-        var hyphensAuto = parent?.hyphensAuto
-        var direction = parent?.direction
-        // `dir` is a presentational hint: authored CSS still wins below, but
-        // descendants must inherit it even when no CSS direction exists.
-        when (element.attr("dir").trim().lowercase()) {
-            "ltr", "rtl", "auto" -> direction = element.attr("dir").trim().lowercase()
-        }
-        when (declarationValue(decl["direction"], customProps)?.trim()?.lowercase()) {
-            "ltr", "rtl" -> direction = declarationValue(decl["direction"], customProps)
-                ?.trim()?.lowercase()
-            "initial", "revert", "revert-layer" -> direction = "ltr"
-            "inherit", "unset" -> direction = parent?.direction
-        }
-        val hasLogicalBoxDeclaration = decl.keys.any {
+        val mayUseAutomaticDirection = parent?.direction == "auto" || dirAttrOf(element).trim().equals("auto", true)
+        val hasLogicalInsets = declarations.keys.any {
             it == "margin-inline-start" || it == "margin-inline-end" ||
                 it == "padding-inline-start" || it == "padding-inline-end"
         }
-        val rtlLogicalAxis = when (direction) {
-            "rtl" -> true
-            "auto" -> hasLogicalBoxDeclaration && (firstStrongRtl(element.text()) ?: false)
-            else -> false
-        }
-        var unicodeBidi: String? = null
-        var listStyleType = parent?.listStyleType
-        val declaredForeground = declarationValue(decl["color"], customProps)
-            ?: element.attr("color").takeIf { !pseudoElement && it.isNotBlank() }
-            ?: element.attr("text").takeIf {
-                !pseudoElement && element.normalName() == "body" && it.isNotBlank()
-            }
-        val foregroundColorArgb = declaredForeground?.let {
-            resolveForeground(it, parent?.foregroundColorArgb)
-        } ?: parent?.foregroundColorArgb
-        val declaredBackground = decl["background-color"]?.let {
-            resolvedDeclarationValue(it, customProps)
-        }
-            ?: element.attr("bgcolor").takeIf { !pseudoElement && it.isNotBlank() }
-        val backgroundColorArgb = declaredBackground?.let {
-            resolveBackground(it, parent?.backgroundColorArgb, foregroundColorArgb)
-        }
-        val backgroundUsesCurrentColor = when (declaredBackground) {
-            "currentcolor" -> foregroundColorArgb == null
-            "inherit" -> parent?.backgroundUsesCurrentColor ?: false
-            else -> false
-        }
-        var superScript = false
-        var subScript = false
-        var marginStartEm = 0f
-        var marginStartFrac = 0f
-        var marginEndEm = 0f
-        var marginEndFrac = 0f
-        var marginInlineStartEm = 0f
-        var marginInlineStartFrac = 0f
-        var marginInlineEndEm = 0f
-        var marginInlineEndFrac = 0f
-        var paddingStartEm = 0f
-        var paddingStartFrac = 0f
-        var paddingEndEm = 0f
-        var paddingEndFrac = 0f
-        var paddingInlineStartEm = 0f
-        var paddingInlineStartFrac = 0f
-        var paddingInlineEndEm = 0f
-        var paddingInlineEndFrac = 0f
-        var marginTopEm = 0f
-        var marginBottomEm = 0f
-        var paddingTopEm = 0f
-        var paddingBottomEm = 0f
-        var autoLeft = false
-        var autoRight = false
-        var pageBreakBefore = false
-        var pageBreakAfter = false
-        var breakInsideAvoid = false
-        var floatSide: String? = null
-        var clear: String? = null
-        var widthFrac: Float? = null
-        var widthEm: Float? = null
-        var heightEm: Float? = null
-        var minHeightEm: Float? = null
-        var minHeightViewportFrac: Float? = null
-        var minHeightOffsetEm = 0f
-        var borderBox = false
-        var maxWidthFrac: Float? = null
-        var maxWidthEm: Float? = null
-        var maxHeightEm: Float? = null
-        var maxHeightViewportFrac: Float? = null
-        var flexDirection = "row"
-        var flexWrap = "nowrap"
-        var justifyContent: String? = null
-        var alignItems: String? = null
-        var imageInvert = false
-        val currentColor = foregroundColorArgb ?: BLACK_ARGB
-        val borderTop = MutableBorder(currentColor, foregroundColorArgb == null)
-        val borderRight = MutableBorder(currentColor, foregroundColorArgb == null)
-        val borderBottom = MutableBorder(currentColor, foregroundColorArgb == null)
-        val borderLeft = MutableBorder(currentColor, foregroundColorArgb == null)
-        val paddingSpecified = decl.keys.any { it.startsWith("padding-") }
-        val borderSpecified = decl.keys.any { property ->
-            property.startsWith("border-top-") || property.startsWith("border-right-") ||
-                property.startsWith("border-bottom-") || property.startsWith("border-left-")
-        }
-        val marginTopSpecified = "margin-top" in decl
-        val marginBottomSpecified = "margin-bottom" in decl
-
-        fun applyBorder(
-            border: MutableBorder,
-            inherited: PublisherBorderSide?,
-            part: BorderPart,
-            value: String,
-        ) {
-            when (part) {
-                BorderPart.WIDTH -> borderWidthEm(
-                    value,
-                    inherited?.widthEm ?: MEDIUM_BORDER_EM,
-                    emScale = fontSize,
-                )?.let { border.widthEm = it }
-                BorderPart.STYLE -> borderStyle(
-                    value,
-                    inherited?.style ?: PublisherBorderStyle.NONE,
-                )?.let { border.style = it }
-                BorderPart.COLOR -> borderColor(
-                    value,
-                    inherited?.colorArgb ?: currentColor,
-                    currentColor,
-                )?.let {
-                    border.colorArgb = it
-                    border.usesCurrentColor = when (value) {
-                        "inherit" -> inherited?.usesCurrentColor ?: (foregroundColorArgb == null)
-                        "currentcolor", "initial", "unset", "revert", "revert-layer" ->
-                            foregroundColorArgb == null
-                        else -> false
-                    }
-                }
-            }
-        }
-
-        // Tag defaults, so CSS-less inline tags keep working through here.
-        when (if (pseudoElement) "" else element.normalName()) {
-            "i", "em", "dfn", "var", "cite" -> italic = true
-            "b", "strong" -> fontWeight = 700
-            "u", "ins" -> underline = true
-            "s", "strike", "del" -> strike = true
-            "sup" -> superScript = true
-            "sub" -> subScript = true
-            "code", "kbd", "samp", "tt", "pre" -> monospace = true
-            "h1", "h2", "h3", "h4", "h5", "h6" -> fontWeight = 700
-        }
-
-        val semanticWeight = fontWeight ?: 400
-        val semanticItalic = italic ?: false
-        for ((property, declaration) in decl) {
-            if (property.startsWith("--")) continue
-            val value = resolvedDeclarationValue(
-                declaration, customProps, preserveCase = property == "font-variation-settings" || property == "font-feature-settings",
-            ) ?: continue
-            when (property) {
-                "font-style" -> when {
-                    value.startsWith("italic") || value.startsWith("oblique") -> italic = true
-                    value == "normal" || value == "initial" -> italic = false
-                    value == "inherit" || value == "unset" -> italic = parent?.italic ?: false
-                    value == "revert" || value == "revert-layer" -> italic = semanticItalic
-                }
-
-                "font-weight" -> cssFontWeight(value, parent?.fontWeight, semanticWeight)?.let { fontWeight = it }
-
-                // Resolved above so declaration order cannot affect it.
-                "font-size" -> Unit
-
-                "font-variant", "font-variant-caps" -> when (value) {
-                    "inherit", "unset" -> {
-                        fontVariantCaps = parent?.fontVariantCaps
-                        if (property == "font-variant") {
-                            fontVariantNumeric = parent?.fontVariantNumeric
-                            fontVariantLigatures = parent?.fontVariantLigatures
-                        }
-                    }
-                    "normal", "initial", "revert", "revert-layer" -> {
-                        fontVariantCaps = null
-                        if (property == "font-variant") {
-                            fontVariantNumeric = null
-                            fontVariantLigatures = null
-                        }
-                    }
-                    "small-caps", "all-small-caps", "petite-caps", "all-petite-caps", "unicase", "titling-caps" ->
-                        {
-                            fontVariantCaps = value
-                            if (property == "font-variant") {
-                                fontVariantNumeric = null
-                                fontVariantLigatures = null
-                            }
-                        }
-                    else -> if (property == "font-variant") {
-                        val tokens = value.split(whitespaceRegex)
-                        fontVariantCaps = tokens.firstOrNull { it in FONT_VARIANT_CAPS_FEATURES }
-                        fontVariantNumeric = tokens.filter { it in FONT_VARIANT_NUMERIC_FEATURES }
-                            .joinToString(" ").takeIf { it.isNotEmpty() }
-                        fontVariantLigatures = tokens.filter { it in FONT_VARIANT_LIGATURE_FEATURES || it == "none" }
-                            .joinToString(" ").takeIf { it.isNotEmpty() }
-                    }
-                }
-
-                "font-variant-numeric" -> when (value) {
-                    "inherit", "unset" -> fontVariantNumeric = parent?.fontVariantNumeric
-                    "normal", "initial", "revert", "revert-layer" -> fontVariantNumeric = null
-                    else -> if (value.split(whitespaceRegex).all { it in FONT_VARIANT_NUMERIC_FEATURES }) {
-                        fontVariantNumeric = value
-                    }
-                }
-
-                "font-variation-settings" -> when (value.lowercase()) {
-                    "inherit", "unset", "revert", "revert-layer" -> variationAxes = parent?.fontTypography?.variationAxes
-                    "normal", "initial" -> variationAxes = emptyMap()
-                    else -> parseFontVariationSettings(value)?.let { variationAxes = it }
-                }
-
-                "font-stretch", "font-width" -> when (value) {
-                    "inherit", "unset", "revert", "revert-layer" -> stretchPercent = parent?.fontTypography?.stretchPercent
-                    "initial" -> stretchPercent = 100f
-                    else -> parseFontStretch(value)?.let { stretchPercent = it }
-                }
-
-                "font-optical-sizing" -> when (value) {
-                    "inherit", "unset", "revert", "revert-layer" -> opticalSizing = parent?.fontTypography?.opticalSizing
-                    "auto", "initial" -> opticalSizing = true
-                    "none" -> opticalSizing = false
-                }
-
-                "font-kerning" -> when (value) {
-                    "inherit", "unset", "revert", "revert-layer" -> fontKerning = parent?.fontKerning
-                    "auto", "initial" -> fontKerning = null
-                    "normal", "none" -> fontKerning = value
-                }
-
-                "font-variant-ligatures" -> when (value) {
-                    "inherit", "unset", "revert", "revert-layer" -> fontVariantLigatures = parent?.fontVariantLigatures
-                    "normal", "initial" -> fontVariantLigatures = null
-                    else -> if (validLigatureSettings(value)) fontVariantLigatures = value
-                }
-
-                "font-feature-settings" -> when (value.lowercase()) {
-                    "inherit", "unset" -> Unit
-                    "normal", "initial", "revert", "revert-layer" -> explicitFontFeatures = null
-                    else -> parseFontFeatureSettings(value)?.let { explicitFontFeatures = it }
-                }
-
-                "text-transform" -> when (value) {
-                    "inherit", "unset" -> Unit
-                    "none", "initial", "revert", "revert-layer" -> textTransform = null
-                    "uppercase", "lowercase", "capitalize" -> textTransform = value
-                }
-
-                "visibility" -> when (value) {
-                    "inherit", "unset" -> Unit
-                    "visible", "initial", "revert", "revert-layer" -> visibilityHidden = false
-                    "hidden", "collapse" -> visibilityHidden = true
-                }
-
-                // Resolved above: currentColor/background-color must see the
-                // final foreground regardless of declaration source order.
-                "color", "background-color" -> Unit
-
-                "font-family" -> when (value) {
-                    "inherit", "unset" -> Unit
-                    "initial", "revert", "revert-layer" -> {
-                        monospace = false
-                        fontFamilyName = null
-                    }
-                    else -> {
-                        monospace = value.contains("monospace")
-                        firstFamilyName(value)?.let { fontFamilyName = it }
-                    }
-                }
-
-                "line-height" -> when (value) {
-                    // line-height is inherited, so unset has inherit semantics.
-                    "inherit", "unset" -> Unit
-                    "normal", "initial" -> {
-                        lineHeightNumber = null
-                        lineHeightAbsoluteEm = null
-                        lineHeightMult = null
-                    }
-
-                    else -> lineHeightValueOf(value, fontSize)?.let { resolved ->
-                        lineHeightNumber = resolved.number
-                        lineHeightAbsoluteEm = resolved.absoluteEm
-                        lineHeightMult = safeLineHeightMultiplier(resolved.multiplier(fontSize))
-                    }
-                }
-
-                "hyphens", "-webkit-hyphens", "-epub-hyphens", "-moz-hyphens" -> when (value) {
-                    "auto" -> hyphensAuto = true
-                    "none", "manual" -> hyphensAuto = false
-                }
-
-                "direction" -> when (value) {
-                    "ltr", "rtl" -> direction = value
-                }
-
-                "unicode-bidi" -> when (value) {
-                    "normal", "embed", "isolate", "bidi-override",
-                    "isolate-override", "plaintext" -> unicodeBidi = value
-                    "inherit" -> unicodeBidi = parent?.unicodeBidi
-                    "initial", "unset", "revert", "revert-layer" -> unicodeBidi = null
-                }
-
-                "adobe-hyphenate" -> when (value) {
-                    "explicit", "none" -> hyphensAuto = false
-                    "auto" -> hyphensAuto = true
-                }
-
-                "text-align" -> when (value) {
-                    "center" -> align = "center"
-                    "right" -> align = "right"
-                    "left" -> align = "left"
-                    "end" -> align = "end"
-                    "start" -> align = "start"
-                    "justify" -> align = "justify"
-                    "initial", "revert", "revert-layer" -> align = "start"
-                    "inherit", "unset" -> align = parent?.textAlign ?: "start"
-                    "match-parent" -> align = if (parent == null) "start" else {
-                        when (parent.textAlign ?: "start") {
-                            "start" -> if (parent.direction == "rtl") "right" else "left"
-                            "end" -> if (parent.direction == "rtl") "left" else "right"
-                            else -> parent.textAlign
-                        }
-                    }
-                }
-
-                "text-indent" -> if (value in setOf("initial", "revert", "revert-layer")) {
-                    indent = 0f
-                } else lengthEm(
-                    value,
-                    percentBase = 0.30f,
-                    emScale = fontSize,
-                    allowNegative = true,
-                )?.let {
-                    indent = it.coerceIn(-MAX_BOX_INLINE_EM, MAX_BOX_INLINE_EM)
-                }
-
-                "display" -> when (value) {
-                    "inherit" -> display = parent?.display
-                    "initial", "unset", "revert", "revert-layer" -> display = null
-                    else -> {
-                        display = value
-                        hidden = hidden || value == "none"
-                    }
-                }
-
-                "flex-direction" -> when (value) {
-                    "row", "row-reverse", "column", "column-reverse" -> flexDirection = value
-                    "inherit" -> flexDirection = parent?.flexDirection ?: "row"
-                    "initial", "unset", "revert", "revert-layer" -> flexDirection = "row"
-                }
-
-                "flex-wrap" -> when (value) {
-                    "nowrap", "wrap", "wrap-reverse" -> flexWrap = value
-                    "inherit" -> flexWrap = parent?.flexWrap ?: "nowrap"
-                    "initial", "unset", "revert", "revert-layer" -> flexWrap = "nowrap"
-                }
-
-                "justify-content" -> when (value) {
-                    "normal", "start", "end", "center", "flex-start", "flex-end", "left", "right",
-                    "space-between", "space-around", "space-evenly", "stretch" -> justifyContent = value
-                    "inherit" -> justifyContent = parent?.justifyContent
-                    "initial", "unset", "revert", "revert-layer" -> justifyContent = null
-                }
-
-                "align-items" -> when (value) {
-                    "normal", "start", "end", "center", "flex-start", "flex-end", "baseline", "stretch" ->
-                        alignItems = value
-                    "inherit" -> alignItems = parent?.alignItems
-                    "initial", "unset", "revert", "revert-layer" -> alignItems = null
-                }
-
-                "filter" -> when (value.replace(whitespaceRegex, "")) {
-                    "invert(100%)", "invert(1)" -> imageInvert = true
-                    "none", "initial", "unset", "revert", "revert-layer" -> imageInvert = false
-                }
-
-                "text-decoration", "text-decoration-line" -> {
-                    if (value.contains("underline")) underline = true
-                    if (value.contains("line-through")) strike = true
-                    if (value == "none") { underline = false; strike = false }
-                }
-
-                "vertical-align" -> when {
-                    value.contains("super") -> superScript = true
-                    value.contains("sub") -> subScript = true
-                }
-
-                "list-style-type" -> listTypeKeyword(value)?.let { listStyleType = it }
-
-                "list-style" -> value.split(whitespaceRegex)
-                    .firstNotNullOfOrNull { listTypeKeyword(it) }
-                    ?.let { listStyleType = it }
-
-                "page-break-before", "break-before" -> when (value) {
-                    "always", "left", "right", "page" -> pageBreakBefore = true
-                    "auto", "avoid" -> pageBreakBefore = false
-                }
-
-                "page-break-after", "break-after" -> when (value) {
-                    "always", "left", "right", "page" -> pageBreakAfter = true
-                    "auto", "avoid", "initial", "unset", "revert", "revert-layer" -> pageBreakAfter = false
-                }
-
-                "page-break-inside", "break-inside" -> when (value) {
-                    "avoid", "avoid-page", "avoid-column", "avoid-region" ->
-                        breakInsideAvoid = true
-                    "auto" -> breakInsideAvoid = false
-                    "inherit" -> breakInsideAvoid = parent?.breakInsideAvoid ?: false
-                    "initial", "unset", "revert", "revert-layer" ->
-                        breakInsideAvoid = false
-                }
-
-                "float" -> when (value) {
-                    "left", "right" -> floatSide = value
-                    "none" -> floatSide = null
-                }
-
-                "clear" -> clear = when (value) {
-                    "left", "right", "both" -> value
-                    "inline-start" -> if (rtlLogicalAxis) "right" else "left"
-                    "inline-end" -> if (rtlLogicalAxis) "left" else "right"
-                    "inherit" -> parent?.clear
-                    else -> null
-                }
-
-                "width" -> if (value.endsWith("%")) {
-                    leadingNumber(value)?.let { widthFrac = (it / 100f).coerceIn(0.05f, 1f) }
-                } else {
-                    lengthEm(value, emScale = fontSize)?.let { widthEm = it }
-                }
-
-                "height" -> if (!value.endsWith("%") && value != "auto") {
-                    lengthEm(value, emScale = fontSize)
-                        ?.takeIf { it > 0f }
-                        ?.let { heightEm = it }
-                }
-
-                "min-height" -> when (value) {
-                    "inherit" -> {
-                        minHeightEm = parent?.minHeightEm
-                        minHeightViewportFrac = parent?.minHeightViewportFrac
-                        minHeightOffsetEm = parent?.minHeightOffsetEm ?: 0f
-                    }
-                    "initial", "unset", "revert", "revert-layer", "auto" -> Unit
-                    else -> {
-                        val affine = viewportHeightLength(value, fontSize)
-                        if (affine != null) {
-                            minHeightViewportFrac = affine.first
-                            minHeightOffsetEm = affine.second
-                        } else if (!viewportUnitRegex.containsMatchIn(value)) {
-                            lengthEm(value, emScale = fontSize)?.takeIf { it >= 0f }
-                                ?.let { minHeightEm = it.coerceAtMost(30f) }
-                        }
-                    }
-                }
-
-                "box-sizing" -> when (value) {
-                    "border-box" -> borderBox = true
-                    "content-box", "initial", "unset", "revert", "revert-layer" -> borderBox = false
-                    "inherit" -> borderBox = parent?.borderBox ?: false
-                }
-
-                "max-width" -> if (value.endsWith("%")) {
-                    value.removeSuffix("%").trim().toFloatOrNull()
-                        ?.takeIf { it.isFinite() && it > 0f }
-                        ?.let { maxWidthFrac = (it / 100f).coerceIn(0.01f, 1f) }
-                } else {
-                    lengthEm(value, emScale = fontSize)?.takeIf { it > 0f }?.let { maxWidthEm = it }
-                }
-
-                "max-height" -> if (value.endsWith("vh")) {
-                    value.removeSuffix("vh").trim().toFloatOrNull()?.takeIf { it.isFinite() && it > 0f }
-                        ?.let { maxHeightViewportFrac = (it / 100f).coerceIn(0.01f, 1f) }
-                } else if (!value.endsWith("%")) {
-                    lengthEm(value, emScale = fontSize)?.takeIf { it > 0f }?.let { maxHeightEm = it }
-                }
-
-                "border-top-width" -> applyBorder(
-                    borderTop, parent?.borderTop, BorderPart.WIDTH, value,
-                )
-                "border-right-width" -> applyBorder(
-                    borderRight, parent?.borderRight, BorderPart.WIDTH, value,
-                )
-                "border-bottom-width" -> applyBorder(
-                    borderBottom, parent?.borderBottom, BorderPart.WIDTH, value,
-                )
-                "border-left-width" -> applyBorder(
-                    borderLeft, parent?.borderLeft, BorderPart.WIDTH, value,
-                )
-                "border-top-style" -> applyBorder(
-                    borderTop, parent?.borderTop, BorderPart.STYLE, value,
-                )
-                "border-right-style" -> applyBorder(
-                    borderRight, parent?.borderRight, BorderPart.STYLE, value,
-                )
-                "border-bottom-style" -> applyBorder(
-                    borderBottom, parent?.borderBottom, BorderPart.STYLE, value,
-                )
-                "border-left-style" -> applyBorder(
-                    borderLeft, parent?.borderLeft, BorderPart.STYLE, value,
-                )
-                "border-top-color" -> applyBorder(
-                    borderTop, parent?.borderTop, BorderPart.COLOR, value,
-                )
-                "border-right-color" -> applyBorder(
-                    borderRight, parent?.borderRight, BorderPart.COLOR, value,
-                )
-                "border-bottom-color" -> applyBorder(
-                    borderBottom, parent?.borderBottom, BorderPart.COLOR, value,
-                )
-                "border-left-color" -> applyBorder(
-                    borderLeft, parent?.borderLeft, BorderPart.COLOR, value,
-                )
-
-                "margin-left" -> {
-                    // Physical left competes with logical start in LTR and
-                    // logical end in RTL; the later cascaded winner clears
-                    // the earlier representation instead of being added.
-                    if (rtlLogicalAxis) {
-                        marginInlineEndEm = 0f
-                        marginInlineEndFrac = 0f
-                    } else {
-                        marginInlineStartEm = 0f
-                        marginInlineStartFrac = 0f
-                    }
-                    autoLeft = value == "auto"
-                    if (value != "auto") {
-                        lengthEm(value, emScale = fontSize)?.let { marginStartEm = it }
-                        percentFrac(value)?.let { marginStartFrac = it }
-                    }
-                }
-
-                "margin-right" -> {
-                    if (rtlLogicalAxis) {
-                        marginInlineStartEm = 0f
-                        marginInlineStartFrac = 0f
-                    } else {
-                        marginInlineEndEm = 0f
-                        marginInlineEndFrac = 0f
-                    }
-                    autoRight = value == "auto"
-                    if (value != "auto") {
-                        lengthEm(value, emScale = fontSize)?.let { marginEndEm = it }
-                        percentFrac(value)?.let { marginEndFrac = it }
-                    }
-                }
-
-                "margin-inline-start" -> {
-                    if (rtlLogicalAxis) {
-                        marginEndEm = 0f
-                        marginEndFrac = 0f
-                    } else {
-                        marginStartEm = 0f
-                        marginStartFrac = 0f
-                    }
-                    if (rtlLogicalAxis) {
-                        autoRight = value == "auto"
-                    } else {
-                        autoLeft = value == "auto"
-                    }
-                    if (value != "auto") {
-                        lengthEm(value, emScale = fontSize)
-                            ?.let { marginInlineStartEm = it }
-                        percentFrac(value)?.let { marginInlineStartFrac = it }
-                    }
-                }
-
-                "margin-inline-end" -> {
-                    if (rtlLogicalAxis) {
-                        marginStartEm = 0f
-                        marginStartFrac = 0f
-                    } else {
-                        marginEndEm = 0f
-                        marginEndFrac = 0f
-                    }
-                    if (rtlLogicalAxis) {
-                        autoLeft = value == "auto"
-                    } else {
-                        autoRight = value == "auto"
-                    }
-                    if (value != "auto") {
-                        lengthEm(value, emScale = fontSize)
-                            ?.let { marginInlineEndEm = it }
-                        percentFrac(value)?.let { marginInlineEndFrac = it }
-                    }
-                }
-
-                "margin-top" -> lengthEm(value, emScale = fontSize)?.let { marginTopEm = it }
-                "margin-bottom" -> lengthEm(value, emScale = fontSize)
-                    ?.let { marginBottomEm = it }
-                "padding-top" -> lengthEm(value, emScale = fontSize)?.let { paddingTopEm = it }
-                "padding-bottom" -> lengthEm(value, emScale = fontSize)
-                    ?.let { paddingBottomEm = it }
-
-                "padding-left" -> {
-                    if (rtlLogicalAxis) {
-                        paddingInlineEndEm = 0f
-                        paddingInlineEndFrac = 0f
-                    } else {
-                        paddingInlineStartEm = 0f
-                        paddingInlineStartFrac = 0f
-                    }
-                    lengthEm(value, emScale = fontSize)?.let { paddingStartEm = it }
-                    percentFrac(value)?.let { paddingStartFrac = it }
-                }
-                "padding-right" -> {
-                    if (rtlLogicalAxis) {
-                        paddingInlineStartEm = 0f
-                        paddingInlineStartFrac = 0f
-                    } else {
-                        paddingInlineEndEm = 0f
-                        paddingInlineEndFrac = 0f
-                    }
-                    lengthEm(value, emScale = fontSize)?.let { paddingEndEm = it }
-                    percentFrac(value)?.let { paddingEndFrac = it }
-                }
-                "padding-inline-start" -> {
-                    if (rtlLogicalAxis) {
-                        paddingEndEm = 0f
-                        paddingEndFrac = 0f
-                    } else {
-                        paddingStartEm = 0f
-                        paddingStartFrac = 0f
-                    }
-                    lengthEm(value, emScale = fontSize)
-                        ?.let { paddingInlineStartEm = it }
-                    percentFrac(value)?.let { paddingInlineStartFrac = it }
-                }
-                "padding-inline-end" -> {
-                    if (rtlLogicalAxis) {
-                        paddingStartEm = 0f
-                        paddingStartFrac = 0f
-                    } else {
-                        paddingEndEm = 0f
-                        paddingEndFrac = 0f
-                    }
-                    lengthEm(value, emScale = fontSize)
-                        ?.let { paddingInlineEndEm = it }
-                    percentFrac(value)?.let { paddingInlineEndFrac = it }
-                }
-            }
-        }
-
-        val position = declarationValue(decl["position"], customProps)
-        if (position == "absolute" || position == "fixed") {
-            // Accessibility copies far outside the viewport accompany SVG
-            // title pages. Preserve ordinary positioned content in flow,
-            // but do not duplicate these intentionally invisible labels.
-            val farOutside = listOf("left", "top").any { property ->
-                declarationValue(decl[property], customProps)?.let {
-                    lengthEm(it, emScale = fontSize, allowNegative = true)?.let { offset -> offset < -100f }
-                } == true
-            }
-            hidden = hidden || farOutside
-        }
-
-        return Computed(
-            customProps = customProps,
-            italic = italic,
-            bold = fontWeight?.let { it >= 600 },
-            fontWeight = fontWeight,
-            fontSizeEm = fontSize,
-            textAlign = align,
-            textIndentEm = indent,
-            hidden = hidden,
-            display = display,
-            fontFeatureSettings = assembleFontFeatures(fontVariantCaps, fontVariantNumeric, explicitFontFeatures, fontKerning, fontVariantLigatures),
-            fontKerning = fontKerning,
-            fontVariantLigatures = fontVariantLigatures,
-            fontTypography = FontTypography(variationAxes, stretchPercent, opticalSizing),
-            fontVariantCaps = fontVariantCaps,
-            fontVariantNumeric = fontVariantNumeric,
-            explicitFontFeatures = explicitFontFeatures,
-            textTransform = textTransform,
-            visibilityHidden = visibilityHidden,
-            maxWidthFrac = maxWidthFrac,
-            maxWidthEm = maxWidthEm,
-            maxHeightEm = maxHeightEm,
-            maxHeightViewportFrac = maxHeightViewportFrac,
-            minHeightEm = minHeightEm,
-            minHeightViewportFrac = minHeightViewportFrac,
-            minHeightOffsetEm = minHeightOffsetEm,
-            centerContentVertically = display == "flex" && flexDirection == "column" &&
-                justifyContent == "center" && minHeightViewportFrac != null,
-            borderBox = borderBox,
-            pageBreakAfter = pageBreakAfter,
-            flexDirection = flexDirection,
-            flexWrap = flexWrap,
-            justifyContent = justifyContent,
-            alignItems = alignItems,
-            imageInvert = imageInvert,
-            backgroundUsesCurrentColor = backgroundUsesCurrentColor,
-            marginStartEm = marginStartEm.coerceIn(0f, MAX_BOX_INLINE_EM),
-            marginStartFrac = marginStartFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            marginEndEm = marginEndEm.coerceIn(0f, MAX_BOX_INLINE_EM),
-            marginEndFrac = marginEndFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            marginInlineStartEm = marginInlineStartEm.coerceIn(0f, MAX_BOX_INLINE_EM),
-            marginInlineStartFrac = marginInlineStartFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            marginInlineEndEm = marginInlineEndEm.coerceIn(0f, MAX_BOX_INLINE_EM),
-            marginInlineEndFrac = marginInlineEndFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            marginTopEm = marginTopEm.coerceIn(0f, MAX_BOX_BLOCK_EM),
-            marginBottomEm = marginBottomEm.coerceIn(0f, MAX_BOX_BLOCK_EM),
-            marginTopSpecified = marginTopSpecified,
-            marginBottomSpecified = marginBottomSpecified,
-            paddingStartEm = paddingStartEm.coerceIn(0f, MAX_BOX_INLINE_EM),
-            paddingStartFrac = paddingStartFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            paddingEndEm = paddingEndEm.coerceIn(0f, MAX_BOX_INLINE_EM),
-            paddingEndFrac = paddingEndFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            paddingInlineStartEm = paddingInlineStartEm.coerceIn(0f, MAX_BOX_INLINE_EM),
-            paddingInlineStartFrac = paddingInlineStartFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            paddingInlineEndEm = paddingInlineEndEm.coerceIn(0f, MAX_BOX_INLINE_EM),
-            paddingInlineEndFrac = paddingInlineEndFrac.coerceIn(0f, MAX_BOX_INLINE_FRAC),
-            paddingTopEm = paddingTopEm.coerceIn(0f, MAX_BOX_BLOCK_EM),
-            paddingBottomEm = paddingBottomEm.coerceIn(0f, MAX_BOX_BLOCK_EM),
-            centeredBox = autoLeft && autoRight,
-            underline = underline,
-            strike = strike,
-            superScript = superScript,
-            subScript = subScript,
-            monospace = monospace,
-            fontFamilyName = fontFamilyName,
-            lineHeightMult = lineHeightMult,
-            lineHeightNumber = lineHeightNumber,
-            lineHeightAbsoluteEm = lineHeightAbsoluteEm,
-            hyphensAuto = hyphensAuto,
-            direction = direction,
-            unicodeBidi = unicodeBidi,
-            listStyleType = listStyleType,
-            foregroundColorArgb = foregroundColorArgb,
-            backgroundColorArgb = backgroundColorArgb,
-            pageBreakBefore = pageBreakBefore,
-            breakInsideAvoid = breakInsideAvoid,
-            floatSide = floatSide,
-            clear = clear,
-            widthFrac = widthFrac,
-            widthEm = widthEm,
-            heightEm = heightEm,
-            borderTop = borderTop.toPublisherSide(),
-            borderRight = borderRight.toPublisherSide(),
-            borderBottom = borderBottom.toPublisherSide(),
-            borderLeft = borderLeft.toPublisherSide(),
-            paddingSpecified = paddingSpecified,
-            borderSpecified = borderSpecified,
-        )
-    }
-
-    private fun declarationValue(
-        declaration: Declaration?,
-        customProps: Map<String, String>,
-    ): String? {
-        val value = declaration?.value ?: return null
-        return (if ("var(" in value) substituteVars(value, customProps) else value)
-            ?.trim()
-            ?.lowercase()
+        val firstStrongIsRtl = mayUseAutomaticDirection && hasLogicalInsets &&
+            firstStrongRtl(element.text()) == true
+        computedSessionResolutions++
+        return session.resolve(element, parent, declarations, pseudoElement, firstStrongIsRtl)
     }
 
     private fun parseFontVariationSettings(value: String): Map<String, Float>? {
         val axes = LinkedHashMap<String, Float>()
-        val items = selectorSlices(value)
+        val items = commaSlices(value)
         if (items.size > 64) return null
         for (item in items) {
             val match = fontVariationRegex.matchEntire(item.trim()) ?: return null
@@ -2070,7 +1122,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
 
     private fun parseFontFeatureSettings(value: String): String? {
         val features = LinkedHashMap<String, Int>()
-        for (item in selectorSlices(value)) {
+        for (item in commaSlices(value)) {
             val match = fontFeatureRegex.matchEntire(item.trim()) ?: return null
             val amount = when (val argument = match.groupValues[2].lowercase()) {
                 "", "on" -> 1
@@ -2083,56 +1135,14 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
             ?.joinToString(", ") { "'${it.key}' ${it.value}" }
     }
 
-    /** Explicit feature settings override the same OpenType variant tag. */
-    private fun assembleFontFeatures(
-        caps: String?, numeric: String?, explicit: String?, kerning: String?, ligatures: String?,
-    ): String? {
-        val features = LinkedHashMap<String, Int>()
-        FONT_VARIANT_CAPS_FEATURES[caps]?.forEach { features[it] = 1 }
-        numeric?.split(whitespaceRegex)?.forEach { keyword ->
-            FONT_VARIANT_NUMERIC_FEATURES[keyword]?.forEach { features[it] = 1 }
-        }
-        when (kerning) {
-            "none" -> features["kern"] = 0
-            "normal" -> features["kern"] = 1
-        }
-        if (ligatures == "none") {
-            listOf("liga", "clig", "dlig", "hlig", "calt").forEach { features[it] = 0 }
-        } else ligatures?.split(whitespaceRegex)?.forEach { keyword ->
-            FONT_VARIANT_LIGATURE_FEATURES[keyword]?.let { (tags, enabled) -> tags.forEach { features[it] = enabled } }
-        }
-        explicit?.let {
-            for (item in selectorSlices(it)) {
-                val match = fontFeatureRegex.matchEntire(item.trim()) ?: continue
-                features[match.groupValues[1]] = match.groupValues[2].toIntOrNull() ?: 1
-            }
-        }
-        return features.takeIf { it.isNotEmpty() }?.entries
-            ?.joinToString(", ") { "'${it.key}' ${it.value}" }
-    }
-
-    /** Resolve var() and delayed shorthand expansion for one cascaded longhand. */
     private fun resolvedDeclarationValue(
         declaration: Declaration,
-        customProps: Map<String, String>,
+        variables: RustCssValues.Variables,
         preserveCase: Boolean = false,
     ): String? {
-        val raw = if ("var(" in declaration.value) {
-            substituteVars(declaration.value, customProps) ?: return null
-        } else {
-            declaration.value
-        }
-        val normalized = raw.trim().let { if (preserveCase) it else it.lowercase() }
-        return when {
-            declaration.marginSide != null ->
-                marginShorthandValue(normalized, declaration.marginSide)
-            declaration.fontPart != null ->
-                fontShorthandValues(normalized)?.value(declaration.fontPart)
-            declaration.borderPart != null ->
-                borderShorthandValues(normalized)?.value(declaration.borderPart)
-            declaration.backgroundShorthand -> backgroundColorFromShorthand(normalized)
-            else -> normalized
-        }
+        val raw = variables.value(declaration.value) ?: return null
+        val value = raw.trim().let { if (preserveCase) it else it.lowercase() }
+        return if (declaration.expansion == 0) value else RustCssValues.expand(declaration.expansion, value)
     }
 
     /** First-strong direction used only to map logical CSS box sides for dir=auto. */
@@ -2182,163 +1192,12 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
             (channel(8) shl 8) or channel(0)
     }
 
-    /**
-     * Replaces every `var(--name, fallback?)` in [value] with the property's
-     * value from [props] (or the fallback). Null when a reference cannot be
-     * resolved; the recursion cap kills self-referential cycles.
-     */
-    private fun substituteVars(value: String, props: Map<String, String>, depth: Int = 0): String? {
-        val start = value.indexOf("var(")
-        if (start < 0) return value
-        if (depth > 8) return null
-        val close = matchingParen(value, start + 3)
-        if (close < 0) return null
-        val inner = value.substring(start + 4, close)
-        var comma = -1
-        var parens = 0
-        for (i in inner.indices) {
-            when (inner[i]) {
-                '(' -> parens++
-                ')' -> parens--
-                ',' -> if (parens == 0) {
-                    comma = i
-                    break
-                }
-            }
-        }
-        val name = (if (comma < 0) inner else inner.substring(0, comma)).trim().lowercase()
-        val fallback = if (comma < 0) null else inner.substring(comma + 1).trim()
-        val replacement = props[name] ?: fallback ?: return null
-        val substituted = value.substring(0, start) + replacement + value.substring(close + 1)
-        return substituteVars(substituted, props, depth + 1)
-    }
-
-    // ------------------------------------------------------------- values
-
-    /** Absolute factor from the reader root for a font-size [value], or null. */
-    private fun fontSizeFactor(value: String, inherited: Float): Float? = when (value) {
-        "medium" -> 1f
-        "small" -> 0.9f
-        "x-small" -> 0.75f
-        "xx-small" -> 0.6f
-        "large" -> 1.2f
-        "x-large" -> 1.5f
-        "xx-large" -> 2f
-        "smaller" -> inherited * 0.85f
-        "larger" -> inherited * 1.2f
-        else -> {
-            if (CssCalc.isMath(value)) {
-                CssCalc.eval(value, CssCalc.Ctx(inherited, 1f, 1f / 16f, inherited / 100f))
-                    ?.takeIf { it > 0f }
-            } else {
-                val number = leadingNumber(value) ?: return null
-                when (unitOf(value)) {
-                    "em" -> inherited * number
-                    "rem" -> number
-                    "%" -> inherited * number / 100f
-                    "px" -> number / 16f
-                    "pt" -> number / 12f
-                    "pc" -> number
-                    "in" -> number * 6f
-                    "cm" -> number * 2.3622f
-                    "mm" -> number * 0.23622f
-                    "ch", "ex" -> inherited * number * 0.5f
-                    // Viewport units are root-relative, not cumulative.
-                    "vw", "vmin" -> number * 0.30f
-                    "vh", "vmax" -> number * 0.50f
-                    else -> null
-                }
-            }
-        }
-    }
-
-    /** Exact affine viewport minimum; unsupported nonlinear forms keep normal flow. */
-    private fun viewportHeightLength(value: String, emScale: Float): Pair<Float, Float>? {
-        fun term(raw: String): Pair<Float, Float>? {
-            if (unitOf(raw) == "vh") {
-                return leadingNumber(raw)?.let { it / 100f to 0f }
-            }
-            if (raw != "0" && unitOf(raw) !in setOf("em", "rem", "px", "pt", "pc", "in", "cm", "mm", "q", "ch", "ex")) {
-                return null
-            }
-            return lengthEm(raw, emScale = emScale, allowNegative = true)?.let { 0f to it }
-        }
-        val result = if (plainViewportHeightRegex.matches(value)) {
-            term(value)
-        } else {
-            val match = affineViewportHeightRegex.matchEntire(value) ?: return null
-            val a = term(match.groupValues[1]) ?: return null
-            val b = term(match.groupValues[3]) ?: return null
-            val sign = if (match.groupValues[2] == "-") -1f else 1f
-            a.first + sign * b.first to a.second + sign * b.second
-        } ?: return null
-        return result.takeIf { (fraction, offset) ->
-            fraction.isFinite() && fraction in 0.01f..4f && offset.isFinite() && offset in -100f..100f
-        }
-    }
-
-    /**
-     * Length normalized into reader-root em, or null.
-     *
-     * CSS `em`/`ch`/`ex` units belong to the element's computed font size,
-     * while `rem` and absolute units remain rooted in the publication. The
-     * native renderer measures retained box geometry against the reader base
-     * font, so resolving [emScale] here prevents a 0.5em padding on a 2em
-     * heading from being incorrectly rendered as only 0.5 root-em.
-     */
-    private fun lengthEm(
-        value: String,
-        percentBase: Float = 0f,
-        emScale: Float = 1f,
-        allowNegative: Boolean = false,
-    ): Float? {
-        if (value == "0") return 0f
-        if (CssCalc.isMath(value)) {
-            val percentUnit = if (percentBase > 0f) percentBase * 30f / 100f else null
-            return CssCalc.eval(
-                value,
-                CssCalc.Ctx(emScale, 1f, 1f / 16f, percentUnit),
-            )
-                ?.takeIf { it.isFinite() }
-                ?.let { if (allowNegative) it else it.coerceAtLeast(0f) }
-        }
-        val number = leadingNumber(value) ?: return null
-        if (number < 0 && !allowNegative) return 0f
-        return when (unitOf(value)) {
-            "em" -> number * emScale
-            "rem" -> number
-            "px" -> number / 16f
-            "pt" -> number / 12f
-            "pc" -> number // 16px
-            "in" -> number * 6f // 96px
-            "cm" -> number * 2.3622f
-            "mm" -> number * 0.23622f
-            "q" -> number * 0.059055f
-            "ch", "ex" -> number * 0.5f * emScale
-            // Viewport units against the 30-em content-width convention.
-            "vw", "vmin" -> number * 0.30f
-            "vh", "vmax" -> number * 0.50f
-            "%" -> if (percentBase > 0f) number / 100f * percentBase * 30f else null
-            else -> null
-        }
-    }
-
     /** The unit suffix of a numeric value ("1.5em" → "em", "30%" → "%"). */
     private fun unitOf(value: String): String {
         var i = value.length
         while (i > 0 && (value[i - 1].isLetter() || value[i - 1] == '%')) i--
         return value.substring(i)
     }
-
-    /** A percentage as a fraction of the container width, or null. */
-    private fun percentFrac(value: String): Float? {
-        if (!value.endsWith("%")) return null
-        val number = leadingNumber(value) ?: return null
-        return (number / 100f).coerceIn(0f, 0.6f)
-    }
-
-    private fun leadingNumber(value: String): Float? =
-        numberRegex.find(value)?.value?.toFloatOrNull()?.takeIf { it.isFinite() }
 
     /** First family of a font-family list, unquoted and lowercased. */
     private fun firstFamilyName(value: String): String? =
@@ -2347,209 +1206,58 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
             ?.lowercase()
             ?.takeIf { it.isNotEmpty() && it != "inherit" }
 
-    private class LineHeightValue(
-        val number: Float? = null,
-        val absoluteEm: Float? = null,
-    ) {
-        fun multiplier(fontSizeEm: Float): Float? =
-            number ?: absoluteEm?.div(fontSizeEm.coerceAtLeast(0.1f))
-    }
-
-    /**
-     * CSS computed line-height, preserving the distinction inheritance needs:
-     * a unitless number remains a number, while %, em and every other length
-     * become an absolute root-em height at the declaring element.
-     */
-    private fun lineHeightValueOf(value: String, fontSizeEm: Float): LineHeightValue? {
-        if (CssCalc.isMath(value)) {
-            val isLength = lineHeightLengthUnitRegex.containsMatchIn(value)
-            val evaluated = if (isLength) {
-                CssCalc.eval(
-                    value,
-                    CssCalc.Ctx(
-                        emUnit = fontSizeEm,
-                        remUnit = 1f,
-                        pxUnit = 1f / 16f,
-                        percentUnit = fontSizeEm / 100f,
-                    ),
-                )
-            } else {
-                CssCalc.eval(
-                    value,
-                    CssCalc.Ctx(1f, 1f, 1f / 16f, null),
-                    acceptScalar = true,
-                )
-            }?.takeIf { it.isFinite() && it > 0f } ?: return null
-            return if (isLength) {
-                LineHeightValue(absoluteEm = evaluated)
-            } else {
-                LineHeightValue(number = evaluated)
-            }
-        }
-
-        val number = leadingNumber(value) ?: return null
-        if (!number.isFinite() || number <= 0f) return null
-        val resolved = when (unitOf(value)) {
-            "" -> LineHeightValue(number = number)
-            "%" -> LineHeightValue(absoluteEm = fontSizeEm * number / 100f)
-            "em" -> LineHeightValue(absoluteEm = fontSizeEm * number)
-            "rem" -> LineHeightValue(absoluteEm = number)
-            "px" -> LineHeightValue(absoluteEm = number / 16f)
-            "pt" -> LineHeightValue(absoluteEm = number / 12f)
-            "pc" -> LineHeightValue(absoluteEm = number)
-            "in" -> LineHeightValue(absoluteEm = number * 6f)
-            "cm" -> LineHeightValue(absoluteEm = number * 2.3622f)
-            "mm" -> LineHeightValue(absoluteEm = number * 0.23622f)
-            "q" -> LineHeightValue(absoluteEm = number * 0.059055f)
-            "ch", "ex" -> LineHeightValue(absoluteEm = fontSizeEm * number * 0.5f)
-            "vw", "vmin" -> LineHeightValue(absoluteEm = number * 0.30f)
-            "vh", "vmax" -> LineHeightValue(absoluteEm = number * 0.50f)
-            else -> null
-        }
-        return resolved?.takeIf {
-            it.number?.isFinite() != false && it.absoluteEm?.isFinite() != false
-        }
-    }
-
-    /**
-     * The native paginator cannot safely consume an unbounded multiplier.
-     * Keep a wider envelope than the old 1..2.4 clamp because valid computed
-     * absolute line-heights can be below 1 or reach 3 on a resized child.
-     */
-    private fun safeLineHeightMultiplier(value: Float?): Float? =
-        value?.takeIf { it.isFinite() }?.coerceIn(0.5f, 4f)
-
-    private fun listTypeKeyword(value: String): String? = when (value) {
-        "disc", "circle", "square", "none", "decimal",
-        "lower-alpha", "lower-latin", "upper-alpha", "upper-latin",
-        "lower-roman", "upper-roman",
-        -> value
-
-        else -> null
-    }
-
     // ------------------------------------------------------------- parsing
 
-    private fun parseSheetText(sheetText: String, baseDir: String, groupDepth: Int = 0) {
-        if (groupDepth > MAX_GROUP_RULE_DEPTH || ruleCount >= MAX_RULES ||
-            stylesheetDeclarationCount >= MAX_STYLESHEET_DECLARATIONS
-        ) {
-            return
-        }
-        val css = stripComments(sheetText)
-        var index = 0
-        while (index < css.length) {
-            if (ruleCount >= MAX_RULES ||
-                stylesheetDeclarationCount >= MAX_STYLESHEET_DECLARATIONS
-            ) {
-                return
-            }
-            while (index < css.length && css[index].isWhitespace()) index++
-            if (index >= css.length) break
+    private fun canAcceptStylesheetRules(): Boolean =
+        ruleCount < MAX_RULES && stylesheetDeclarationCount < MAX_STYLESHEET_DECLARATIONS
 
-            // Brace-less @-statements (@charset/@import/@namespace) end at the
-            // semicolon. Without this, their text becomes a prefix of the next
-            // rule's selector, which then reads as an @-rule and the whole
-            // next rule is silently skipped.
-            if (css[index] == '@') {
-                val semi = css.indexOf(';', index)
-                val brace = css.indexOf('{', index)
-                if (semi >= 0 && (brace < 0 || semi < brace)) {
-                    namespaceRuleRegex.matchEntire(css.substring(index, semi).trim())?.let {
-                        parsingNamespaces[it.groupValues[1]] =
-                            it.groupValues[2].ifEmpty { it.groupValues[3] }
-                    }
-                    index = semi + 1
-                    continue
+    private fun addSheetRules(sourceRules: List<RustCssSyntax.Rule>, baseDir: String, groupDepth: Int = 0) {
+        if (groupDepth > MAX_GROUP_RULE_DEPTH) return
+        for (source in sourceRules) {
+            if (!canAcceptStylesheetRules()) return
+            when (source) {
+                is RustCssSyntax.Rule.Namespace -> namespaceRuleRegex.matchEntire(source.prelude.trim())?.let {
+                    parsingNamespaces[it.groupValues[1]] = it.groupValues[2].ifEmpty { it.groupValues[3] }
                 }
-            }
-
-            val braceOpen = css.indexOf('{', index)
-            if (braceOpen < 0) break
-            val selectorText = css.substring(index, braceOpen).trim()
-
-            // @-rules: evaluate media/capability conditions, collect fonts,
-            // and skip unsupported groups as a whole.
-            if (selectorText.startsWith("@")) {
-                if (selectorText.startsWith("@media", ignoreCase = true)) {
-                    val bodyEnd = matchingBrace(css, braceOpen)
-                    if (bodyEnd < 0) break
-                    simpleMaxWidthBreakpoint(selectorText.substring(6))?.let { threshold ->
-                        if (simpleMaxWidthBreakpoints.size < MAX_RESPONSIVE_BREAKPOINTS) {
-                            simpleMaxWidthBreakpoints += threshold
-                        }
+                is RustCssSyntax.Rule.Media -> {
+                    if (simpleMaxWidthBreakpoints.size < MAX_RESPONSIVE_BREAKPOINTS) {
+                        simpleMaxWidthBreakpoint(source.condition)?.let { simpleMaxWidthBreakpoints += it }
                     }
-                    if (screenMediaApplies(selectorText.substring(6))) {
-                        parseSheetText(
-                            css.substring(braceOpen + 1, bodyEnd),
-                            baseDir,
-                            groupDepth + 1,
-                        )
+                    if (screenMediaApplies(source.condition)) {
+                        addSheetRules(source.rules, baseDir, groupDepth + 1)
                     }
-                    index = bodyEnd + 1
-                } else if (selectorText.startsWith("@supports", ignoreCase = true)) {
-                    val bodyEnd = matchingBrace(css, braceOpen)
-                    if (bodyEnd < 0) break
-                    // The mapper retains native table cells and bounded flex
-                    // rows; unsupported feature tests preserve base fallback.
-                    val condition = selectorText.substring(9).trim().lowercase()
-                    if (supportsConditionApplies(condition)) {
-                        parseSheetText(css.substring(braceOpen + 1, bodyEnd), baseDir, groupDepth + 1)
+                }
+                is RustCssSyntax.Rule.Supports -> {
+                    if (supportsConditionApplies(source.condition.trim().lowercase())) {
+                        addSheetRules(source.rules, baseDir, groupDepth + 1)
                     }
-                    index = bodyEnd + 1
-                } else if (selectorText.startsWith("@font-face", ignoreCase = true)) {
-                    val braceClose = css.indexOf('}', braceOpen)
-                    if (braceClose < 0) break
-                    // @font-face is a CSS rule too: count it against the
-                    // global rule ceiling even when the face output cap has
-                    // already been reached.
+                }
+                is RustCssSyntax.Rule.FontFace -> {
+                    // Every @font-face counts even if the face cap was reached.
                     ruleCount++
                     if (mutableFontFaces.size < MAX_FONT_FACES) {
-                        parseFontFace(
-                            parseDeclarations(
-                                css.substring(braceOpen + 1, braceClose),
-                                stylesheet = true,
-                            ),
-                            baseDir,
-                        )
+                        val declarations = compileDeclarations(source.declarations, stylesheet = true)
+                        parseFontFace(declarations.toMap(), baseDir)
                     }
-                    index = braceClose + 1
-                } else {
-                    val bodyEnd = matchingBrace(css, braceOpen)
-                    if (bodyEnd < 0) break
-                    index = bodyEnd + 1
                 }
-                continue
+                is RustCssSyntax.Rule.Qualified -> addQualifiedRule(source)
             }
-
-            val braceClose = css.indexOf('}', braceOpen)
-            if (braceClose < 0) break
-            val declarations = parseDeclarations(
-                css.substring(braceOpen + 1, braceClose),
-                stylesheet = true,
-            )
-            if (declarations.isNotEmpty()) {
-                for (selector in selectorSlices(selectorText)) {
-                    if (ruleCount >= MAX_RULES) return
-                    val parsed = parseSelector(selector.trim()) ?: continue
-                    val rule = Rule(parsed.chain, parsed.specificity, orderCounter++, declarations)
-                    val index = when (parsed.pseudoElement) {
-                        PseudoElement.FIRST_LETTER -> firstLetterRules
-                        PseudoElement.BEFORE -> beforeRules
-                        PseudoElement.AFTER -> afterRules
-                        null -> rules
-                    }
-                    index.add(rule)
-                    ruleCount++
-                }
-            }
-            index = braceClose + 1
         }
     }
 
-    /** Bounded comma-group scanner; commas inside strings/functions/attrs do not split. */
-    private fun selectorSlices(text: String): List<String> {
-        val result = ArrayList<String>(minOf(MAX_SELECTORS_PER_RULE, 8))
+    private fun addQualifiedRule(source: RustCssSyntax.Rule.Qualified) {
+        val declarations = compileDeclarations(source.declarations, stylesheet = true)
+        if (declarations.isEmpty()) return
+        val selectors = RustCssSelectors.compile(source.selector, parsingNamespaces, MAX_RULES - ruleCount)
+        for (selector in selectors) {
+            rulePools[selector.pool].add(Rule(selector, orderCounter++, declarations))
+            ruleCount++
+        }
+    }
+
+    /** Commas inside strings and functions are part of the same value. */
+    private fun commaSlices(text: String): List<String> {
+        val result = ArrayList<String>(minOf(MAX_COMMA_LIST_ITEMS, 8))
         var start = 0
         var quote: Char? = null
         var parentheses = 0
@@ -2565,12 +1273,12 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
                 char == ']' && brackets > 0 -> brackets--
                 char == ',' && parentheses == 0 && brackets == 0 -> {
                     result.add(text.substring(start, index))
-                    if (result.size >= MAX_SELECTORS_PER_RULE) return result
+                    if (result.size >= MAX_COMMA_LIST_ITEMS) return result
                     start = index + 1
                 }
             }
         }
-        if (result.size < MAX_SELECTORS_PER_RULE) result.add(text.substring(start))
+        if (result.size < MAX_COMMA_LIST_ITEMS) result.add(text.substring(start))
         return result
     }
 
@@ -2580,7 +1288,7 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
      * and keep the publisher's unconstrained fallback. Applying every width
      * branch at once destroys drama tables and can hide wide-screen content.
      */
-    private fun screenMediaApplies(raw: String): Boolean = selectorSlices(raw).any { branch ->
+    private fun screenMediaApplies(raw: String): Boolean = commaSlices(raw).any { branch ->
         var query = branch.trim().lowercase()
         if (query.isEmpty()) return@any true
         var negated = false
@@ -2729,965 +1437,18 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         ))
     }
 
-    private enum class PseudoElement { FIRST_LETTER, BEFORE, AFTER }
-
-    private class ParsedSelector(
-        val chain: List<Compound>,
-        val specificity: Int,
-        /** Non-null when the selector targets a supported pseudo-element. */
-        val pseudoElement: PseudoElement?,
-    )
-
-    /**
-     * Tokenizing selector parser. Returns null for selectors that cannot be
-     * honored (unknown pseudo-classes, functional selectors, syntax errors) —
-     * only that comma-group member is dropped.
-     */
-    private fun parseSelector(selector: String, inHas: Boolean = false): ParsedSelector? {
-        val text = selector.trim()
-        if (text.isEmpty() || text.length > MAX_SELECTOR_CHARS) return null
-        val chain = mutableListOf<Compound>()
-        var ids = 0
-        var classLike = 0
-        var tags = 0
-        var pseudoElement: PseudoElement? = null
-        var pseudoElementAt = -1
-        var pending: Combinator? = null
-        var i = 0
-
-        while (i < text.length) {
-            val ch = text[i]
-            when (ch) {
-                ' ', '\t', '\n', '\r' -> i++
-
-                '>', '+', '~' -> {
-                    if (chain.isEmpty() || pending != null) return null
-                    pending = when (ch) {
-                        '>' -> Combinator.CHILD
-                        '+' -> Combinator.NEXT_SIBLING
-                        else -> Combinator.SUBSEQUENT_SIBLING
-                    }
-                    i++
-                }
-
-                else -> {
-                    // One compound: tag / * / .class / #id / [attr] / :pseudo.
-                    var tag: String? = null
-                    var id: String? = null
-                    val classes = mutableListOf<String>()
-                    val attrs = mutableListOf<AttrSelector>()
-                    val pseudos = mutableListOf<PseudoClass>()
-                    var sawPseudoElement: PseudoElement? = null
-
-                    compound@ while (i < text.length) {
-                        when (val c = text[i]) {
-                            ' ', '\t', '\n', '\r', '>', '+', '~' -> break@compound
-
-                            '*' -> {
-                                tag = "*"
-                                i++
-                            }
-
-                            '.' -> {
-                                val end = readIdent(text, i + 1)
-                                if (end == i + 1) return null
-                                classes += text.substring(i + 1, end)
-                                classLike++
-                                i = end
-                            }
-
-                            '#' -> {
-                                val end = readIdent(text, i + 1)
-                                if (end == i + 1) return null
-                                id = text.substring(i + 1, end)
-                                ids++
-                                i = end
-                            }
-
-                            '[' -> {
-                                val close = text.indexOf(']', i)
-                                if (close < 0) return null
-                                attrs += parseAttrSelector(text.substring(i + 1, close))
-                                    ?: return null
-                                classLike++
-                                i = close + 1
-                            }
-
-                            ':' -> {
-                                val isElement = i + 1 < text.length && text[i + 1] == ':'
-                                val start = i + if (isElement) 2 else 1
-                                val end = readIdent(text, start)
-                                if (end == start) return null
-                                val name = text.substring(start, end).lowercase()
-                                if (end < text.length && text[end] == '(') {
-                                    // Unsupported functions drop only this
-                                    // comma-group member. Nested :has() and
-                                    // pseudo-elements inside it are invalid.
-                                    if (isElement) return null
-                                    val close = matchingParen(text, end)
-                                    if (close < 0) return null
-                                    val arg = text.substring(end + 1, close).trim()
-                                    when (name) {
-                                        "not" -> {
-                                            val inner = parseInnerCompound(arg) ?: return null
-                                            pseudos += PseudoClass.Not(inner.simple)
-                                            ids += inner.ids
-                                            classLike += inner.classLike
-                                            tags += inner.tags
-                                        }
-
-                                        "nth-child", "nth-of-type", "nth-last-child", "nth-last-of-type" -> {
-                                            val nth = parseNth(arg) ?: return null
-                                            pseudos += PseudoClass.Nth(
-                                                nth.first,
-                                                nth.second,
-                                                ofType = name.endsWith("of-type"),
-                                                fromEnd = name.startsWith("nth-last-"),
-                                            )
-                                            classLike++
-                                        }
-
-                                        "has" -> {
-                                            if (inHas) return null
-                                            val relatives = selectorSlices(arg).map { relative ->
-                                                val trimmed = relative.trim()
-                                                val relation = when (trimmed.firstOrNull()) {
-                                                    '>' -> Combinator.CHILD
-                                                    '+' -> Combinator.NEXT_SIBLING
-                                                    '~' -> Combinator.SUBSEQUENT_SIBLING
-                                                    else -> Combinator.DESCENDANT
-                                                }
-                                                val subject = if (trimmed.firstOrNull() in listOf('>', '+', '~')) {
-                                                    trimmed.substring(1).trimStart()
-                                                } else trimmed
-                                                val parsed = parseSelector(subject, inHas = true)
-                                                    ?.takeIf { it.pseudoElement == null } ?: return null
-                                                parsed to listOf(Compound(relation, parsed.chain.first().simple)) +
-                                                    parsed.chain.drop(1)
-                                            }
-                                            if (relatives.isEmpty()) return null
-                                            pseudos += PseudoClass.Has(relatives.map { it.second })
-                                            // :has(), like :not(), takes the
-                                            // most specific argument, rather
-                                            // than adding a pseudo-class.
-                                            val specificity = relatives.maxOf { it.first.specificity }
-                                            ids += specificity / 1_000_000
-                                            classLike += specificity / 1_000 % 1_000
-                                            tags += specificity % 1_000
-                                        }
-
-                                        else -> return null
-                                    }
-                                    i = close + 1
-                                } else {
-                                    when (name) {
-                                        "first-letter" -> {
-                                            sawPseudoElement = PseudoElement.FIRST_LETTER
-                                            tags++ // pseudo-elements count like tags
-                                        }
-
-                                        "before" -> {
-                                            sawPseudoElement = PseudoElement.BEFORE
-                                            tags++
-                                        }
-
-                                        "after" -> {
-                                            sawPseudoElement = PseudoElement.AFTER
-                                            tags++
-                                        }
-
-                                        "first-child" -> {
-                                            if (isElement) return null
-                                            pseudos += PseudoClass.FirstChild
-                                            classLike++
-                                        }
-
-                                        "last-child" -> {
-                                            if (isElement) return null
-                                            pseudos += PseudoClass.LastChild
-                                            classLike++
-                                        }
-
-                                        "only-child" -> {
-                                            if (isElement) return null
-                                            pseudos += PseudoClass.OnlyChild
-                                            classLike++
-                                        }
-
-                                        "first-of-type" -> {
-                                            if (isElement) return null
-                                            pseudos += PseudoClass.FirstOfType
-                                            classLike++
-                                        }
-
-                                        "last-of-type", "only-of-type" -> {
-                                            if (isElement) return null
-                                            pseudos += PseudoClass.Nth(0, 1, ofType = true, fromEnd = true)
-                                            if (name == "only-of-type") pseudos += PseudoClass.FirstOfType
-                                            classLike++
-                                        }
-
-                                        else -> return null
-                                    }
-                                    i = end
-                                }
-                            }
-
-                            else -> {
-                                if (tag != null || id != null || classes.isNotEmpty() ||
-                                    attrs.isNotEmpty() || pseudos.isNotEmpty()
-                                ) {
-                                    return null // tag name not at compound start
-                                }
-                                val end = readIdent(text, i)
-                                if (end == i) return null
-                                tag = text.substring(i, end).lowercase()
-                                tags++
-                                i = end
-                            }
-                        }
-                    }
-
-                    val empty = tag == null && id == null && classes.isEmpty() &&
-                        attrs.isEmpty() && pseudos.isEmpty() && sawPseudoElement == null
-                    if (empty) return null
-                    if (chain.size >= MAX_SELECTOR_COMPOUNDS ||
-                        classes.size + attrs.size + pseudos.size > MAX_SIMPLE_COMPONENTS
-                    ) {
-                        return null
-                    }
-                    chain += Compound(
-                        pending ?: Combinator.DESCENDANT,
-                        Simple(tag, id, classes, attrs, pseudos),
-                    )
-                    if (sawPseudoElement != null) {
-                        pseudoElement = sawPseudoElement
-                        pseudoElementAt = chain.lastIndex
-                    }
-                    pending = null
-                }
-            }
-        }
-
-        if (chain.isEmpty() || pending != null) return null
-        // A pseudo-element is only meaningful on the selector's subject.
-        if (pseudoElementAt >= 0 && pseudoElementAt != chain.lastIndex) return null
-        return ParsedSelector(
-            chain = chain,
-            specificity = ids * 1_000_000 + classLike * 1_000 + tags,
-            pseudoElement = pseudoElement,
-        )
-    }
-
-    private class InnerCompound(
-        val simple: Simple,
-        val ids: Int,
-        val classLike: Int,
-        val tags: Int,
-    )
-
-    /** The argument of `:not()`: one compound, no combinators/pseudos. */
-    private fun parseInnerCompound(argument: String): InnerCompound? {
-        val text = argument.trim()
-        if (text.isEmpty() || text.length > MAX_SELECTOR_CHARS || text.any { it.isWhitespace() }) {
-            return null
-        }
-        var tag: String? = null
-        var id: String? = null
-        val classes = mutableListOf<String>()
-        val attrs = mutableListOf<AttrSelector>()
-        var ids = 0
-        var classLike = 0
-        var tags = 0
-        var i = 0
-        while (i < text.length) {
-            when (text[i]) {
-                '*' -> {
-                    tag = "*"
-                    i++
-                }
-
-                '.' -> {
-                    val end = readIdent(text, i + 1)
-                    if (end == i + 1) return null
-                    classes += text.substring(i + 1, end)
-                    classLike++
-                    i = end
-                }
-
-                '#' -> {
-                    val end = readIdent(text, i + 1)
-                    if (end == i + 1) return null
-                    id = text.substring(i + 1, end)
-                    ids++
-                    i = end
-                }
-
-                '[' -> {
-                    val close = text.indexOf(']', i)
-                    if (close < 0) return null
-                    attrs += parseAttrSelector(text.substring(i + 1, close)) ?: return null
-                    classLike++
-                    i = close + 1
-                }
-
-                ':' -> return null // nested pseudos inside :not(): drop
-
-                else -> {
-                    if (tag != null || id != null || classes.isNotEmpty() || attrs.isNotEmpty()) {
-                        return null
-                    }
-                    val end = readIdent(text, i)
-                    if (end == i) return null
-                    tag = text.substring(i, end).lowercase()
-                    tags++
-                    i = end
-                }
-            }
-        }
-        if (classes.size + attrs.size > MAX_SIMPLE_COMPONENTS) return null
-        if (tag == null && id == null && classes.isEmpty() && attrs.isEmpty()) return null
-        return InnerCompound(Simple(tag, id, classes, attrs, emptyList()), ids, classLike, tags)
-    }
-
-    /** `an+b`, `even`, `odd` or a bare integer → (a, b). */
-    private fun parseNth(argument: String): Pair<Int, Int>? {
-        val arg = argument.lowercase().replace(" ", "")
-        return when {
-            arg == "even" -> 2 to 0
-            arg == "odd" -> 2 to 1
-            !arg.contains('n') -> arg.toIntOrNull()?.let { 0 to it }
-            else -> {
-                val match = nthRegex.matchEntire(arg) ?: return null
-                val a = when (val aText = match.groupValues[1]) {
-                    "", "+" -> 1
-                    "-" -> -1
-                    else -> aText.toIntOrNull() ?: return null
-                }
-                val b = match.groupValues[2]
-                    .takeIf { it.isNotEmpty() }
-                    ?.removePrefix("+")
-                    ?.let { it.toIntOrNull() ?: return null }
-                    ?: 0
-                a to b
-            }
-        }
-    }
-
-    private fun matchingParen(text: String, open: Int): Int {
-        var depth = 0
-        for (i in open until text.length) {
-            when (text[i]) {
-                '(' -> depth++
-                ')' -> {
-                    depth--
-                    if (depth == 0) return i
-                }
-            }
-        }
-        return -1
-    }
-
-    /** Identifier scan: letters, digits, `-`, `_` and non-ASCII. */
-    private fun readIdent(text: String, start: Int): Int {
-        var i = start
-        while (i < text.length) {
-            val c = text[i]
-            if (c.isLetterOrDigit() || c == '-' || c == '_' || c.code > 127) i++ else break
-        }
-        return i
-    }
-
-    /** Parses the inside of `[…]`: `attr`, `attr=v`, `attr~=v` … */
-    private fun parseAttrSelector(inner: String): AttrSelector? {
-        val text = inner.trim()
-        if (text.isEmpty()) return null
-        // A namespace separator is part of the name, whereas |= is the dash
-        // match operator: [epub|type~="z3998:poem"] must keep both intact.
-        val operator = attrOperatorRegex.find(text)
-        val opIndex = operator?.range?.first ?: -1
-        val rawName = if (opIndex < 0) text else text.substring(0, opIndex).trim()
-        val name = rawName.lowercase().replace('|', ':')
-        if (name.isEmpty() || !name.all {
-                it.isLetterOrDigit() || it == '-' || it == '_' || it == ':'
-            }
-        ) return null
-        val namespaceUri = if ('|' in rawName) {
-            parsingNamespaces[rawName.substringBefore('|')] ?: return null
-        } else null
-        if (opIndex < 0) {
-            return AttrSelector(name, AttrOp.EXISTS, null, namespaceUri)
-        }
-        val opChar = text[opIndex]
-        val op: AttrOp
-        val valueStart: Int
-        if (opChar == '=') {
-            op = AttrOp.EQUALS
-            valueStart = opIndex + 1
-        } else {
-            if (opIndex + 1 >= text.length || text[opIndex + 1] != '=') return null
-            op = when (opChar) {
-                '~' -> AttrOp.INCLUDES
-                '|' -> AttrOp.DASH
-                '^' -> AttrOp.PREFIX
-                '$' -> AttrOp.SUFFIX
-                else -> AttrOp.SUBSTRING
-            }
-            valueStart = opIndex + 2
-        }
-        var value = text.substring(valueStart).trim()
-        // Drop a trailing case-sensitivity flag: [attr="v" i].
-        caseFlagRegex.find(value)?.let { value = it.groupValues[1].trim() }
-        value = value.trim('"', '\'')
-        return AttrSelector(name, op, value, namespaceUri)
-    }
-
-    private fun parseDeclarations(
-        text: String,
+    private fun compileDeclarations(
+        source: List<RustCssSyntax.Declaration>,
         stylesheet: Boolean,
-    ): Map<String, Declaration> {
-        val out = LinkedHashMap<String, Declaration>()
-        val sourceLimit = if (stylesheet) {
-            minOf(
-                MAX_DECLARATIONS_PER_BLOCK,
-                MAX_STYLESHEET_DECLARATIONS - stylesheetDeclarationCount,
-            )
+    ): List<Pair<String, Declaration>> {
+        val limit = if (stylesheet) {
+            minOf(MAX_DECLARATIONS_PER_BLOCK, MAX_STYLESHEET_DECLARATIONS - stylesheetDeclarationCount)
         } else {
             MAX_DECLARATIONS_PER_BLOCK
         }
-        if (sourceLimit <= 0) return out
-
-        for (declaration in declarationSlices(text, sourceLimit)) {
-            if (stylesheet) stylesheetDeclarationCount++
-            val colon = declaration.indexOf(':')
-            if (colon <= 0) continue
-            val property = declaration.substring(0, colon).trim().lowercase()
-                .let { if (it == "font-width") "font-stretch" else it }
-            var value = declaration.substring(colon + 1).trim()
-            var important = false
-            val bang = value.lastIndexOf('!')
-            if (bang >= 0 && value.substring(bang + 1).trim().equals("important", true)) {
-                important = true
-                value = value.substring(0, bang).trim()
-            }
-            if (property.isNotEmpty() && value.isNotEmpty()) {
-                val candidates = when (property) {
-                    "margin" -> {
-                        if (splitTopLevelWhitespace(value).size !in 1..4) continue
-                        listOf(
-                            "margin-top" to Declaration(value, important, MarginSide.TOP),
-                            "margin-right" to Declaration(value, important, MarginSide.RIGHT),
-                            "margin-bottom" to Declaration(value, important, MarginSide.BOTTOM),
-                            "margin-left" to Declaration(value, important, MarginSide.LEFT),
-                        )
-                    }
-
-                    "margin-inline" -> {
-                        if (splitTopLevelWhitespace(value).size !in 1..2) continue
-                        listOf(
-                            "margin-inline-start" to Declaration(
-                                value, important, MarginSide.INLINE_START,
-                            ),
-                            "margin-inline-end" to Declaration(
-                                value, important, MarginSide.INLINE_END,
-                            ),
-                        )
-                    }
-
-                    "padding" -> {
-                        if (splitTopLevelWhitespace(value).size !in 1..4) continue
-                        listOf(
-                            "padding-top" to Declaration(value, important, MarginSide.TOP),
-                            "padding-right" to Declaration(value, important, MarginSide.RIGHT),
-                            "padding-bottom" to Declaration(value, important, MarginSide.BOTTOM),
-                            "padding-left" to Declaration(value, important, MarginSide.LEFT),
-                        )
-                    }
-
-                    "padding-inline" -> {
-                        if (splitTopLevelWhitespace(value).size !in 1..2) continue
-                        listOf(
-                            "padding-inline-start" to Declaration(
-                                value, important, MarginSide.INLINE_START,
-                            ),
-                            "padding-inline-end" to Declaration(
-                                value, important, MarginSide.INLINE_END,
-                            ),
-                        )
-                    }
-
-                    "border" -> borderShorthandDeclarations(
-                        value,
-                        important,
-                        listOf(
-                            MarginSide.TOP,
-                            MarginSide.RIGHT,
-                            MarginSide.BOTTOM,
-                            MarginSide.LEFT,
-                        ),
-                    ) ?: continue
-                    "border-top" -> borderShorthandDeclarations(
-                        value, important, listOf(MarginSide.TOP),
-                    ) ?: continue
-                    "border-right" -> borderShorthandDeclarations(
-                        value, important, listOf(MarginSide.RIGHT),
-                    ) ?: continue
-                    "border-bottom" -> borderShorthandDeclarations(
-                        value, important, listOf(MarginSide.BOTTOM),
-                    ) ?: continue
-                    "border-left" -> borderShorthandDeclarations(
-                        value, important, listOf(MarginSide.LEFT),
-                    ) ?: continue
-                    "border-width" -> borderFourSideDeclarations(
-                        value, important, "width",
-                    ) ?: continue
-                    "border-style" -> borderFourSideDeclarations(
-                        value, important, "style",
-                    ) ?: continue
-                    "border-color" -> borderFourSideDeclarations(
-                        value, important, "color",
-                    ) ?: continue
-                    "background" -> {
-                        if (!value.contains("var(", ignoreCase = true) &&
-                            backgroundColorFromShorthand(value.lowercase()) == null
-                        ) {
-                            continue
-                        }
-                        listOf(
-                            "background-color" to Declaration(
-                                value = value,
-                                important = important,
-                                backgroundShorthand = true,
-                            ),
-                        )
-                    }
-
-                    "font" -> fontShorthandDeclarations(value, important) ?: continue
-                    else -> listOf(property to Declaration(value, important))
-                }
-                // Shorthands are admitted atomically: never leave a partial
-                // reset merely because the per-block output cap was reached.
-                val newKeys = candidates.asSequence()
-                    .map { it.first }
-                    .distinct()
-                    .count { it !in out }
-                if (out.size + newKeys > MAX_DECLARATIONS_PER_BLOCK) break
-                candidates.forEach { (name, candidate) ->
-                    putDeclaration(out, name, candidate)
-                }
-            }
-        }
-        return out
-    }
-
-    /**
-     * Bounded declaration scanner. Unlike `split(';')`, this neither allocates
-     * attacker-controlled numbers of substrings nor cuts quoted/function
-     * values at an embedded semicolon.
-     */
-    private fun declarationSlices(text: String, limit: Int): List<String> {
-        val result = ArrayList<String>(minOf(limit, 16))
-        var start = 0
-        var quote: Char? = null
-        var parentheses = 0
-        var index = 0
-        while (index <= text.length && result.size < limit) {
-            val atEnd = index == text.length
-            val char = if (atEnd) ';' else text[index]
-            when {
-                quote != null -> if (char == quote && !isEscaped(text, index)) quote = null
-                char == '\'' || char == '"' -> quote = char
-                char == '(' -> parentheses++
-                char == ')' && parentheses > 0 -> parentheses--
-                char == ';' && parentheses == 0 -> {
-                    val declaration = text.substring(start, index).trim()
-                    if (declaration.isNotEmpty()) result.add(declaration)
-                    start = index + 1
-                }
-            }
-            index++
-        }
-        return result
-    }
-
-    /** Same-block declarations still run the importance/source-order cascade. */
-    private fun putDeclaration(
-        out: MutableMap<String, Declaration>,
-        property: String,
-        candidate: Declaration,
-    ) {
-        val previous = out[property]
-        if (previous == null || candidate.important || !previous.important) {
-            out.remove(property)
-            out[property] = candidate
-        }
-    }
-
-    private data class BorderShorthandValues(
-        val width: String,
-        val style: String,
-        val color: String,
-    ) {
-        fun value(part: BorderPart): String = when (part) {
-            BorderPart.WIDTH -> width
-            BorderPart.STYLE -> style
-            BorderPart.COLOR -> color
-        }
-    }
-
-    private fun borderShorthandDeclarations(
-        value: String,
-        important: Boolean,
-        sides: List<MarginSide>,
-    ): List<Pair<String, Declaration>>? {
-        if (!value.contains("var(", ignoreCase = true) &&
-            borderShorthandValues(value.lowercase()) == null
-        ) {
-            return null
-        }
-        val result = ArrayList<Pair<String, Declaration>>(sides.size * 3)
-        for (side in sides) {
-            val sideName = side.physicalCssName() ?: continue
-            for (part in BorderPart.entries) {
-                result += "border-$sideName-${part.name.lowercase()}" to Declaration(
-                    value = value,
-                    important = important,
-                    borderPart = part,
-                )
-            }
-        }
-        return result
-    }
-
-    private fun borderFourSideDeclarations(
-        value: String,
-        important: Boolean,
-        suffix: String,
-    ): List<Pair<String, Declaration>>? {
-        if (splitTopLevelWhitespace(value).size !in 1..4) return null
-        return listOf(
-            MarginSide.TOP,
-            MarginSide.RIGHT,
-            MarginSide.BOTTOM,
-            MarginSide.LEFT,
-        ).map { side ->
-            "border-${side.physicalCssName()}-$suffix" to Declaration(
-                value = value,
-                important = important,
-                marginSide = side,
-            )
-        }
-    }
-
-    private fun MarginSide.physicalCssName(): String? = when (this) {
-        MarginSide.TOP -> "top"
-        MarginSide.RIGHT -> "right"
-        MarginSide.BOTTOM -> "bottom"
-        MarginSide.LEFT -> "left"
-        MarginSide.INLINE_START, MarginSide.INLINE_END -> null
-    }
-
-    private fun borderShorthandValues(value: String): BorderShorthandValues? {
-        val normalized = value.trim().lowercase()
-        if (normalized in CSS_WIDE_KEYWORDS) {
-            return BorderShorthandValues(normalized, normalized, normalized)
-        }
-        val tokens = splitTopLevelWhitespace(normalized)
-        if (tokens.isEmpty() || tokens.size > 3) return null
-        var width: String? = null
-        var style: String? = null
-        var color: String? = null
-        for (token in tokens) {
-            when {
-                token in BORDER_STYLE_KEYWORDS && style == null -> style = token
-                isBorderWidthToken(token) && width == null -> width = token
-                isBorderColorToken(token) && color == null -> color = token
-                else -> return null
-            }
-        }
-        return BorderShorthandValues(
-            width = width ?: "medium",
-            style = style ?: "none",
-            color = color ?: "currentcolor",
-        )
-    }
-
-    private fun isBorderWidthToken(value: String): Boolean =
-        value == "thin" || value == "medium" || value == "thick" ||
-            lengthEm(value) != null
-
-    private fun isBorderColorToken(value: String): Boolean =
-        value == "currentcolor" || CssColor.parse(value) != null
-
-    /** The native background subset is a single solid authored color. */
-    private fun backgroundColorFromShorthand(value: String): String? {
-        val normalized = value.trim().lowercase()
-        if (normalized in CSS_WIDE_KEYWORDS) return normalized
-        if (normalized == "none") return "transparent"
-        if (normalized == "currentcolor" || CssColor.parse(normalized) != null) {
-            return normalized
-        }
-        val colors = splitTopLevelWhitespace(normalized).filter(::isBorderColorToken)
-        return colors.singleOrNull()
-    }
-
-    private fun borderWidthEm(
-        value: String,
-        inherited: Float,
-        emScale: Float,
-    ): Float? = when (value) {
-        "inherit" -> inherited
-        "initial", "unset", "revert", "revert-layer", "medium" -> MEDIUM_BORDER_EM
-        "thin" -> THIN_BORDER_EM
-        "thick" -> THICK_BORDER_EM
-        else -> lengthEm(value, emScale = emScale)?.coerceIn(0f, MAX_BORDER_EM)
-    }
-
-    private fun borderStyle(
-        value: String,
-        inherited: PublisherBorderStyle,
-    ): PublisherBorderStyle? = when (value) {
-        "inherit" -> inherited
-        "none", "hidden", "initial", "unset", "revert", "revert-layer" ->
-            PublisherBorderStyle.NONE
-        "solid" -> PublisherBorderStyle.SOLID
-        "dashed" -> PublisherBorderStyle.DASHED
-        "dotted" -> PublisherBorderStyle.DOTTED
-        "double" -> PublisherBorderStyle.DOUBLE
-        else -> null
-    }
-
-    private fun borderColor(value: String, inherited: Int, currentColor: Int): Int? =
-        when (value) {
-            "inherit" -> inherited
-            "currentcolor", "initial", "unset", "revert", "revert-layer" -> currentColor
-            else -> CssColor.parse(value)
-        }
-
-    private data class FontShorthandValues(
-        val style: String,
-        val weight: String,
-        val size: String,
-        val lineHeight: String,
-        val family: String,
-        val variant: String = "normal",
-        val stretch: String = "normal",
-        val reset: String = "initial",
-    ) {
-        fun value(part: FontPart): String = when (part) {
-            FontPart.STYLE -> style
-            FontPart.WEIGHT -> weight
-            FontPart.SIZE -> size
-            FontPart.LINE_HEIGHT -> lineHeight
-            FontPart.FAMILY -> family
-            FontPart.VARIANT -> variant
-            FontPart.STRETCH -> stretch
-            FontPart.FEATURES, FontPart.KERNING, FontPart.OPTICAL, FontPart.VARIATIONS, FontPart.LIGATURES -> reset
-        }
-    }
-
-    private fun fontShorthandDeclarations(
-        value: String,
-        important: Boolean,
-    ): List<Pair<String, Declaration>>? {
-        val parsed = fontShorthandValues(value)
-        if (parsed != null) {
-            return listOf(
-                "font-style" to Declaration(parsed.style, important),
-                "font-weight" to Declaration(parsed.weight, important),
-                "font-size" to Declaration(parsed.size, important),
-                "line-height" to Declaration(parsed.lineHeight, important),
-                "font-family" to Declaration(parsed.family, important),
-                "font-variant" to Declaration(parsed.variant, important),
-                "font-stretch" to Declaration(parsed.stretch, important),
-                "font-feature-settings" to Declaration(parsed.reset, important),
-                "font-kerning" to Declaration(parsed.reset, important),
-                "font-optical-sizing" to Declaration(parsed.reset, important),
-                "font-variation-settings" to Declaration(parsed.reset, important),
-                "font-variant-ligatures" to Declaration(parsed.reset, important),
-            )
-        }
-        if (!value.contains("var(", ignoreCase = true)) return null
-
-        // A custom property may supply the entire shorthand. Keep the raw
-        // value until computed-value substitution, but expose every longhand
-        // key now so it participates in the ordinary cascade.
-        return listOf(
-            "font-style" to FontPart.STYLE,
-            "font-weight" to FontPart.WEIGHT,
-            "font-size" to FontPart.SIZE,
-            "line-height" to FontPart.LINE_HEIGHT,
-            "font-family" to FontPart.FAMILY,
-            "font-variant" to FontPart.VARIANT,
-            "font-stretch" to FontPart.STRETCH,
-            "font-feature-settings" to FontPart.FEATURES,
-            "font-kerning" to FontPart.KERNING,
-            "font-optical-sizing" to FontPart.OPTICAL,
-            "font-variation-settings" to FontPart.VARIATIONS,
-            "font-variant-ligatures" to FontPart.LIGATURES,
-        ).map { (property, part) ->
-            property to Declaration(value, important, fontPart = part)
-        }
-    }
-
-    private fun fontShorthandValues(raw: String): FontShorthandValues? {
-        val value = raw.trim()
-        when (value.lowercase()) {
-            "inherit", "unset" -> return FontShorthandValues(
-                "inherit", "inherit", "inherit", "inherit", "inherit", "inherit", "inherit", "inherit",
-            )
-            "initial", "revert", "revert-layer" -> return FontShorthandValues(
-                "normal", "normal", "medium", "normal", "initial",
-            )
-            "caption", "icon", "menu", "message-box", "small-caption", "status-bar" ->
-                return FontShorthandValues("normal", "normal", "medium", "normal", "sans-serif")
-        }
-
-        val tokens = splitFontTokens(value)
-        if (tokens.isEmpty()) return null
-        var style = "normal"
-        var weight = "normal"
-        var variant = "normal"
-        var stretch = "normal"
-        var size: String? = null
-        var index = 0
-        while (index < tokens.size) {
-            val token = tokens[index]
-            val lower = token.lowercase()
-            if (fontSizeFactor(lower, 1f) != null) {
-                size = token
-                index++
-                break
-            }
-            when {
-                lower == "italic" || lower == "oblique" -> {
-                    style = lower
-                    if (lower == "oblique" && tokens.getOrNull(index + 1).isFontAngle()) index++
-                }
-                lower == "normal" -> Unit
-                lower == "small-caps" -> variant = "small-caps"
-                lower == "bold" || lower == "bolder" || lower == "lighter" ||
-                    lower.toIntOrNull()?.let { it in 1..1_000 } == true -> weight = lower
-                lower in FONT_STRETCH_KEYWORDS -> stretch = lower
-                else -> return null
-            }
-            index++
-        }
-        val resolvedSize = size ?: return null
-        var lineHeight = "normal"
-        if (tokens.getOrNull(index) == "/") {
-            lineHeight = tokens.getOrNull(index + 1)?.takeIf { it != "/" } ?: return null
-            index += 2
-        }
-        val family = tokens.drop(index).joinToString(" ").trim()
-        if (family.isEmpty() || family == "/") return null
-        return FontShorthandValues(style, weight, resolvedSize, lineHeight, family, variant, stretch)
-    }
-
-    private fun String?.isFontAngle(): Boolean {
-        val value = this?.lowercase() ?: return false
-        return leadingNumber(value) != null &&
-            (value.endsWith("deg") || value.endsWith("grad") ||
-                value.endsWith("rad") || value.endsWith("turn"))
-    }
-
-    /** Whitespace tokenizer that exposes only a top-level font `/`. */
-    private fun splitFontTokens(value: String): List<String> {
-        val result = mutableListOf<String>()
-        var start = -1
-        var quote: Char? = null
-        var parentheses = 0
-        fun flush(end: Int) {
-            if (start >= 0) {
-                result += value.substring(start, end)
-                start = -1
-            }
-        }
-        value.forEachIndexed { index, char ->
-            when {
-                quote != null -> {
-                    if (char == quote && !isEscaped(value, index)) quote = null
-                    if (start < 0) start = index
-                }
-                char == '\'' || char == '"' -> {
-                    quote = char
-                    if (start < 0) start = index
-                }
-                char == '(' -> {
-                    parentheses++
-                    if (start < 0) start = index
-                }
-                char == ')' -> {
-                    if (parentheses > 0) parentheses--
-                    if (start < 0) start = index
-                }
-                parentheses == 0 && char == '/' -> {
-                    flush(index)
-                    result += "/"
-                }
-                parentheses == 0 && char.isWhitespace() -> flush(index)
-                else -> if (start < 0) start = index
-            }
-        }
-        flush(value.length)
-        return result
-    }
-
-    private fun marginShorthandValue(value: String, side: MarginSide): String? {
-        val parts = splitTopLevelWhitespace(value)
-        if (parts.size !in 1..4) return null
-        val top = parts[0]
-        val right = parts.getOrElse(1) { top }
-        val bottom = parts.getOrElse(2) { top }
-        val left = parts.getOrElse(3) { right }
-        return when (side) {
-            MarginSide.TOP -> top
-            MarginSide.RIGHT -> right
-            MarginSide.BOTTOM -> bottom
-            MarginSide.LEFT -> left
-            MarginSide.INLINE_START -> parts[0]
-            MarginSide.INLINE_END -> parts.getOrElse(1) { parts[0] }
-        }
-    }
-
-    /** Splits CSS values on whitespace, preserving strings and functions. */
-    private fun splitTopLevelWhitespace(value: String): List<String> {
-        val result = mutableListOf<String>()
-        var start = -1
-        var quote: Char? = null
-        var parentheses = 0
-        var index = 0
-        while (index < value.length) {
-            val char = value[index]
-            when {
-                quote != null -> {
-                    if (char == quote && !isEscaped(value, index)) quote = null
-                    if (start < 0) start = index
-                }
-                char == '\'' || char == '"' -> {
-                    quote = char
-                    if (start < 0) start = index
-                }
-                char == '(' -> {
-                    parentheses++
-                    if (start < 0) start = index
-                }
-                char == ')' -> {
-                    if (parentheses > 0) parentheses--
-                    if (start < 0) start = index
-                }
-                char.isWhitespace() && parentheses == 0 -> {
-                    if (start >= 0) {
-                        result += value.substring(start, index)
-                        start = -1
-                    }
-                }
-                else -> if (start < 0) start = index
-            }
-            index++
-        }
-        if (start >= 0) result += value.substring(start)
-        return result
+        val block = RustCssValues.compile(source, limit)
+        if (stylesheet) stylesheetDeclarationCount += block.consumed
+        return block.declarations
     }
 
     private fun isEscaped(value: String, index: Int): Boolean {
@@ -3700,47 +1461,51 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
         return backslashes % 2 == 1
     }
 
-    private fun stripComments(css: String): String =
-        commentRegex.replace(css, " ")
-
-    private fun matchingBrace(css: String, open: Int): Int {
-        var depth = 0
-        for (i in open until css.length) {
-            when (css[i]) {
-                '{' -> depth++
-                '}' -> {
-                    depth--
-                    if (depth == 0) return i
-                }
+    private companion object {
+        fun declarationFields(
+            declarations: List<Pair<String, Declaration>>,
+            propertyId: (Int, String) -> Int,
+        ): IntArray = IntArray(declarations.size * 2).also { fields ->
+            declarations.forEachIndexed { index, (property, declaration) ->
+                fields[2 * index] = propertyId(index, property)
+                fields[2 * index + 1] = if (declaration.important) 1 else 0
             }
         }
-        return -1
-    }
 
-    private companion object {
+        fun cascadeDeclarations(
+            winners: IntArray,
+            sheets: List<Pair<String, Declaration>>,
+            inline: List<Pair<String, Declaration>>,
+        ): Map<String, Declaration>? {
+            if (winners.size == 1) return null
+            val declarations = LinkedHashMap<String, Declaration>()
+            // The leading field is the remaining selector budget.
+            for (index in 1 until winners.size) {
+                val id = winners[index]
+                val (property, declaration) = if (id < 0) inline[-1 - id] else sheets[id]
+                declarations[property] = declaration
+            }
+            return declarations
+        }
+
+        val EMPTY_INT_ARRAY = IntArray(0)
         const val BLACK_ARGB: Int = -0x1000000
         const val MAX_BOX_INLINE_EM = 8f
         const val MAX_BOX_INLINE_FRAC = 0.45f
-        const val MAX_BOX_BLOCK_EM = 12f
-        const val THIN_BORDER_EM = 1f / 16f
-        const val MEDIUM_BORDER_EM = 2f / 16f
-        const val THICK_BORDER_EM = 3f / 16f
-        const val MAX_BORDER_EM = 2f
         const val MAX_GROUP_RULE_DEPTH = 64
         const val MAX_RESPONSIVE_BREAKPOINTS = 8
         const val MAX_RULES = 16_384
         const val MAX_FONT_FACES = 512
         const val MAX_STYLESHEET_DECLARATIONS = 131_072
         const val MAX_DECLARATIONS_PER_BLOCK = 512
-        const val MAX_SELECTORS_PER_RULE = 256
-        const val MAX_SELECTOR_CHARS = 16_384
-        const val MAX_SELECTOR_COMPOUNDS = 64
-        const val MAX_SIMPLE_COMPONENTS = 64
+        const val MAX_COMMA_LIST_ITEMS = 256
         const val MAX_UNIVERSAL_RULES = 1_024
         const val MAX_RULES_PER_INDEX_BUCKET = 4_096
         const val MAX_SELECTOR_MATCH_OPERATIONS = 5_000_000
         const val MAX_SHARED_COMPUTED_STYLES = 1_024
-        val commentRegex = Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL)
+        const val MAX_INLINE_CACHE_ENTRIES = 256
+        const val MAX_INLINE_CACHE_BYTES = 128 * 1024
+        const val MAX_INLINE_CACHE_KEY_BYTES = 2 * 1024
         val whitespaceRegex = Regex("""\s+""")
         val mediaFeatureRegex = Regex("""\(([^()]*)\)""")
         val supportsFeatureRegex = Regex("""\(\s*([\w-]+)\s*:\s*([^()]+)\)""")
@@ -3764,56 +1529,13 @@ class CssResolver(sheets: List<Sheet>, private val viewport: Viewport? = null) {
             "no-contextual" to (listOf("calt") to 0),
         )
         val fontFeatureRegex = Regex("""["']([ -~]{4})["'](?:\s+((?i:on|off)|\d+))?""")
-        val FONT_VARIANT_CAPS_FEATURES = mapOf(
-            "small-caps" to listOf("smcp"),
-            "all-small-caps" to listOf("smcp", "c2sc"),
-            "petite-caps" to listOf("pcap"),
-            "all-petite-caps" to listOf("pcap", "c2pc"),
-            "unicase" to listOf("unic"),
-            "titling-caps" to listOf("titl"),
-        )
-        val FONT_VARIANT_NUMERIC_FEATURES = mapOf(
-            "lining-nums" to listOf("lnum"),
-            "oldstyle-nums" to listOf("onum"),
-            "proportional-nums" to listOf("pnum"),
-            "tabular-nums" to listOf("tnum"),
-            "diagonal-fractions" to listOf("frac"),
-            "stacked-fractions" to listOf("afrc"),
-            "ordinal" to listOf("ordn"),
-            "slashed-zero" to listOf("zero"),
-        )
-        // ".5em" is as common as "0.5em" in publisher CSS — without the
-        // leading-dot branch the match starts at "5" and the value comes
-        // out ten times too large.
-        val numberRegex = Regex("""-?(?:\d+(?:\.\d+)?|\.\d+)""")
-        val plainViewportHeightRegex = Regex("""[+-]?(?:\d+(?:\.\d+)?|\.\d+)vh""")
-        val affineViewportHeightRegex = Regex(
-            """calc\(\s*([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:vh|rem|em|px|pt|pc|in|cm|mm|q|ch|ex)?)\s+([+-])\s+([+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:vh|rem|em|px|pt|pc|in|cm|mm|q|ch|ex)?)\s*\)""",
-        )
-        val viewportUnitRegex = Regex("""(?i)\d(?:vw|vh|vmin|vmax)\b""")
-        val lineHeightLengthUnitRegex = Regex(
-            """(?i)(?:%|(?<=[0-9.])(?:rem|em|px|pt|pc|in|cm|mm|q|ch|ex|vw|vh|vmin|vmax)(?=[\s),*/+\-]|$))""",
-        )
-        val FONT_STRETCH_KEYWORDS = setOf(
-            "ultra-condensed", "extra-condensed", "condensed", "semi-condensed",
-            "semi-expanded", "expanded", "extra-expanded", "ultra-expanded",
-        )
-        val CSS_WIDE_KEYWORDS = setOf(
-            "inherit", "initial", "unset", "revert", "revert-layer",
-        )
-        val BORDER_STYLE_KEYWORDS = setOf(
-            "none", "hidden", "solid", "dashed", "dotted", "double",
-        )
         val INLINE_REPLACED_TAGS = setOf("img", "image", "svg")
         val BLOCK_LEVEL_DISPLAY_VALUES = setOf(
             "block", "flow-root", "flex", "grid", "list-item", "table",
         )
         val fontUrlRegex = Regex("""url\(\s*['"]?([^'")]+)['"]?\s*\)""")
-        val caseFlagRegex = Regex("""^(['"].*['"])\s+[iIsS]$""")
-        val attrOperatorRegex = Regex("""[~|^$*]?=""")
         val namespaceRuleRegex = Regex(
             """(?i)^@namespace\s+([\w-]+)\s+(?:url\(\s*["']?([^\s"')]+)["']?\s*\)|["']([^"']+)["'])$""",
         )
-        val nthRegex = Regex("""^([+-]?\d*)n([+-]\d+)?$""")
     }
 }

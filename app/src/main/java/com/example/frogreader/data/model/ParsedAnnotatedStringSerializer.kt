@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.TextUnitType
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.Transient
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
@@ -126,6 +127,7 @@ private data class ParsedUnit(val type: Int, val bits: Int = 0) {
 }
 
 @Serializable
+@InternedFrbStyle
 private data class ParsedSpan(
     val color: ULong = Color.Unspecified.value,
     val size: ParsedUnit = ParsedUnit(0),
@@ -143,7 +145,10 @@ private data class ParsedSpan(
     val decoration: Int? = null,
     val shadow: ParsedShadow? = null,
 ) {
-    fun restore(): SpanStyle = SpanStyle(
+    @Transient
+    private var restoredStyle: SpanStyle? = null
+
+    fun restore(): SpanStyle = restoredStyle ?: SpanStyle(
         color = Color(color), fontSize = size.restore(), fontWeight = weight?.let(::FontWeight),
         fontStyle = italic?.let { if (it) FontStyle.Italic else FontStyle.Normal },
         fontSynthesis = synthesis?.let { when (it) {
@@ -167,7 +172,7 @@ private data class ParsedSpan(
                 if (mask and 2 != 0) add(TextDecoration.LineThrough)
             })
         }, shadow = shadow?.restore(),
-    )
+    ).also { restoredStyle = it }
 
     companion object {
         fun from(style: SpanStyle): ParsedSpan {
@@ -208,6 +213,7 @@ private data class ParsedShadow(val color: ULong, val x: Float, val y: Float, va
 }
 
 @Serializable
+@InternedFrbStyle
 private data class ParsedParagraph(
     val align: Int = 0,
     val direction: Int = 0,
@@ -215,7 +221,10 @@ private data class ParsedParagraph(
     val firstIndent: ParsedUnit? = null,
     val restIndent: ParsedUnit? = null,
 ) {
-    fun restore() = androidx.compose.ui.text.ParagraphStyle(
+    @Transient
+    private var restoredStyle: androidx.compose.ui.text.ParagraphStyle? = null
+
+    fun restore(): androidx.compose.ui.text.ParagraphStyle = restoredStyle ?: androidx.compose.ui.text.ParagraphStyle(
         textAlign = when (align) {
             0 -> TextAlign.Unspecified; 1 -> TextAlign.Left; 2 -> TextAlign.Right
             3 -> TextAlign.Center; 4 -> TextAlign.Justify; 5 -> TextAlign.Start; 6 -> TextAlign.End
@@ -228,7 +237,7 @@ private data class ParsedParagraph(
         },
         lineHeight = height.restore(),
         textIndent = firstIndent?.let { TextIndent(it.restore(), requireNotNull(restIndent).restore()) },
-    )
+    ).also { restoredStyle = it }
 
     companion object {
         fun from(style: androidx.compose.ui.text.ParagraphStyle): ParsedParagraph {
@@ -251,13 +260,19 @@ private data class ParsedParagraph(
 }
 
 @Serializable
+@InternedFrbStyle
 private data class ParsedLinkStyles(
     val style: ParsedSpan? = null,
     val focused: ParsedSpan? = null,
     val hovered: ParsedSpan? = null,
     val pressed: ParsedSpan? = null,
 ) {
-    fun restore() = TextLinkStyles(style?.restore(), focused?.restore(), hovered?.restore(), pressed?.restore())
+    @Transient
+    private var restoredStyles: TextLinkStyles? = null
+
+    fun restore(): TextLinkStyles = restoredStyles
+        ?: TextLinkStyles(style?.restore(), focused?.restore(), hovered?.restore(), pressed?.restore())
+            .also { restoredStyles = it }
 
     companion object {
         fun from(value: TextLinkStyles) = ParsedLinkStyles(value.style?.let(ParsedSpan::from),

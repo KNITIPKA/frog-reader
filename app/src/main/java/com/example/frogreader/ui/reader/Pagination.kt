@@ -2,12 +2,15 @@ package com.example.frogreader.ui.reader
 
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.frogreader.data.ReaderSettings
 import com.example.frogreader.data.model.ContentElement
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.yield
 import kotlin.math.ceil
 import kotlin.math.min
@@ -63,6 +66,7 @@ class BookPage(
  * change — stale disk caches then miss on the key and are recomputed.
  */
 const val LAYOUT_ENGINE_VERSION = 24
+internal const val HEADING_LOOKAHEAD_ITEMS = 3
 
 class PaginationSpec(
     val contentWidthPx: Int,
@@ -117,9 +121,60 @@ suspend fun paginateBook(
     toIndex: Int = items.size,
     stopAfterLocation: ReaderReturnLocation.Main? = null,
     previewPageCount: Int = 3,
+): List<BookPage> = paginateLayout(items, measurer, spec, fromIndex, toIndex, stopAfterLocation, previewPageCount)
+
+/** Emits each closed page's source coordinates and releases its render parts. */
+internal suspend fun emitPaginationAnchors(
+    items: List<ReaderItem>,
+    measurer: TextMeasurer,
+    spec: PaginationSpec,
+    emit: (itemIndex: Int, charOffset: Int) -> Unit,
+) {
+    paginateLayout(
+        items = items,
+        measurer = measurer,
+        spec = spec,
+        fromIndex = 0,
+        toIndex = items.size,
+        stopAfterLocation = null,
+        previewPageCount = 0,
+        anchorsOnly = true,
+    ) { _, item, char -> emit(item, char) }
+}
+
+/** Emits an exact whole-book page sequence from a bounded prepared source. */
+internal suspend fun emitPaginationPages(
+    items: StreamingPaginationItems,
+    measurer: TextMeasurer,
+    spec: PaginationSpec,
+    emit: (BookPage) -> Unit,
+) {
+    paginateLayout(items, measurer, spec, 0, items.size, null, 0) { parts, item, char ->
+        emit(BookPage(parts, item, char))
+    }
+}
+
+private suspend fun paginateLayout(
+    items: List<ReaderItem>,
+    measurer: TextMeasurer,
+    spec: PaginationSpec,
+    fromIndex: Int,
+    toIndex: Int,
+    stopAfterLocation: ReaderReturnLocation.Main?,
+    previewPageCount: Int,
+    anchorsOnly: Boolean = false,
+    emitPage: ((List<PagePart>, Int, Int) -> Unit)? = null,
 ): List<BookPage> {
+    val indexedItems = items as? IndexedReaderItems
+    val streamingItems = items as? StreamingPaginationItems
+    if (indexedItems != null) {
+        require(fromIndex >= indexedItems.loadedRange.first && toIndex <= indexedItems.loadedRange.last + 1 &&
+            fromIndex <= toIndex) { "Pagination requires a loaded chapter window" }
+    }
+    val coroutineContext = currentCoroutineContext()
     val pages = mutableListOf<BookPage>()
-    var parts = mutableListOf<PagePart>()
+    var parts: MutableList<PagePart>? = if (anchorsOnly) null else mutableListOf()
+    var pageHasParts = false
     var usedPx = 0
     var pageFirstIndex = 0
     var pageFirstChar = 0
@@ -129,25 +184,68 @@ suspend fun paginateBook(
     } == true
 
     fun closePage() {
-        if (parts.isNotEmpty()) {
-            pages += BookPage(parts.toList(), pageFirstIndex, pageFirstChar)
-            parts = mutableListOf()
+        if (pageHasParts) {
+            if (anchorsOnly) {
+                emitPage?.invoke(emptyList(), pageFirstIndex, pageFirstChar)
+            } else {
+                val currentParts = parts!!
+                if (emitPage == null) {
+                    pages += BookPage(currentParts.toList(), pageFirstIndex, pageFirstChar)
+                } else {
+                    emitPage(currentParts, pageFirstIndex, pageFirstChar)
+                }
+                parts = mutableListOf()
+            }
+            pageHasParts = false
         }
         usedPx = 0
     }
 
-    fun addPart(part: PagePart, heightPx: Int, index: Int, charStart: Int = 0) {
-        if (parts.isEmpty()) {
+    fun recordPart(heightPx: Int, index: Int, charStart: Int = 0) {
+        if (!pageHasParts) {
             pageFirstIndex = index
             pageFirstChar = charStart
+            pageHasParts = true
         }
-        parts += part
         usedPx += heightPx
     }
 
+    fun addPart(part: PagePart, heightPx: Int, index: Int, charStart: Int = 0) {
+        recordPart(heightPx, index, charStart)
+        parts!! += part
+    }
+
     with(spec.density) {
+        val fastMeasurer = fastParagraphMeasurerFor(measurer)
+        fun measureParagraph(
+            text: AnnotatedString,
+            style: TextStyle,
+            widthPx: Int,
+        ): MeasuredParagraph {
+            val boundedWidth = widthPx.coerceAtLeast(1)
+            return fastMeasurer?.measure(
+                text = text,
+                style = style,
+                maxWidthPx = boundedWidth,
+                density = spec.density,
+                bookFonts = spec.bookFonts,
+                publisherStyles = spec.settings.bookStyles,
+            ) ?: measurer.measureReader(
+                text = text,
+                style = style,
+                constraints = Constraints(maxWidth = boundedWidth),
+                density = spec.density,
+                bookFonts = spec.bookFonts,
+                publisherStyles = spec.settings.bookStyles,
+            ).toMeasuredParagraph()
+        }
         val maxImageHeightPx = ReaderMetrics.maxImageHeight.roundToPx()
         val fontSizePx = spec.fontSize.sp.toPx()
+        val textStyleCache = ReaderTextStyleCache(
+            settings = spec.settings,
+            bookFonts = spec.bookFonts,
+            defaultLanguage = spec.language,
+        )
         val inlineWidths = PublisherInlineWidthResolver(
             measurer, spec.density, spec.settings, spec.fontSize, spec.bookFonts, spec.language,
         )
@@ -247,7 +345,11 @@ suspend fun paginateBook(
 
         fun ensureSuppressedSourceFlow(sourceIndex: Int) {
             val targetIndex = floatTargetBySource[sourceIndex]
-                ?: if (items is ReaderChapterItems) {
+                ?: if (indexedItems != null) {
+                    indexedItems.publisherFloatTargetForSource(sourceIndex)
+                } else if (streamingItems != null) {
+                    streamingItems.publisherFloatTargetForSource(sourceIndex)
+                } else if (items is ReaderChapterItems) {
                     items.publisherFloatTargetForSource(sourceIndex)
                 } else {
                     // Plain lists are used by linked documents and test fixtures.
@@ -279,7 +381,8 @@ suspend fun paginateBook(
         fun keepWithNextPx(headingIndex: Int): Int {
             var interPx = 0
             var j = headingIndex + 1
-            val limit = min(headingIndex + 4, items.size)
+            val end = indexedItems?.loadedRange?.last?.plus(1) ?: items.size
+            val limit = j + minOf(HEADING_LOOKAHEAD_ITEMS, end - j)
             while (j < limit) {
                 val next = items[j]
                 if (next.suppressedByPublisherFloat && spec.settings.bookStyles) {
@@ -358,17 +461,10 @@ suspend fun paginateBook(
                             sInset.roundToPx() - eInset.roundToPx())
                             .coerceAtLeast(1)
                         val bidiText = BidiLayoutText.of(text)
-                        val nextLayout = measurer.measureReader(
+                        val nextLayout = measureParagraph(
                             text = bidiText.display,
-                            style = ReaderMetrics.textStyle(
-                                el, spec.settings, spec.fontSize,
-                                bookFonts = spec.bookFonts,
-                                language = spec.language,
-                            ),
-                            constraints = Constraints(maxWidth = w),
-                            density = spec.density,
-                            bookFonts = spec.bookFonts,
-                            publisherStyles = spec.settings.bookStyles,
+                            style = textStyleCache.textStyle(el, spec.fontSize),
+                            widthPx = w,
                         )
                         // A following heading moves whole; a paragraph must
                         // contribute at least its first two lines.
@@ -388,17 +484,28 @@ suspend fun paginateBook(
 
         for (index in fromIndex.coerceAtLeast(0) until toIndex.coerceAtMost(items.size)) {
             if (previewReady()) return pages
+            streamingItems?.prepare(index)?.let { first ->
+                publisherSideBoxPlans.keys.removeAll { it < first }
+                normalFlowFloatTargets.removeAll { it < first }
+                normalFlowFloatSources.removeAll { it < first }
+                checkedFloatTargets.removeAll { it < first }
+                floatTargetBySource.keys.removeAll { it < first }
+            }
             val item = items[index]
             val itemFontSize = inlineWidths.fittedFontSize(item.publisherBoxes, spec.contentWidthPx)
             val itemFontSizePx = itemFontSize.sp.toPx()
             val itemInlineWidths = inlineWidths.atFontSize(itemFontSize)
-            if (index % 32 == 0) yield()
+            if (index % 128 == 0) {
+                yield()
+            } else if (index % 32 == 0) {
+                coroutineContext.ensureActive()
+            }
 
             // Optionally start every chapter on a fresh page.
             if (spec.settings.startChaptersOnNewPage &&
                 index > 0 &&
                 item.chapterIndex != items[index - 1].chapterIndex &&
-                parts.isNotEmpty()
+                pageHasParts
             ) {
                 closePage()
             }
@@ -416,7 +523,7 @@ suspend fun paginateBook(
             // Give a multi-leaf `break-inside:avoid` container the maximum
             // available page before laying out its first child. If it is taller
             // than one page it still degrades to ordinary continuations.
-            if (parts.isNotEmpty() && item.publisherBoxes.any { box ->
+            if (pageHasParts && item.publisherBoxes.any { box ->
                     box.startsAtElement && !box.endsAtElement &&
                         box.style.breakInsideAvoid
                 }
@@ -432,7 +539,7 @@ suspend fun paginateBook(
                 ?.publisherBoxes?.any { box ->
                     box.endsAtElement && box.style.pageBreakAfter
                 } == true
-            if (parts.isNotEmpty() && (forcedBoxBreakBefore || forcedBoxBreakAfterPrevious)) {
+            if (pageHasParts && (forcedBoxBreakBefore || forcedBoxBreakAfterPrevious)) {
                 closePage()
             }
             // The book's own forced break (CSS page-break-before: always).
@@ -441,7 +548,7 @@ suspend fun paginateBook(
                 is ContentElement.Heading -> element.block
                 else -> null
             }
-            if (elementBlock?.pageBreakBefore == true && parts.isNotEmpty()) closePage()
+            if (elementBlock?.pageBreakBefore == true && pageHasParts) closePage()
 
             val boxGeometry = publisherBoxGeometry(
                 boxes = item.publisherBoxes,
@@ -455,7 +562,7 @@ suspend fun paginateBook(
             )
             // Short authored full-viewport flex pages begin as one group.
             // Oversized contents receive no centering spare and retain flow.
-            if (parts.isNotEmpty() && spec.settings.bookStyles &&
+            if (pageHasParts && spec.settings.bookStyles &&
                 item.publisherBoxes.any { it.startsAtElement &&
                     it.style.centerContentVertically && it.inlineContent != null } &&
                 boxGeometry.topInsetPx > 0
@@ -482,22 +589,16 @@ suspend fun paginateBook(
                         boxGeometry.contentWidthPx -
                             startInset.roundToPx() - endInset.roundToPx()
                     val fullBidi = BidiLayoutText.of(fullText)
-                    val layout = measurer.measureReader(
+                    val layout = measureParagraph(
                         text = fullBidi.display,
-                        style = ReaderMetrics.textStyle(
-                            element, spec.settings, itemFontSize,
-                            bookFonts = spec.bookFonts,
-                            language = spec.language,
-                        ).withPublisherHangingIndent(boxGeometry, spec.density, true),
-                        constraints = Constraints(maxWidth = widthPx.coerceAtLeast(1)),
-                        density = spec.density,
-                        bookFonts = spec.bookFonts,
-                        publisherStyles = spec.settings.bookStyles,
+                        style = textStyleCache.textStyle(element, itemFontSize)
+                            .withPublisherHangingIndent(boxGeometry, spec.density, true),
+                        widthPx = widthPx,
                     )
 
                     // Headings: never split across pages, and never strand at
                     // a page bottom without the first lines of what follows.
-                    if (element is ContentElement.Heading && parts.isNotEmpty()) {
+                    if (element is ContentElement.Heading && pageHasParts) {
                         val vPaddingPx = baseVPaddingPx + boxGeometry.topInsetPx +
                             boxGeometry.bottomInsetPx
                         val ownHeight = ceil(layout.getLineBottom(layout.lineCount - 1)).toInt()
@@ -523,11 +624,11 @@ suspend fun paginateBook(
                                 box.startsAtElement && box.endsAtElement &&
                                     box.style.breakInsideAvoid
                             }
-                        val wholeHeight = layout.size.height + baseVPaddingPx +
+                        val wholeHeight = layout.height + baseVPaddingPx +
                             boxGeometry.topInsetPx + boxGeometry.bottomInsetPx
                         if (shouldMoveAvoidBlockToFreshPage(
                                 breakInsideAvoid = avoidsBreak,
-                                pageHasOtherContent = parts.isNotEmpty(),
+                                pageHasOtherContent = pageHasParts,
                                 wholeHeightPx = wholeHeight,
                                 remainingHeightPx = spec.contentHeightPx - usedPx,
                                 pageHeightPx = spec.contentHeightPx,
@@ -561,26 +662,30 @@ suspend fun paginateBook(
                                 (spec.contentHeightPx - imagePadPx).coerceAtLeast(1),
                             )
                             val total = storedHeight + imagePadPx
-                            if (total > spec.contentHeightPx - usedPx && parts.isNotEmpty()) {
+                            if (total > spec.contentHeightPx - usedPx && pageHasParts) {
                                 closePage()
                             }
-                            addPart(
-                                PagePart(
-                                    itemIndex = index,
-                                    element = element,
-                                    imageHeightPx = storedHeight,
-                                    floatImagePath = image.path,
-                                    // This synthesized fallback is the image,
-                                    // not another fragment of the paragraph's
-                                    // retained container box.
-                                    publisherBoxes = emptyList(),
-                                    publisherStartsElement = true,
-                                    publisherEndsElement = true,
-                                ),
-                                heightPx = total,
-                                index = index,
-                                charStart = 0,
-                            )
+                            if (anchorsOnly) {
+                                recordPart(heightPx = total, index = index, charStart = 0)
+                            } else {
+                                addPart(
+                                    PagePart(
+                                        itemIndex = index,
+                                        element = element,
+                                        imageHeightPx = storedHeight,
+                                        floatImagePath = image.path,
+                                        // This synthesized fallback is the image,
+                                        // not another fragment of the paragraph's
+                                        // retained container box.
+                                        publisherBoxes = emptyList(),
+                                        publisherStartsElement = true,
+                                        publisherEndsElement = true,
+                                    ),
+                                    heightPx = total,
+                                    index = index,
+                                    charStart = 0,
+                                )
+                            }
                         }
                         if (floatImage != null && !spec.settings.bookStyles) {
                             // Publisher formatting off: the float is a plain
@@ -626,47 +731,49 @@ suspend fun paginateBook(
                                 if (sideBoxEndsElement) boxGeometry.bottomInsetPx else 0
                             val compositeTotal = sideBox.compositeHeightPx + compositePadding
                             if (compositeTotal > spec.contentHeightPx - usedPx &&
-                                parts.isNotEmpty()
+                                pageHasParts
                             ) {
                                 closePage()
                             }
-                            val capLen = sideBox.capText?.length ?: 0
-                            addPart(
-                                PagePart(
-                                    itemIndex = index,
-                                    element = element,
-                                    text = fullText.subSequence(
-                                        capLen, sideBox.besideEndChar,
+                            if (anchorsOnly) {
+                                recordPart(
+                                    heightPx = compositeTotal,
+                                    index = compositeAnchorIndex,
+                                    charStart = 0,
+                                )
+                            } else {
+                                val capLen = sideBox.capText?.length ?: 0
+                                addPart(
+                                    PagePart(
+                                        itemIndex = index,
+                                        element = element,
+                                        text = fullText.subSequence(
+                                            capLen, sideBox.besideEndChar,
+                                        ),
+                                        isParagraphStart = true,
+                                        charStart = capLen,
+                                        charEnd = sideBox.besideEndChar,
+                                        sideBox = sideBox,
+                                        publisherBoxes = item.publisherBoxes,
+                                        publisherStartsElement = true,
+                                        publisherEndsElement = sideBoxEndsElement,
                                     ),
-                                    isParagraphStart = true,
-                                    charStart = capLen,
-                                    charEnd = sideBox.besideEndChar,
-                                    sideBox = sideBox,
-                                    publisherBoxes = item.publisherBoxes,
-                                    publisherStartsElement = true,
-                                    publisherEndsElement = sideBoxEndsElement,
-                                ),
-                                heightPx = compositeTotal,
-                                index = compositeAnchorIndex,
-                                charStart = 0,
-                            )
+                                    heightPx = compositeTotal,
+                                    index = compositeAnchorIndex,
+                                    charStart = 0,
+                                )
+                            }
                             if (sideBox.besideEndChar >= fullText.length) continue
                             packBase = sideBox.besideEndChar
                             firstPart = false
                             packedText = fullText.subSequence(packBase, fullText.length)
                             packedBidi = BidiLayoutText.of(packedText)
-                            packLayout = measurer.measureReader(
+                            packLayout = measureParagraph(
                                 text = packedBidi.display,
-                                style = ReaderMetrics.textStyle(
-                                    element, spec.settings, itemFontSize,
-                                    isParagraphStart = false,
-                                    bookFonts = spec.bookFonts,
-                                    language = spec.language,
+                                style = textStyleCache.textStyle(
+                                    element, itemFontSize, isParagraphStart = false,
                                 ).withPublisherHangingIndent(boxGeometry, spec.density, false),
-                                constraints = Constraints(maxWidth = widthPx.coerceAtLeast(1)),
-                                density = spec.density,
-                                bookFonts = spec.bookFonts,
-                                publisherStyles = spec.settings.bookStyles,
+                                widthPx = widthPx,
                             )
                         }
                     }
@@ -703,12 +810,12 @@ suspend fun paginateBook(
                         // lines don't. Measure the exact fragment standalone —
                         // the height on screen — and drop trailing lines until
                         // it truly fits, or the last line gets clipped.
-                        val fragmentStyle = ReaderMetrics.textStyle(
-                            element, spec.settings, itemFontSize,
-                            isParagraphStart = firstPart,
-                            bookFonts = spec.bookFonts,
-                            language = spec.language,
-                        ).withPublisherHangingIndent(boxGeometry, spec.density, firstPart)
+                        var cachedFragmentStyle: TextStyle? = null
+                        fun resolveFragmentStyle(): TextStyle = cachedFragmentStyle
+                            ?: textStyleCache.textStyle(
+                                element, itemFontSize, isParagraphStart = firstPart,
+                            ).withPublisherHangingIndent(boxGeometry, spec.density, firstPart)
+                                .also { cachedFragmentStyle = it }
                         var endChar: Int
                         var fragmentHeight: Int
                         while (true) {
@@ -732,22 +839,23 @@ suspend fun paginateBook(
                                 // Whole paragraph: the big layout IS standalone.
                                 ceil(packLayout.getLineBottom(endLine)).toInt()
                             } else {
-                                val fragment = packedText.subSequence(cursor, endChar)
+                                val fragment = if (cursor == 0 && endChar == raw.length) {
+                                    packedText
+                                } else {
+                                    packedText.subSequence(cursor, endChar)
+                                }
                                 val bidiFragment = BidiLayoutText.of(fragment)
-                                measurer.measureReader(
+                                measureParagraph(
                                     text = bidiFragment.display,
-                                    style = fragmentStyle,
-                                    constraints = Constraints(maxWidth = widthPx.coerceAtLeast(1)),
-                                    density = spec.density,
-                                    bookFonts = spec.bookFonts,
-                                    publisherStyles = spec.settings.bookStyles,
-                                ).size.height
+                                    style = resolveFragmentStyle(),
+                                    widthPx = widthPx,
+                                ).height
                             }
                             if (fragmentHeight <= remaining || endLine <= startLine) break
                             endLine--
                         }
 
-                        if (fragmentHeight > remaining && parts.isNotEmpty()) {
+                        if (fragmentHeight > remaining && pageHasParts) {
                             // Doesn't fit on this page — retry on a fresh one.
                             closePage()
                             continue
@@ -764,7 +872,7 @@ suspend fun paginateBook(
                                 endLine = endLine,
                                 lineCount = packLayout.lineCount,
                                 isFirstFragment = firstPart,
-                                pageHasOtherContent = parts.isNotEmpty(),
+                                pageHasOtherContent = pageHasParts,
                             )
                             when (decision) {
                                 BreakRules.SplitDecision.MoveToNextPage -> {
@@ -783,18 +891,17 @@ suspend fun paginateBook(
                                     endChar = readerAtomicBreakOffset(packedText, endChar, cursor)
                                     // Fewer trailing lines only shrink the
                                     // fragment — it still fits the page.
-                                    val fragment = packedText.subSequence(cursor, endChar)
+                                    val fragment = if (cursor == 0 && endChar == raw.length) {
+                                        packedText
+                                    } else {
+                                        packedText.subSequence(cursor, endChar)
+                                    }
                                     val bidiFragment = BidiLayoutText.of(fragment)
-                                    fragmentHeight = measurer.measureReader(
+                                    fragmentHeight = measureParagraph(
                                         text = bidiFragment.display,
-                                        style = fragmentStyle,
-                                        constraints = Constraints(
-                                            maxWidth = widthPx.coerceAtLeast(1),
-                                        ),
-                                        density = spec.density,
-                                        bookFonts = spec.bookFonts,
-                                        publisherStyles = spec.settings.bookStyles,
-                                    ).size.height
+                                        style = resolveFragmentStyle(),
+                                        widthPx = widthPx,
+                                    ).height
                                 }
 
                                 BreakRules.SplitDecision.Place -> Unit
@@ -807,29 +914,37 @@ suspend fun paginateBook(
                         val fragmentPadding = leadingPadding +
                             if (publisherEndsElement) boxGeometry.bottomInsetPx else 0
                         if (fragmentHeight + fragmentPadding >
-                            spec.contentHeightPx - usedPx && parts.isNotEmpty()
+                            spec.contentHeightPx - usedPx && pageHasParts
                         ) {
                             closePage()
                             continue
                         }
 
-                        addPart(
-                            PagePart(
-                                itemIndex = index,
-                                element = element,
-                                text = packedText.subSequence(cursor, endChar),
-                                isParagraphStart = firstPart,
+                        if (anchorsOnly) {
+                            recordPart(
+                                heightPx = fragmentHeight + fragmentPadding,
+                                index = index,
                                 charStart = packBase + cursor,
-                                charEnd = packBase + endChar,
-                                publisherBoxes = item.publisherBoxes,
-                                publisherStartsElement = publisherStartsElement,
-                                publisherEndsElement = publisherEndsElement,
-                                allowsVerticalScroll = fragmentHeight + fragmentPadding > spec.contentHeightPx,
-                            ),
-                            heightPx = fragmentHeight + fragmentPadding,
-                            index = index,
-                            charStart = packBase + cursor,
-                        )
+                            )
+                        } else {
+                            addPart(
+                                PagePart(
+                                    itemIndex = index,
+                                    element = element,
+                                    text = packedText.subSequence(cursor, endChar),
+                                    isParagraphStart = firstPart,
+                                    charStart = packBase + cursor,
+                                    charEnd = packBase + endChar,
+                                    publisherBoxes = item.publisherBoxes,
+                                    publisherStartsElement = publisherStartsElement,
+                                    publisherEndsElement = publisherEndsElement,
+                                    allowsVerticalScroll = fragmentHeight + fragmentPadding > spec.contentHeightPx,
+                                ),
+                                heightPx = fragmentHeight + fragmentPadding,
+                                index = index,
+                                charStart = packBase + cursor,
+                            )
+                        }
                         firstPart = false
                         cursor = endChar
 
@@ -852,37 +967,45 @@ suspend fun paginateBook(
                     val vPaddingPx = baseVPaddingPx + boxGeometry.topInsetPx +
                         boxGeometry.bottomInsetPx
                     val total = heightPx + vPaddingPx
-                    if (total > spec.contentHeightPx - usedPx && parts.isNotEmpty()) closePage()
+                    if (total > spec.contentHeightPx - usedPx && pageHasParts) closePage()
                     val storedImageHeight = min(
                         heightPx,
                         (spec.contentHeightPx - vPaddingPx).coerceAtLeast(1),
                     )
-                    addPart(
-                        PagePart(
-                            itemIndex = index,
-                            element = element,
-                            imageHeightPx = storedImageHeight,
-                            publisherBoxes = item.publisherBoxes,
-                        ),
-                        heightPx = storedImageHeight + vPaddingPx,
-                        index = index,
-                    )
+                    if (anchorsOnly) {
+                        recordPart(heightPx = storedImageHeight + vPaddingPx, index = index)
+                    } else {
+                        addPart(
+                            PagePart(
+                                itemIndex = index,
+                                element = element,
+                                imageHeightPx = storedImageHeight,
+                                publisherBoxes = item.publisherBoxes,
+                            ),
+                            heightPx = storedImageHeight + vPaddingPx,
+                            index = index,
+                        )
+                    }
                 }
 
                 ContentElement.Divider -> {
                     val vPaddingPx = baseVPaddingPx + boxGeometry.topInsetPx +
                         boxGeometry.bottomInsetPx
                     val total = ReaderMetrics.dividerHeight.roundToPx() + vPaddingPx
-                    if (total > spec.contentHeightPx - usedPx && parts.isNotEmpty()) closePage()
-                    addPart(
-                        PagePart(
-                            itemIndex = index,
-                            element = element,
-                            publisherBoxes = item.publisherBoxes,
-                        ),
-                        total,
-                        index,
-                    )
+                    if (total > spec.contentHeightPx - usedPx && pageHasParts) closePage()
+                    if (anchorsOnly) {
+                        recordPart(total, index)
+                    } else {
+                        addPart(
+                            PagePart(
+                                itemIndex = index,
+                                element = element,
+                                publisherBoxes = item.publisherBoxes,
+                            ),
+                            total,
+                            index,
+                        )
+                    }
                 }
 
                 is ContentElement.Spacer -> {
@@ -897,25 +1020,29 @@ suspend fun paginateBook(
                         (spec.settings.bookStyles && (box.style.minHeightEm ?: 0f) > 0f) ||
                             box.style.pageBreakBefore || box.style.pageBreakAfter
                     }
-                    if (parts.isNotEmpty() || hasPublisherSurface || hasIntentionalPublisherGap) {
+                    if (pageHasParts || hasPublisherSurface || hasIntentionalPublisherGap) {
                         val total = ReaderMetrics.spacerHeight(element, itemFontSize).roundToPx() +
                             boxGeometry.topInsetPx + boxGeometry.bottomInsetPx
-                        if (total > spec.contentHeightPx - usedPx && parts.isNotEmpty()) {
+                        if (total > spec.contentHeightPx - usedPx && pageHasParts) {
                             closePage()
                         }
                         // An ordinary blank line disappears after moving to a
                         // page boundary. A decorated spacer is real publisher
                         // content and must be retried on that fresh page.
-                        if (parts.isNotEmpty() || hasPublisherSurface || hasIntentionalPublisherGap) {
-                            addPart(
-                                PagePart(
-                                    itemIndex = index,
-                                    element = element,
-                                    publisherBoxes = item.publisherBoxes,
-                                ),
-                                total,
-                                index,
-                            )
+                        if (pageHasParts || hasPublisherSurface || hasIntentionalPublisherGap) {
+                            if (anchorsOnly) {
+                                recordPart(total, index)
+                            } else {
+                                addPart(
+                                    PagePart(
+                                        itemIndex = index,
+                                        element = element,
+                                        publisherBoxes = item.publisherBoxes,
+                                    ),
+                                    total,
+                                    index,
+                                )
+                            }
                         }
                     }
                 }
@@ -936,7 +1063,7 @@ suspend fun paginateBook(
                         boxGeometry.topInsetPx + boxGeometry.bottomInsetPx
                     if (shouldMoveAvoidBlockToFreshPage(
                             breakInsideAvoid = avoidsBreak,
-                            pageHasOtherContent = parts.isNotEmpty(),
+                            pageHasOtherContent = pageHasParts,
                             wholeHeightPx = wholeTableHeight,
                             remainingHeightPx = spec.contentHeightPx - usedPx,
                             pageHeightPx = spec.contentHeightPx,
@@ -958,7 +1085,7 @@ suspend fun paginateBook(
                             layout.rowHeightsPx, layout.grid.noBreakAfterRow, row, remaining,
                         )
                         if (end == row) {
-                            if (parts.isNotEmpty()) {
+                            if (pageHasParts) {
                                 // Retry on a fresh page.
                                 closePage()
                                 continue
@@ -982,7 +1109,7 @@ suspend fun paginateBook(
                             remainingHeightPx = remaining,
                             freshRemainingHeightPx = spec.contentHeightPx -
                                 leadingPadding - headerPx,
-                            pageHasOtherContent = parts.isNotEmpty(),
+                            pageHasOtherContent = pageHasParts,
                         )
                         if (completionFit.moveToFreshPage) {
                             // The rows fit here only because the authored
@@ -996,25 +1123,29 @@ suspend fun paginateBook(
                         var partHeight = headerPx + leadingPadding +
                             if (publisherEndsElement) boxGeometry.bottomInsetPx else 0
                         for (r in row until end) partHeight += layout.rowHeightsPx[r]
-                        addPart(
-                            PagePart(
-                                itemIndex = index,
-                                element = element,
-                                rowStart = row,
-                                rowEnd = end,
-                                tableLayout = layout,
-                                headerRepeated = row > 0 && repeatHeader,
+                        if (anchorsOnly) {
+                            recordPart(heightPx = partHeight, index = index, charStart = row)
+                        } else {
+                            addPart(
+                                PagePart(
+                                    itemIndex = index,
+                                    element = element,
+                                    rowStart = row,
+                                    rowEnd = end,
+                                    tableLayout = layout,
+                                    headerRepeated = row > 0 && repeatHeader,
+                                    charStart = row,
+                                    charEnd = end,
+                                    publisherBoxes = item.publisherBoxes,
+                                    publisherStartsElement = publisherStartsElement,
+                                    publisherEndsElement = publisherEndsElement,
+                                    allowsVerticalScroll = partHeight > spec.contentHeightPx,
+                                ),
+                                heightPx = partHeight,
+                                index = index,
                                 charStart = row,
-                                charEnd = end,
-                                publisherBoxes = item.publisherBoxes,
-                                publisherStartsElement = publisherStartsElement,
-                                publisherEndsElement = publisherEndsElement,
-                                allowsVerticalScroll = partHeight > spec.contentHeightPx,
-                            ),
-                            heightPx = partHeight,
-                            index = index,
-                            charStart = row,
-                        )
+                            )
+                        }
                         row = end
                         if (row < element.rows.size) closePage()
                     }

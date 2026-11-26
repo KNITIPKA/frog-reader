@@ -5,6 +5,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
 import com.example.frogreader.data.model.BlockStyle
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.data.model.INLINE_FONT_FAMILY_TAG
 import com.example.frogreader.data.model.PublisherBoxStyle
 import com.example.frogreader.data.model.PublisherClear
 import com.example.frogreader.data.model.PublisherFloatSide
@@ -20,11 +21,13 @@ import com.example.frogreader.ui.reader.ReaderItem
 import com.example.frogreader.ui.reader.SideBoxSpec
 import com.example.frogreader.ui.reader.TableGrid
 import com.example.frogreader.ui.reader.TableLayout
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -344,6 +347,72 @@ class PaginationCacheTest {
         assertEquals(42, loadedTable.tableLayout?.rowHeightsPx?.single())
     }
 
+    @Test
+    fun `a sliced page batch restores geometry from sparse global source items`() {
+        val floatAnchor = 150_000
+        val paragraphIndex = floatAnchor + 2
+        val float = publisherFloat(PublisherFloatSide.LEFT, floatAnchor)
+        val text = AnnotatedString.Builder("Leading text and continuation").apply {
+            addStringAnnotation(INLINE_FONT_FAMILY_TAG, "Publisher Serif", 0, 12)
+        }.toAnnotatedString()
+        val paragraph = ContentElement.Paragraph(text)
+        val geometry = SideBoxSpec(
+            capText = null,
+            imagePath = null,
+            leftSide = true,
+            boxWidthPx = 84,
+            boxHeightPx = 128,
+            besideWidthPx = 196,
+            besideEndChar = 12,
+            compositeHeightPx = 140,
+            publisherFloat = float,
+            publisherFloatItemHeightsPx = listOf(91, 37),
+        )
+        val priorPage = BookPage(listOf(PagePart(10, ContentElement.Divider)), 10)
+        val page = BookPage(
+            parts = listOf(PagePart(
+                paragraphIndex, paragraph, text.subSequence(0, 12),
+                charStart = 0, charEnd = 12, sideBox = geometry, publisherEndsElement = false,
+            )),
+            firstItemIndex = floatAnchor,
+        )
+        val file = tempFolder.newFile("indexed-pages.json")
+        PaginationCache.encodeBatch(listOf(priorPage, page), file)
+
+        val frame = file.readBytes()
+        val block = ByteArray(frame.size + 16) { 'x'.code.toByte() }
+        val offset = 8
+        frame.copyInto(block, destinationOffset = offset)
+        val batch = requireNotNull(PaginationCache.readBatch(block, offset, frame.size))
+        assertNull(PaginationCache.readBatch(block, offset, frame.size - 1))
+        assertNull(PaginationCache.readBatch(block, offset, block.size))
+        assertEquals(2, batch.size)
+        assertArrayEquals(intArrayOf(10, 0, floatAnchor, 0), batch.anchors)
+        val slice = batch.slice(1, 2)
+        assertArrayEquals(intArrayOf(floatAnchor, paragraphIndex), slice.requiredItemIndices)
+
+        fun source(paragraphItem: ReaderItem) = object : AbstractList<ReaderItem>() {
+            override val size = 200_000
+            override fun get(index: Int): ReaderItem = when (index) {
+                floatAnchor -> ReaderItem(30, float.contents.first().element, suppressedByPublisherFloat = true)
+                paragraphIndex -> paragraphItem
+                else -> error("Unrequested source index $index")
+            }
+        }
+
+        val target = ReaderItem(30, paragraph, publisherFloat = float)
+        val restored = requireNotNull(slice.restore(source(target))).single()
+        assertEquals(floatAnchor, restored.firstItemIndex)
+        val part = restored.parts.single()
+        assertEquals(paragraphIndex, part.itemIndex)
+        assertEquals(text.subSequence(0, 12), part.text)
+        assertFalse(part.publisherEndsElement)
+        assertSame(float, part.sideBox?.publisherFloat)
+        assertEquals(140, part.sideBox?.compositeHeightPx)
+        assertEquals(listOf(91, 37), part.sideBox?.publisherFloatItemHeightsPx)
+        assertNull(slice.restore(source(ReaderItem(30, ContentElement.Divider, isLoading = true))))
+    }
+
     private fun table(
         text: String,
         tableScale: Float,
@@ -389,7 +458,7 @@ class PaginationCacheTest {
         endsAtElement = true,
     )
 
-    private fun publisherFloat(side: PublisherFloatSide) = ReaderPublisherFloat(
+    private fun publisherFloat(side: PublisherFloatSide, firstItemIndex: Int = 0) = ReaderPublisherFloat(
         side = side,
         style = PublisherBoxStyle(
             widthFrac = 0.32f,
@@ -398,7 +467,7 @@ class PaginationCacheTest {
         ),
         contents = listOf(
             ReaderPublisherFloatContent(
-                sourceItemIndex = 0,
+                sourceItemIndex = firstItemIndex,
                 element = ContentElement.Image(
                     path = "/nonexistent/publisher-float-image.jpg",
                     widthFrac = 1f,
@@ -412,7 +481,7 @@ class PaginationCacheTest {
                 ),
             ),
             ReaderPublisherFloatContent(
-                sourceItemIndex = 1,
+                sourceItemIndex = firstItemIndex + 1,
                 element = ContentElement.Paragraph(AnnotatedString("Caption")),
             ),
         ),

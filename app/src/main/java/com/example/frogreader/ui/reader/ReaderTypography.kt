@@ -12,8 +12,9 @@ import com.example.frogreader.data.model.FontTypography
 import com.example.frogreader.data.model.INLINE_FONT_TYPOGRAPHY_TAG
 import com.example.frogreader.data.model.decodeFontTypography
 import com.example.frogreader.ui.theme.fileFontTextRuns
-import com.example.frogreader.ui.theme.fontTypographyRequest
 import com.example.frogreader.ui.theme.resolveFontTypography
+import com.example.frogreader.ui.theme.resolveRegisteredFontTypography
+import com.example.frogreader.ui.theme.sourceFontTypography
 import java.util.TreeMap
 
 internal data class ReaderTypographyPlan(val text: AnnotatedString, val style: TextStyle)
@@ -41,11 +42,78 @@ internal fun readerTypographyPlan(
     val text = sourceText.withBookFonts(bookFonts, enabled = publisherStyles)
     val baseSize = style.fontSize.takeIf { it.type == TextUnitType.Sp }?.value ?: 14f
     val baseFamily = style.fontFamily
-    val baseRequest = baseFamily?.let(::fontTypographyRequest)
-    val resolvedBase = baseFamily?.let { resolveFontTypography(it, baseSize * density.fontScale) }
+    val baseSource = baseFamily?.let(::sourceFontTypography)
+    val baseRequest = baseSource?.request
+    val resolvedBase = if (baseFamily != null && baseSource != null) {
+        resolveRegisteredFontTypography(baseFamily, baseSource, baseSize * density.fontScale)
+    } else baseFamily
     val resolvedStyle = if (resolvedBase != baseFamily) style.copy(fontFamily = resolvedBase) else style
-    val marks = if (publisherStyles) text.getStringAnnotations(INLINE_FONT_TYPOGRAPHY_TAG, 0, text.length) else emptyList()
     if (text.isEmpty()) return ReaderTypographyPlan(text, resolvedStyle)
+
+    val hasMarks = publisherStyles && text.hasStringAnnotations(INLINE_FONT_TYPOGRAPHY_TAG, 0, text.length)
+    val spanStyles = text.spanStyles
+    if (!hasMarks) {
+        if (baseSource == null) {
+            var hasRegisteredSpanFamily = false
+            for (i in spanStyles.indices) {
+                val span = spanStyles[i]
+                if (span.start < span.end) {
+                    val spanFamily = span.item.fontFamily
+                    if (spanFamily != null && sourceFontTypography(spanFamily) != null) {
+                        hasRegisteredSpanFamily = true
+                        break
+                    }
+                }
+            }
+            if (!hasRegisteredSpanFamily) return ReaderTypographyPlan(text, resolvedStyle)
+        } else {
+            val hasFiles = baseSource.plan.hasFiles
+            var needsSweep = false
+            for (i in spanStyles.indices) {
+                val span = spanStyles[i]
+                if (span.start < span.end) {
+                    val item = span.item
+                    val sizeType = item.fontSize.type
+                    if (item.fontFamily != null ||
+                        sizeType == TextUnitType.Sp || sizeType == TextUnitType.Em ||
+                        (hasFiles && (item.fontWeight != null || item.fontStyle != null))
+                    ) {
+                        needsSweep = true
+                        break
+                    }
+                }
+            }
+            if (!needsSweep) {
+                if (!hasFiles) return ReaderTypographyPlan(text, resolvedStyle)
+                val fileTextRuns = fileFontTextRuns(
+                    resolvedBase!!,
+                    baseSize * density.fontScale,
+                    style.fontWeight?.weight ?: 400,
+                    style.fontStyle == FontStyle.Italic,
+                    text.text,
+                    0,
+                    text.length,
+                )
+                if (fileTextRuns.isNullOrEmpty()) return ReaderTypographyPlan(text, resolvedStyle)
+                val result = AnnotatedString.Builder(text).apply {
+                    for (i in fileTextRuns.indices) {
+                        val run = fileTextRuns[i]
+                        addStyle(
+                            SpanStyle(
+                                fontFamily = run.family,
+                                fontWeight = run.fallback?.weight?.let(::FontWeight),
+                                fontStyle = run.fallback?.let { if (it.italic) FontStyle.Italic else FontStyle.Normal },
+                            ),
+                            run.start,
+                            run.end,
+                        )
+                    }
+                }.toAnnotatedString()
+                return ReaderTypographyPlan(result, resolvedStyle)
+            }
+        }
+    }
+    val marks = if (hasMarks) text.getStringAnnotations(INLINE_FONT_TYPOGRAPHY_TAG, 0, text.length) else emptyList()
 
     // Sweep boundaries once. The active ranges are kept in Compose's source
     // order, including relative font-size spans from nested emphasis/ruby.

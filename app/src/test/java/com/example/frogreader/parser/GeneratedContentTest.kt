@@ -40,6 +40,14 @@ class GeneratedContentTest {
     }
 
     @Test
+    fun `quoted punctuation in generated content leaves the next rule intact`() {
+        val r = resolver("""p::before { content: "} ; /* literal */"; } p { font-style: italic; }""")
+        val element = Jsoup.parse("<p>Text</p>").selectFirst("p")!!
+        assertEquals("} ; /* literal */", r.generated(element, after = false)?.text)
+        assertEquals(true, r.computed(element).italic)
+    }
+
+    @Test
     fun `escapes and concatenation work, dynamic content degrades`() {
         val r = resolver(
             """

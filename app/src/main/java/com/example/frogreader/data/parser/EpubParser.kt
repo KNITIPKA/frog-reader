@@ -1,12 +1,16 @@
 package com.example.frogreader.data.parser
 
+import com.example.frogreader.data.BookChapterWindow
+import com.example.frogreader.data.FrbModelCodec
 import com.example.frogreader.data.model.BookContent
 import com.example.frogreader.data.model.BookFont
+import com.example.frogreader.data.model.BookIndex
 import com.example.frogreader.data.model.BookMetadata
 import com.example.frogreader.data.model.BookNavigationEntry
 import com.example.frogreader.data.model.BookNavigationTarget
 import com.example.frogreader.data.model.Chapter
 import com.example.frogreader.data.model.ContentElement
+import com.example.frogreader.data.model.EpubSourceRange
 import com.example.frogreader.data.model.LinkedDocument
 import com.example.frogreader.data.model.LinkedDocumentTarget
 import com.example.frogreader.data.model.NoteDocument
@@ -22,6 +26,9 @@ import com.example.frogreader.data.model.PublisherSpineItem
 import com.example.frogreader.data.model.PublisherViewport
 import com.example.frogreader.data.model.RenditionLayout
 import com.example.frogreader.data.model.slicePublisherBoxSpans
+import com.example.frogreader.data.parser.RustEpubPackage.Manifest as ManifestItem
+import com.example.frogreader.data.parser.RustEpubPackage.Metadata
+import com.example.frogreader.data.parser.RustEpubPackage.Package
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -29,8 +36,15 @@ import org.jsoup.parser.Parser
 import java.io.File
 import java.net.URLDecoder
 import java.util.Locale
-import java.util.zip.ZipEntry
-import java.util.zip.ZipFile
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.ReentrantLock
 
 /** EPUB 2/3 parser: container.xml → OPF (metadata/manifest/spine) → XHTML chapters. */
 object EpubParser {
@@ -38,14 +52,18 @@ object EpubParser {
     /** Bump to force every book to re-extract its embedded fonts. */
     private const val FONT_PIPELINE_VERSION = 1
     private const val DTBOOK_MEDIA_TYPE = "application/x-dtbook+xml"
+    private const val MIN_PARALLEL_SPINE_ITEMS = 16
+    private const val MAX_PARALLEL_WORKERS = 4
+    private const val SLIDING_WINDOW_MIN_FACTOR = 2
+    private const val SLIDING_WINDOW_MAX_FACTOR = 8
+    private const val SLIDING_WINDOW_MAX_SOURCE_BYTES = 8L * 1024L * 1024L
+    private val parallelWorkerPermits = Semaphore(MAX_PARALLEL_WORKERS)
+    private val parallelThreadCounter = AtomicInteger(0)
 
-    private class ManifestItem(
-        val id: String,
-        val href: String,
-        val mediaType: String,
-        val properties: String,
-        val fallback: String,
-    )
+    private fun defaultParallelism(): Int {
+        val cpus = Runtime.getRuntime().availableProcessors()
+        return if (cpus <= 1) 1 else cpus.coerceIn(2, MAX_PARALLEL_WORKERS)
+    }
 
     /** A resolved spine item together with its reading-order semantics. */
     private class SpineItem(
@@ -55,6 +73,65 @@ object EpubParser {
         val itemRefId: String?,
         val itemRefProperties: String,
     )
+
+    private class ReadingPackage(
+        val path: String,
+        val directory: String,
+        val opf: Package,
+        val spine: List<SpineItem>,
+        val toc: TocIndex,
+        val rendition: EpubRenditionParser.PackageRendition,
+    )
+
+    private class ParsedContent(val content: BookContent, val firstOpeningElement: Int = 0)
+
+    private class ParseAttemptOutcome(
+        val result: ParsedContent?,
+        val retrySequential: Boolean = false,
+        val previewPublished: Boolean = false,
+    )
+
+    private class WorkerSlot(
+        val zip: RustEpubArchive,
+        val ownsZip: Boolean,
+        val resolverCache: MutableMap<String, CssResolver>,
+        val ownsResolverCache: Boolean,
+    ) : AutoCloseable {
+        override fun close() {
+            if (ownsResolverCache) {
+                resolverCache.values.forEach(CssResolver::close)
+                resolverCache.clear()
+            }
+            if (ownsZip) {
+                zip.close()
+            }
+        }
+    }
+
+    private sealed class ParallelSpineResult {
+        abstract val bytesRead: Long
+
+        class Skipped(override val bytesRead: Long) : ParallelSpineResult()
+
+        class Mapped(
+            val spineItem: SpineItem,
+            val chapterPath: String,
+            val publisherInfo: PublisherDocumentInfo,
+            val hasBody: Boolean,
+            val fontFaces: List<CssResolver.FontFace>,
+            val elements: List<ContentElement>,
+            val publisherBoxes: List<PublisherBoxSpan>,
+            val anchors: Map<String, Int>,
+            val linkTargets: Set<String>,
+            val noteTargets: Set<String>,
+            val noteDocuments: Map<String, NoteDocument>,
+            override val bytesRead: Long,
+        ) : ParallelSpineResult()
+
+        class Failed(val error: Throwable) : ParallelSpineResult() {
+            override val bytesRead: Long = 0L
+        }
+    }
 
     /** Metadata retained from a spine document already read by the native parser. */
     private class PublisherDocumentInfo(
@@ -85,6 +162,59 @@ object EpubParser {
         )
     }
 
+    private class TargetSpineWindow(
+        private val index: BookIndex,
+        private val firstChapter: Int,
+        lastChapter: Int,
+    ) {
+        private val descriptors = index.chapters.subList(firstChapter, lastChapter + 1)
+        private val builders = descriptors.map { ChapterBuilder(it.title, emptyList(), it.depth) }
+        private val rangesByOrdinal = index.epubSourceRanges.asSequence()
+            .filter { it.chapterIndex in firstChapter..lastChapter }
+            .groupBy(EpubSourceRange::spineOrdinal)
+
+        fun selectSpine(spine: List<SpineItem>, opfDir: String): List<SpineItem>? {
+            val selected = spine.filter { it.ordinal in rangesByOrdinal }
+            if (selected.size != rangesByOrdinal.size) return null
+            return selected.takeIf { items ->
+                items.all { item ->
+                    val path = resolvePath(opfDir, item.item.href)
+                    item.linear && rangesByOrdinal.getValue(item.ordinal).all { it.path == path }
+                }
+            }
+        }
+
+        fun appendDocument(
+            ordinal: Int,
+            elements: List<ContentElement>,
+            boxes: List<PublisherBoxSpan>,
+            segmentStarts: List<Int>,
+        ): Boolean {
+            for (range in rangesByOrdinal.getValue(ordinal)) {
+                val start = range.documentStart
+                val boundary = segmentStarts.binarySearch(start)
+                if (boundary < 0 || range.elementCount <= 0) return false
+                val end = segmentStarts.getOrNull(boundary + 1) ?: elements.size
+                if (end - start != range.elementCount) return false
+
+                val chapter = range.chapterIndex - firstChapter
+                val builder = builders[chapter]
+                val chapterEnd = range.chapterStart.toLong() + range.elementCount
+                if (builder.elements.size != range.chapterStart || chapterEnd > descriptors[chapter].elementCount) {
+                    return false
+                }
+                builder.elements.addAll(elements.subList(start, end))
+                builder.publisherBoxes.addAll(slicePublisherBoxSpans(boxes, start, end, range.chapterStart))
+            }
+            return true
+        }
+
+        fun buildChapters(): List<Chapter>? {
+            if (builders.indices.any { builders[it].elements.size != descriptors[it].elementCount }) return null
+            return builders.map(ChapterBuilder::build)
+        }
+    }
+
     /** Expanded CSS bytes shared by every chapter during one EPUB open. */
     private class EpubCssBudget(private val limits: ReaderResourceLimits) {
         private var expandedBytes = 0L
@@ -92,6 +222,9 @@ object EpubParser {
         private var expansionOperations = 0
         private val acceptedResolvers = mutableSetOf<String>()
         private val rejectedResolvers = mutableSetOf<String>()
+        @Volatile
+        var wasLimited = false
+            private set
 
         fun acceptResolver(signature: String, sheets: List<CssResolver.Sheet>): Boolean {
             if (signature in acceptedResolvers) return true
@@ -100,12 +233,14 @@ object EpubParser {
             for (sheet in sheets) {
                 val next = sheet.text.length.toLong() * 2L
                 if (bytes > limits.maxEpubCssExpandedBytes - next) {
+                    wasLimited = true
                     rejectedResolvers += signature
                     return false
                 }
                 bytes += next
             }
             if (expandedBytes > limits.maxEpubCssExpandedBytes - bytes) {
+                wasLimited = true
                 rejectedResolvers += signature
                 return false
             }
@@ -118,6 +253,7 @@ object EpubParser {
             if (expandedSheets >= limits.maxEpubCssExpandedSheets ||
                 expansionOperations >= limits.maxEpubCssExpansionOperations
             ) {
+                wasLimited = true
                 return false
             }
             expandedSheets++
@@ -126,7 +262,10 @@ object EpubParser {
         }
 
         fun traverseImport(): Boolean {
-            if (expansionOperations >= limits.maxEpubCssExpansionOperations) return false
+            if (expansionOperations >= limits.maxEpubCssExpansionOperations) {
+                wasLimited = true
+                return false
+            }
             expansionOperations++
             return true
         }
@@ -138,48 +277,45 @@ object EpubParser {
         parseMetadata(file, ReaderResourceLimits.DEFAULT)
 
     internal fun parseMetadata(file: File, limits: ReaderResourceLimits): BookMetadata {
-        ZipFile(file).use { zip ->
-            val budget = ArchiveResourceBudget(zip, limits)
-            val opfPath = findOpfPath(zip, budget, limits)
+        RustEpubArchive.open(file, limits).use { zip ->
+            val opfPath = findOpfPath(zip, limits)
                 ?: throw IllegalArgumentException("Not a valid EPUB: missing OPF")
             val opfDir = opfPath.substringBeforeLast('/', "")
-            val opf = parseXml(zip, opfPath, budget, limits)
+            val opf = readOpf(zip, opfPath, limits)
 
-            val title = opf.selectFirst("metadata > dc|title")?.text()?.trim()
+            val title = opf.dcFields("title").firstOrNull()?.text?.trim()
 
             // EPUB 3 refinements: <meta refines="#id" property="…">value</meta>.
-            val refinements = opf.select("metadata > meta[refines][property]")
+            val metadata = opf.metadata.filter { it.tag.equals("meta", ignoreCase = true) }
             fun refined(id: String, property: String): String? {
                 if (id.isEmpty()) return null
-                return refinements.firstOrNull {
-                    it.attr("refines").removePrefix("#") == id &&
-                        it.attr("property").substringAfterLast(':') == property
-                }?.text()?.trim()?.takeIf { it.isNotEmpty() }
+                return metadata.firstOrNull {
+                    it.refines.removePrefix("#") == id && it.property.substringAfterLast(':') == property
+                }?.text?.trim()?.takeIf { it.isNotEmpty() }
             }
 
             val authors = mutableListOf<String>()
             val translators = mutableListOf<String>()
-            for (creator in opf.select("metadata > dc|creator")) {
-                val name = creator.text().trim().takeIf { it.isNotEmpty() } ?: continue
-                val role = creator.attr("opf:role").ifEmpty { refined(creator.id(), "role").orEmpty() }
+            for (creator in opf.dcFields("creator")) {
+                val name = creator.text.trim().takeIf { it.isNotEmpty() } ?: continue
+                val role = creator.role.ifEmpty { refined(creator.id, "role").orEmpty() }
                 when {
                     role.isEmpty() || role.equals("aut", ignoreCase = true) -> authors += name
                     role.equals("trl", ignoreCase = true) -> translators += name
                     else -> Unit // editors, illustrators… stay out of the card
                 }
             }
-            for (contributor in opf.select("metadata > dc|contributor")) {
-                val name = contributor.text().trim().takeIf { it.isNotEmpty() } ?: continue
-                val role = contributor.attr("opf:role")
-                    .ifEmpty { refined(contributor.id(), "role").orEmpty() }
+            for (contributor in opf.dcFields("contributor")) {
+                val name = contributor.text.trim().takeIf { it.isNotEmpty() } ?: continue
+                val role = contributor.role.ifEmpty { refined(contributor.id, "role").orEmpty() }
                 if (role.equals("trl", ignoreCase = true)) translators += name
             }
 
             var isbn: String? = null
-            for (identifier in opf.select("metadata > dc|identifier")) {
-                val text = identifier.text().trim().takeIf { it.isNotEmpty() } ?: continue
+            for (identifier in opf.dcFields("identifier")) {
+                val text = identifier.text.trim().takeIf { it.isNotEmpty() } ?: continue
                 isbn = when {
-                    identifier.attr("opf:scheme").equals("ISBN", ignoreCase = true) -> text
+                    identifier.scheme.equals("ISBN", ignoreCase = true) -> text
                     text.startsWith("urn:isbn:", ignoreCase = true) ->
                         text.substringAfterLast(':').trim()
                     looksLikeIsbn(text) -> text
@@ -190,53 +326,55 @@ object EpubParser {
 
             var series: String? = null
             var seriesNumber: Float? = null
-            opf.selectFirst("metadata > meta[name=calibre:series]")
-                ?.attr("content")?.trim()?.takeIf { it.isNotEmpty() }
+            metadata.firstOrNull { it.name.equals("calibre:series", ignoreCase = true) }
+                ?.content?.trim()?.takeIf { it.isNotEmpty() }
                 ?.let { name ->
                     series = name
-                    seriesNumber = opf.selectFirst("metadata > meta[name=calibre:series_index]")
-                        ?.attr("content")?.trim()?.toFloatOrNull()
+                    seriesNumber = metadata.firstOrNull { it.name.equals("calibre:series_index", ignoreCase = true) }
+                        ?.content?.trim()?.toFloatOrNull()
                 }
             if (series == null) {
-                for (meta in opf.select("metadata > meta[property=belongs-to-collection]")) {
-                    val type = refined(meta.id(), "collection-type")
+                for (meta in metadata) {
+                    if (!meta.property.equals("belongs-to-collection", ignoreCase = true)) continue
+                    val type = refined(meta.id, "collection-type")
                     if (type != null && !type.equals("series", ignoreCase = true)) continue
-                    val name = meta.text().trim().takeIf { it.isNotEmpty() } ?: continue
+                    val name = meta.text.trim().takeIf { it.isNotEmpty() } ?: continue
                     series = name
-                    seriesNumber = refined(meta.id(), "group-position")?.toFloatOrNull()
+                    seriesNumber = refined(meta.id, "group-position")?.toFloatOrNull()
                     break
                 }
             }
 
-            val items = manifestItems(opf)
-            val coverHref = findCoverHref(opf, items)
+            val coverHref = findCoverHref(opf.manifest, metadata)
             val coverBytes = coverHref
                 ?.let { zipEntry(zip, resolvePath(opfDir, it)) }
-                ?.let { budget.readOptional(it, limits.maxCoverBytes, "EPUB cover") }
+                ?.let { zip.readOptional(it, limits.maxCoverBytes, "EPUB cover") }
 
             return BookMetadata(
                 title = title,
                 author = authors.firstOrNull(),
                 coverBytes = coverBytes,
                 authors = authors,
-                genres = opf.select("metadata > dc|subject")
-                    .map { it.text().trim() }.filter { it.isNotEmpty() },
+                genres = opf.dcFields("subject").map { it.text.trim() }.filter { it.isNotEmpty() },
                 series = series,
                 seriesNumber = seriesNumber,
-                publisher = opf.selectFirst("metadata > dc|publisher")?.text()
+                publisher = opf.dcFields("publisher").firstOrNull()?.text
                     ?.trim()?.takeIf { it.isNotEmpty() },
-                year = opf.selectFirst("metadata > dc|date")?.text()
+                year = opf.dcFields("date").firstOrNull()?.text
                     ?.let { Regex("""\d{4}""").find(it)?.value },
                 isbn = isbn,
                 translators = translators,
                 // Descriptions frequently carry HTML markup — flatten it.
-                description = opf.selectFirst("metadata > dc|description")?.text()
+                description = opf.dcFields("description").firstOrNull()?.text
                     ?.let { Jsoup.parse(it).text().trim() }?.takeIf { it.isNotEmpty() },
-                language = opf.selectFirst("metadata > dc|language")?.text()
+                language = opf.dcFields("language").firstOrNull()?.text
                     ?.trim()?.takeIf { it.isNotEmpty() },
             )
         }
     }
+
+    private fun Package.dcFields(localName: String): List<Metadata> =
+        metadata.filter { it.tag.equals("dc:$localName", ignoreCase = true) }
 
     /** A bare ISBN-10/13: digits (a trailing X allowed) with -/space separators. */
     private fun looksLikeIsbn(text: String): Boolean {
@@ -264,27 +402,189 @@ object EpubParser {
         limits: ReaderResourceLimits,
         onPreview: ((BookContent) -> Unit)? = null,
         previewElementIndex: Int = 0,
-    ): BookContent {
-        ZipFile(file).use { zip ->
-            val budget = ArchiveResourceBudget(zip, limits)
-            val opfPath = findOpfPath(zip, budget, limits)
-                ?: throw IllegalArgumentException("Not a valid EPUB: missing OPF")
-            val opfDir = opfPath.substringBeforeLast('/', "")
-            val opf = parseXml(zip, opfPath, budget, limits)
+        maxParallelism: Int = defaultParallelism(),
+    ): BookContent = requireNotNull(
+        parseContentInternal(
+            file = file,
+            imagesDir = imagesDir,
+            limits = limits,
+            onPreview = onPreview,
+            previewElementIndex = previewElementIndex,
+            maxParallelism = maxParallelism,
+        ),
+    ).content
 
-            val items = manifestItems(opf)
-            val toc = chapterTitles(zip, opf, items, opfDir, budget, limits)
+    /** Reads the authored Contents and candidate source documents without opening chapter XHTML. */
+    internal fun readOpeningStructure(
+        file: File,
+        limits: ReaderResourceLimits = ReaderResourceLimits.DEFAULT,
+    ): EpubOpeningStructure? = RustEpubArchive.open(file, limits).use { zip ->
+        val publication = readReadingPackage(zip, limits)
+        // Fixed and mixed publications keep their complete rendition/spread model.
+        if (publication.spine.any { isFixedLayout(publication.rendition, it) }) return@use null
+
+        val documents = publication.spine.mapNotNull { occurrence ->
+            if (!occurrence.linear) return@mapNotNull null
+            val path = resolvePath(publication.directory, occurrence.item.href)
+            val entry = zipEntry(zip, path)?.takeUnless { it.isDirectory || it.size <= 0 } ?: return@mapNotNull null
+            EpubOpeningStructure.WeightedDocument(EpubSourceDestination(occurrence.ordinal, path), entry.size)
+        }
+        if (documents.isEmpty()) return@use null
+
+        // Authored path targets use the first linear occurrence, as in the exact
+        // Contents. Seeking by progress still addresses each occurrence separately.
+        val firstOccurrenceByPath = buildMap {
+            documents.forEach { document -> putIfAbsent(document.destination.path, document.destination) }
+        }
+        val navigation = publication.toc.entries.mapNotNull { entry ->
+            val destination = firstOccurrenceByPath[entry.path] ?: return@mapNotNull null
+            EpubOpeningNavigation(entry.title, entry.depth, destination.copy(fragment = entry.fragment))
+        }.ifEmpty {
+            documents.map { EpubOpeningNavigation(title = null, depth = 0, destination = it.destination) }
+        }
+        EpubOpeningStructure(documents, navigation)
+    }
+
+    internal fun parseOpeningDocument(
+        file: File,
+        imagesDir: File,
+        limits: ReaderResourceLimits,
+        destination: EpubSourceDestination,
+        checkActive: () -> Unit = {},
+    ): EpubOpeningDocument? {
+        val parsed = parseContentInternal(
+            file, imagesDir, limits, onPreview = null, previewElementIndex = 0,
+            checkActive = checkActive, opening = destination,
+        ) ?: return null
+        return EpubOpeningDocument(destination, parsed.content, parsed.firstOpeningElement)
+    }
+
+    /** Rebuilds logical chapters from their original EPUB spine occurrences. */
+    internal fun parseTargetWindow(
+        file: File,
+        imagesDir: File,
+        limits: ReaderResourceLimits,
+        index: BookIndex,
+        firstChapter: Int,
+        lastChapter: Int,
+        checkActive: () -> Unit = {},
+    ): BookChapterWindow? {
+        if (firstChapter !in index.chapters.indices || lastChapter !in firstChapter..index.chapters.lastIndex ||
+            index.epubSourceRanges.isEmpty()
+        ) return null
+        val target = TargetSpineWindow(index, firstChapter, lastChapter)
+        val selected = parseContentInternal(file, imagesDir, limits, null, 0, target, checkActive)?.content ?: return null
+        return BookChapterWindow(firstChapter, selected.chapters, index.chapters[firstChapter].startElement, index.totalElements)
+    }
+
+    /**
+     * Parses [sourceFile] natively in Rust, extracts referenced images/fonts into
+     * [imagesDir], and writes a complete CRC-checked `.frb` v2 container directly to
+     * [destFrbFile] with zero JVM `BookContent` / `Chapter` allocation.
+     *
+     * Returns `false` if the publication requires the Kotlin fallback path (e.g., fixed
+     * layout, standalone SVG, DTBook, WOFF2 Brotli font, complex table/MathML/SVG/ruby,
+     * or CSS/HTML expansion budget exhaustion), and throws [ResourceLimitException] on
+     * archive/entry resource limit violations.
+     */
+    internal fun writeEpubFrb(
+        sourceFile: File,
+        imagesDir: File,
+        destFrbFile: File,
+        sourceMetadata: ByteArray,
+        limits: ReaderResourceLimits = ReaderResourceLimits.DEFAULT,
+    ): Boolean = RustEpubPackage.writeEpubFrb(
+        sourceFile = sourceFile,
+        imagesDir = imagesDir,
+        destFrbFile = destFrbFile,
+        sourceMetadata = sourceMetadata,
+        limits = limits,
+    )
+
+    private fun parseContentInternal(
+        file: File,
+        imagesDir: File,
+        limits: ReaderResourceLimits,
+        onPreview: ((BookContent) -> Unit)?,
+        previewElementIndex: Int,
+        target: TargetSpineWindow? = null,
+        checkActive: (() -> Unit)? = null,
+        opening: EpubSourceDestination? = null,
+        maxParallelism: Int = defaultParallelism(),
+    ): ParsedContent? {
+        if (onPreview == null && target == null && opening == null && maxParallelism > 1) {
+            checkActive?.invoke()
+            when (val native = RustEpubPackage.parseEpubContent(file, imagesDir, limits)) {
+                is RustEpubPackage.NativeContentResult.Ready -> {
+                    val content = FrbModelCodec.decode(native.payload, BookContent.serializer())
+                    return ParsedContent(content)
+                }
+                is RustEpubPackage.NativeContentResult.Fallback -> Unit
+            }
+        }
+        var effectiveParallelism = maxParallelism.coerceAtLeast(1)
+        var effectiveOnPreview = onPreview
+        while (true) {
+            val outcome = parseContentOnce(
+                file = file,
+                imagesDir = imagesDir,
+                limits = limits,
+                onPreview = effectiveOnPreview,
+                previewElementIndex = previewElementIndex,
+                target = target,
+                checkActive = checkActive,
+                opening = opening,
+                maxParallelism = effectiveParallelism,
+            )
+            if (outcome.retrySequential) {
+                effectiveParallelism = 1
+                if (outcome.previewPublished) effectiveOnPreview = null
+                continue
+            }
+            return outcome.result
+        }
+    }
+
+    private fun parseContentOnce(
+        file: File,
+        imagesDir: File,
+        limits: ReaderResourceLimits,
+        onPreview: ((BookContent) -> Unit)?,
+        previewElementIndex: Int,
+        target: TargetSpineWindow?,
+        checkActive: (() -> Unit)?,
+        opening: EpubSourceDestination?,
+        maxParallelism: Int,
+    ): ParseAttemptOutcome {
+        checkActive?.invoke()
+        RustEpubArchive.open(file, limits).use { zip ->
+            val publication = readReadingPackage(zip, limits)
+            val opfDir = publication.directory
+            val opf = publication.opf
+            val spine = publication.spine
+            val items = opf.manifest
+            val toc = publication.toc
             val titlesByPath = toc.byPath
-            val packageRendition = EpubRenditionParser.parsePackage(opf)
+            val packageRendition = publication.rendition
+            val selectedSpine = when {
+                target != null -> target.selectSpine(spine, opfDir) ?: return ParseAttemptOutcome(null)
+                opening != null -> listOf(spine.firstOrNull { occurrence ->
+                    occurrence.ordinal == opening.spineOrdinal && occurrence.linear &&
+                        resolvePath(opfDir, occurrence.item.href) == opening.path &&
+                        !isFixedLayout(packageRendition, occurrence)
+                } ?: return ParseAttemptOutcome(null))
+                else -> spine
+            }
             val publisherDocuments = mutableMapOf<String, PublisherDocumentInfo>()
             val metadataLanguage = LanguageTag.normalize(
-                opf.selectFirst("metadata > dc|language")?.text(),
+                opf.dcFields("language").firstOrNull()?.text,
             )
-            val fb2EpubConversion = opf.select("metadata > meta[name]").any {
-                it.attr("name").equals("FB2EPUB.version", ignoreCase = true)
+            val fb2EpubConversion = opf.metadata.any {
+                it.tag.equals("meta", ignoreCase = true) && it.name.equals("FB2EPUB.version", ignoreCase = true)
             }
 
             val chapterBuilders = mutableListOf<ChapterBuilder>()
+            val sourceRanges = mutableListOf<EpubSourceRange>()
             val linkedDocuments = linkedMapOf<String, LinkedDocument>()
             val extractedImages = mutableMapOf<String, String>()
             val inlineSvgs = mutableMapOf<String, String>()
@@ -298,6 +598,8 @@ object EpubParser {
             val noteTargets = mutableSetOf<String>()
             val exactNoteDocuments = mutableMapOf<String, NoteDocument>()
             val cssCache = mutableMapOf<String, String?>()
+            val sheetCache = mutableMapOf<String, CssResolver.Sheet>()
+            val resolvedSheetsCache = mutableMapOf<String, List<CssResolver.Sheet>?>()
             val resolverCache = mutableMapOf<String, CssResolver>()
             val cssBudget = EpubCssBudget(limits)
             val htmlExpansionBudget = HtmlExpansionBudget(
@@ -305,22 +607,25 @@ object EpubParser {
                 maxGeneratedTotalChars = limits.maxHtmlGeneratedTotalChars,
             )
             val fonts = mutableMapOf<String, BookFont>()
+            val cssLock = Any()
+            val imageLock = Any()
+            val inFlightImageLocks = mutableMapOf<String, Any>()
+            val svgLock = Any()
 
             // Obfuscated-font support: which files are mangled and the keys
             // derived from the book's identifiers to unmangle them.
-            val encryption = parseEncryption(zip, budget, limits)
+            val encryption = parseEncryption(zip, limits)
             val fontKeys = if (encryption.isEmpty()) {
                 FontKeys(null, emptyList())
             } else {
                 fontKeysFrom(opf)
             }
 
-            val spine = spineItems(opf, items)
             // A malformed package can reference the same renderable manifest
             // item more than once with conflicting `linear` values. Presence
             // anywhere in the linear spine wins; otherwise we would expose a
             // duplicate transient copy of a real chapter.
-            val linearPaths = spine.asSequence()
+            val linearPaths = selectedSpine.asSequence()
                 .filter { it.linear }
                 .map { resolvePath(opfDir, it.item.href) }
                 .toSet()
@@ -392,6 +697,11 @@ object EpubParser {
                     navigation = navigation,
                     publisherPublication = publisherPublication,
                     pageProgression = packageRendition.pageProgression,
+                    // A skipped prefix would restore a fresh shared budget. Do not retain a
+                    // map when earlier documents changed the rendering of later ones.
+                    epubSourceRanges = if (cssBudget.wasLimited || htmlExpansionBudget.wasAggregateLimited) {
+                        emptyList()
+                    } else sourceRanges.toList(),
                 )
             }
 
@@ -406,15 +716,118 @@ object EpubParser {
                 onPreview(contentSnapshot())
             }
 
-            for (spineItem in spine) {
+            fun appendLinearDocument(
+                spineItem: SpineItem,
+                chapterPath: String,
+                elements: List<ContentElement>,
+                publisherBoxes: List<PublisherBoxSpan>,
+                anchors: Map<String, Int>,
+            ): Boolean {
+                // A single XHTML file may contain several TOC chapters. Keep
+                // the fragment in nav/NCX and split at the mapper's anchor
+                // boundary instead of collapsing every entry to the file's
+                // first label. Unlisted file fragments retain the historical
+                // merge-with-previous behavior.
+                val tocEntries = titlesByPath[chapterPath].orEmpty()
+                val points = linkedMapOf<Int, TocEntry>()
+                for (tocEntry in tocEntries) {
+                    val index = tocEntry.fragment
+                        ?.let(anchors::get)
+                        ?: if (tocEntry.fragment == null) 0 else null
+                    if (index != null && index in elements.indices) {
+                        points.putIfAbsent(index, tocEntry)
+                    }
+                }
+                val orderedPoints = points.entries.sortedBy { it.key }
+                val boundaries = buildList {
+                    if (orderedPoints.firstOrNull()?.key != 0) add(0 to null)
+                    orderedPoints.forEach { add(it.key to it.value) }
+                    if (isEmpty()) add(0 to tocEntries.firstOrNull())
+                }
+
+                if (target != null) {
+                    return target.appendDocument(
+                        spineItem.ordinal,
+                        elements,
+                        publisherBoxes,
+                        boundaries.map { it.first },
+                    )
+                }
+
+                val added = mutableListOf<EpubSourceRange>()
+                for ((position, boundary) in boundaries.withIndex()) {
+                    val start = boundary.first
+                    val end = boundaries.getOrNull(position + 1)?.first ?: elements.size
+                    if (start >= end) continue
+                    val tocEntry = boundary.second
+                    val merge = tocEntry == null && titlesByPath.isNotEmpty() && chapterBuilders.isNotEmpty()
+                    val chapterIndex: Int
+                    val elementBase: Int
+                    if (merge) {
+                        val previous = chapterBuilders.last()
+                        elementBase = previous.elements.size
+                        previous.elements.addAll(elements.subList(start, end))
+                        previous.publisherBoxes.addAll(
+                            slicePublisherBoxSpans(
+                                spans = publisherBoxes,
+                                startElement = start,
+                                endElementExclusive = end,
+                                destinationOffset = elementBase,
+                            ),
+                        )
+                        chapterIndex = chapterBuilders.lastIndex
+                    } else {
+                        val segment = elements.subList(start, end)
+                        val title = tocEntry?.title
+                            ?: segment.firstOrNull { it is ContentElement.Heading }
+                                ?.let { (it as ContentElement.Heading).text }
+                        chapterIndex = chapterBuilders.size
+                        elementBase = 0
+                        chapterBuilders += ChapterBuilder(
+                            title = title,
+                            elements = segment,
+                            depth = tocEntry?.depth ?: 0,
+                            publisherBoxes = slicePublisherBoxSpans(
+                                spans = publisherBoxes,
+                                startElement = start,
+                                endElementExclusive = end,
+                            ),
+                        )
+                    }
+                    added += EpubSourceRange(spineItem.ordinal, chapterPath, start, chapterIndex, elementBase, end - start)
+                }
+                sourceRanges += added
+
+                anchors.forEach { (id, index) ->
+                    val segment = added.lastOrNull { index >= it.documentStart } ?: return@forEach
+                    val localIndex = (index - segment.documentStart).coerceIn(0, segment.elementCount - 1)
+                    anchorLocations.putIfAbsent(
+                        "$chapterPath#$id",
+                        segment.chapterIndex to (segment.chapterStart + localIndex),
+                    )
+                }
+                // A link to the whole file lands where its first visible
+                // segment begins, including a merged unlisted preamble.
+                added.firstOrNull()?.let { first ->
+                    fileLocations.putIfAbsent(
+                        chapterPath,
+                        first.chapterIndex to first.chapterStart,
+                    )
+                }
+                maybePublishPreview(elements.size)
+                return true
+            }
+
+            fun processSequentialSpineItem(spineItem: SpineItem): Boolean {
+                checkActive?.invoke()
                 val item = spineItem.item
                 val chapterPath = resolvePath(opfDir, item.href)
                 // Ignore only the non-linear duplicate; the actual linear
                 // itemref is processed at its declared reading-order slot.
-                if (!spineItem.linear && chapterPath in linearPaths) continue
+                if (!spineItem.linear && chapterPath in linearPaths) return true
                 val linear = spineItem.linear
-                if (!linear && !processedLinkedPaths.add(chapterPath)) continue
-                val entry = zipEntry(zip, chapterPath) ?: continue
+                if (!linear && !processedLinkedPaths.add(chapterPath)) return true
+                val entry = zipEntry(zip, chapterPath) ?: return true
 
                 if (item.mediaType.equals("image/svg+xml", ignoreCase = true)) {
                     val imagePath = extractImage(
@@ -422,14 +835,12 @@ object EpubParser {
                         chapterPath,
                         imagesDir,
                         extractedImages,
-                        budget,
                         limits,
                         required = linear,
-                    ) ?: continue
+                    ) ?: return true
                     val svgDocument = parseOptionalXml(
                         zip,
                         chapterPath,
-                        budget,
                         limits.maxImageBytes,
                         "EPUB SVG description",
                     )
@@ -443,17 +854,22 @@ object EpubParser {
                             }.trim().takeIf(String::isNotEmpty)
                         }
                     val tocEntry = titlesByPath[chapterPath]?.firstOrNull()
-                    publisherDocuments.putIfAbsent(
-                        chapterPath,
-                        PublisherDocumentInfo(
-                            viewport = svgDocument?.let(EpubRenditionParser::parseSvgViewport),
-                            title = tocEntry?.title ?: svgRoot?.children()
-                                ?.firstOrNull { it.localName() == "title" }
-                                ?.text()?.trim()?.takeIf(String::isNotEmpty),
-                            capabilities = setOf(PublisherCapability.STANDALONE_SVG),
-                        ),
-                    )
+                    if (target == null && opening == null) {
+                        publisherDocuments.putIfAbsent(
+                            chapterPath,
+                            PublisherDocumentInfo(
+                                viewport = svgDocument?.let(EpubRenditionParser::parseSvgViewport),
+                                title = tocEntry?.title ?: svgRoot?.children()
+                                    ?.firstOrNull { it.localName() == "title" }
+                                    ?.text()?.trim()?.takeIf(String::isNotEmpty),
+                                capabilities = setOf(PublisherCapability.STANDALONE_SVG),
+                            ),
+                        )
+                    }
                     val image = ContentElement.Image(path = imagePath, altText = svgAlt)
+                    if (target != null) {
+                        return target.appendDocument(spineItem.ordinal, listOf(image), emptyList(), listOf(0))
+                    }
                     if (linear) {
                         val chapterIndex = chapterBuilders.size
                         chapterBuilders += ChapterBuilder(
@@ -461,6 +877,7 @@ object EpubParser {
                             elements = listOf(image),
                             depth = tocEntry?.depth ?: 0,
                         )
+                        sourceRanges += EpubSourceRange(spineItem.ordinal, chapterPath, 0, chapterIndex, 0, 1)
                         fileLocations.putIfAbsent(chapterPath, chapterIndex to 0)
                         maybePublishPreview(1)
                     } else {
@@ -474,90 +891,97 @@ object EpubParser {
                             LinkedDocumentTarget(chapterPath, 0),
                         )
                     }
-                    continue
+                    return true
                 }
                 val dtbook = item.mediaType.equals(DTBOOK_MEDIA_TYPE, ignoreCase = true)
-                if (!item.mediaType.contains("html", ignoreCase = true) && !dtbook) continue
+                if (!item.mediaType.contains("html", ignoreCase = true) && !dtbook) return true
 
                 val chapterDir = chapterPath.substringBeforeLast('/', "")
 
                 val doc = parseChapterDocument(
                     zip,
                     entry,
-                    budget,
                     limits,
                     required = linear,
-                ) ?: continue
-                publisherDocuments.putIfAbsent(
-                    chapterPath,
-                    publisherDocumentInfo(
-                        document = doc,
-                        item = item,
-                        tocTitle = titlesByPath[chapterPath]?.firstOrNull()?.title,
-                    ),
-                )
-                val body = if (dtbook) {
-                    doc.selectFirst("book")
-                } else {
-                    doc.selectFirst("body")
-                } ?: continue
-                if (fb2EpubConversion) {
-                    promoteFb2EpubNoteLinks(body, chapterPath, chapterDir)
-                }
+                    retainTree = !fb2EpubConversion,
+                ) ?: return true
+                val mapper: HtmlMapper
+                val elements: List<ContentElement>
+                try {
+                    if (target == null && opening == null) {
+                        publisherDocuments.putIfAbsent(
+                            chapterPath,
+                            publisherDocumentInfo(
+                                document = doc,
+                                item = item,
+                                tocTitle = titlesByPath[chapterPath]?.firstOrNull()?.title,
+                            ),
+                        )
+                    }
+                    val body = if (doc is RustChapterMarkup.MarkupDocument && !doc.treeMutated) {
+                        if (dtbook) doc.bookElement else doc.bodyElement
+                    } else {
+                        doc.selectFirst(if (dtbook) "book" else "body")
+                    } ?: return true
+                    if (fb2EpubConversion) {
+                        promoteFb2EpubNoteLinks(body, chapterPath, chapterDir)
+                    }
 
-                val resolver = cssResolverFor(
-                    doc,
-                    zip,
-                    chapterDir,
-                    cssCache,
-                    resolverCache,
-                    budget,
-                    limits,
-                    cssBudget,
-                )
-                if (resolver != null) {
-                    extractFonts(
-                        resolver,
-                        zip,
-                        imagesDir,
-                        fonts,
-                        encryption,
-                        fontKeys,
-                        budget,
-                        limits,
+                    val resolver = cssResolverFor(
+                        doc = doc,
+                        zip = zip,
+                        chapterDir = chapterDir,
+                        cssCache = cssCache,
+                        sheetCache = sheetCache,
+                        resolvedSheetsCache = resolvedSheetsCache,
+                        resolverCache = resolverCache,
+                        limits = limits,
+                        cssBudget = cssBudget,
                     )
-                }
-                val mapper = HtmlMapper(
-                    resolveImage = { src ->
-                        extractImage(
+                    if (resolver != null) {
+                        extractFonts(
+                            resolver.fontFaces,
                             zip,
-                            resolvePath(chapterDir, src),
                             imagesDir,
-                            extractedImages,
-                            budget,
+                            fonts,
+                            encryption,
+                            fontKeys,
                             limits,
                         )
-                    },
-                    resolveLink = { href -> resolveLinkKey(href, chapterPath, chapterDir) },
-                    css = resolver,
-                    resolveInlineSvg = { markup -> writeInlineSvg(markup, imagesDir, inlineSvgs) },
-                    expansionBudget = htmlExpansionBudget,
-                    // The same manifest document may legally appear more
-                    // than once in the spine; include its occurrence so a
-                    // later merge cannot create duplicate box IDs.
-                    publisherBoxIdPrefix = "$chapterPath@${spineItem.ordinal}",
-                )
-                val elements = mapper.map(body)
-                mapper.noteDocuments.forEach { (id, note) ->
-                    exactNoteDocuments.putIfAbsent("$chapterPath#$id", note)
+                    }
+                    mapper = HtmlMapper(
+                        resolveImage = { src ->
+                            extractImage(
+                                zip,
+                                resolvePath(chapterDir, src),
+                                imagesDir,
+                                extractedImages,
+                                limits,
+                            )
+                        },
+                        resolveLink = { href -> resolveLinkKey(href, chapterPath, chapterDir) },
+                        css = resolver,
+                        resolveInlineSvg = { markup -> writeInlineSvg(markup, imagesDir, inlineSvgs) },
+                        expansionBudget = htmlExpansionBudget,
+                        // The same manifest document may legally appear more
+                        // than once in the spine; include its occurrence so a
+                        // later merge cannot create duplicate box IDs.
+                        publisherBoxIdPrefix = "$chapterPath@${spineItem.ordinal}",
+                    )
+                    elements = mapper.map(body)
+                } finally {
+                    (doc as? RustChapterMarkup.RetainedDocument)?.close()
                 }
-                // The per-element style cache is useless once the chapter's
-                // DOM is discarded — clear it so it cannot pin every node of
-                // the whole book in memory during parse.
-                resolver?.clearCache()
-                if (elements.isEmpty()) continue
-                linkTargets += mapper.linkTargets
-                noteTargets += mapper.noteTargets
+                if (target == null) {
+                    mapper.noteDocuments.forEach { (id, note) ->
+                        exactNoteDocuments.putIfAbsent("$chapterPath#$id", note)
+                    }
+                }
+                if (elements.isEmpty()) return true
+                if (target == null) {
+                    linkTargets += mapper.linkTargets
+                    noteTargets += mapper.noteTargets
+                }
 
                 if (!linear) {
                     val tocEntry = titlesByPath[chapterPath]?.firstOrNull()
@@ -583,116 +1007,624 @@ object EpubParser {
                             ),
                         )
                     }
-                    continue
+                    return true
                 }
 
-                // A single XHTML file may contain several TOC chapters. Keep
-                // the fragment in nav/NCX and split at the mapper's anchor
-                // boundary instead of collapsing every entry to the file's
-                // first label. Unlisted file fragments retain the historical
-                // merge-with-previous behavior.
-                data class AddedSegment(
-                    val localStart: Int,
-                    val localEnd: Int,
-                    val chapterIndex: Int,
-                    val elementBase: Int,
+                return appendLinearDocument(
+                    spineItem = spineItem,
+                    chapterPath = chapterPath,
+                    elements = elements,
+                    publisherBoxes = mapper.publisherBoxes,
+                    anchors = mapper.anchors,
                 )
-
-                val tocEntries = titlesByPath[chapterPath].orEmpty()
-                val points = linkedMapOf<Int, TocEntry>()
-                for (tocEntry in tocEntries) {
-                    val index = tocEntry.fragment
-                        ?.let(mapper.anchors::get)
-                        ?: if (tocEntry.fragment == null) 0 else null
-                    if (index != null && index in elements.indices) {
-                        points.putIfAbsent(index, tocEntry)
-                    }
-                }
-                val orderedPoints = points.entries.sortedBy { it.key }
-                val boundaries = buildList {
-                    if (orderedPoints.firstOrNull()?.key != 0) add(0 to null)
-                    orderedPoints.forEach { add(it.key to it.value) }
-                    if (isEmpty()) add(0 to tocEntries.firstOrNull())
-                }
-
-                val added = mutableListOf<AddedSegment>()
-                for ((position, boundary) in boundaries.withIndex()) {
-                    val start = boundary.first
-                    val end = boundaries.getOrNull(position + 1)?.first ?: elements.size
-                    if (start >= end) continue
-                    val tocEntry = boundary.second
-                    val merge = tocEntry == null && titlesByPath.isNotEmpty() && chapterBuilders.isNotEmpty()
-                    val chapterIndex: Int
-                    val elementBase: Int
-                    if (merge) {
-                        val previous = chapterBuilders.last()
-                        elementBase = previous.elements.size
-                        previous.elements.addAll(elements.subList(start, end))
-                        previous.publisherBoxes.addAll(
-                            slicePublisherBoxSpans(
-                                spans = mapper.publisherBoxes,
-                                startElement = start,
-                                endElementExclusive = end,
-                                destinationOffset = elementBase,
-                            ),
-                        )
-                        chapterIndex = chapterBuilders.lastIndex
-                    } else {
-                        val segment = elements.subList(start, end)
-                        val title = tocEntry?.title
-                            ?: segment.firstOrNull { it is ContentElement.Heading }
-                                ?.let { (it as ContentElement.Heading).text }
-                        chapterIndex = chapterBuilders.size
-                        elementBase = 0
-                        chapterBuilders += ChapterBuilder(
-                            title = title,
-                            elements = segment,
-                            depth = tocEntry?.depth ?: 0,
-                            publisherBoxes = slicePublisherBoxSpans(
-                                spans = mapper.publisherBoxes,
-                                startElement = start,
-                                endElementExclusive = end,
-                            ),
-                        )
-                    }
-                    added += AddedSegment(start, end, chapterIndex, elementBase)
-                }
-
-                mapper.anchors.forEach { (id, index) ->
-                    val segment = added.lastOrNull { index >= it.localStart } ?: return@forEach
-                    val localIndex = (index - segment.localStart)
-                        .coerceIn(0, segment.localEnd - segment.localStart - 1)
-                    anchorLocations.putIfAbsent(
-                        "$chapterPath#$id",
-                        segment.chapterIndex to (segment.elementBase + localIndex),
-                    )
-                }
-                // A link to the whole file lands where its first visible
-                // segment begins, including a merged unlisted preamble.
-                added.firstOrNull()?.let { first ->
-                    fileLocations.putIfAbsent(
-                        chapterPath,
-                        first.chapterIndex to first.elementBase,
-                    )
-                }
-                maybePublishPreview(elements.size)
             }
 
-            return contentSnapshot(
-                publisherPublication = buildPublisherPublication(
+            fun isParallelEligible(spineItem: SpineItem): Boolean {
+                if (!spineItem.linear) return false
+                if (isFixedLayout(packageRendition, spineItem)) return false
+                val mediaType = spineItem.item.mediaType
+                if (mediaType.equals("image/svg+xml", ignoreCase = true)) return false
+                val dtbook = mediaType.equals(DTBOOK_MEDIA_TYPE, ignoreCase = true)
+                if (!mediaType.contains("html", ignoreCase = true) && !dtbook) return false
+                val chapterPath = resolvePath(opfDir, spineItem.item.href)
+                return zipEntry(zip, chapterPath) != null
+            }
+
+            val workerSlots = mutableListOf<WorkerSlot>()
+            var workerExecutor: ExecutorService? = null
+            var acquiredPermits = 0
+            var parallelDisabled = target != null ||
+                opening != null ||
+                selectedSpine.size < MIN_PARALLEL_SPINE_ITEMS ||
+                maxParallelism < 2
+
+            fun ensureWorkerPool(): Boolean {
+                if (parallelDisabled) return false
+                if (workerSlots.size >= 2 && workerExecutor != null) return true
+                val desired = maxParallelism.coerceIn(2, MAX_PARALLEL_WORKERS)
+                while (acquiredPermits < desired && parallelWorkerPermits.tryAcquire()) {
+                    acquiredPermits++
+                }
+                if (acquiredPermits < 2) {
+                    if (acquiredPermits > 0) {
+                        parallelWorkerPermits.release(acquiredPermits)
+                        acquiredPermits = 0
+                    }
+                    parallelDisabled = true
+                    return false
+                }
+                workerSlots += WorkerSlot(
                     zip = zip,
-                    opfPath = opfPath,
-                    opfDir = opfDir,
-                    packageRendition = packageRendition,
-                    spine = spine,
-                    items = items,
-                    titlesByPath = titlesByPath,
-                    documents = publisherDocuments,
-                    encryption = encryption,
-                    limits = limits,
-                ),
-            )
+                    ownsZip = false,
+                    resolverCache = resolverCache,
+                    ownsResolverCache = false,
+                )
+                for (index in 1 until acquiredPermits) {
+                    val workerZip = zip.openWorker(file) ?: break
+                    workerSlots += WorkerSlot(
+                        zip = workerZip,
+                        ownsZip = true,
+                        resolverCache = mutableMapOf(),
+                        ownsResolverCache = true,
+                    )
+                }
+                val unusedPermits = acquiredPermits - workerSlots.size
+                if (unusedPermits > 0) {
+                    parallelWorkerPermits.release(unusedPermits)
+                    acquiredPermits -= unusedPermits
+                }
+                if (workerSlots.size < 2) {
+                    workerSlots.forEach(WorkerSlot::close)
+                    workerSlots.clear()
+                    if (acquiredPermits > 0) {
+                        parallelWorkerPermits.release(acquiredPermits)
+                        acquiredPermits = 0
+                    }
+                    parallelDisabled = true
+                    return false
+                }
+                workerExecutor = Executors.newFixedThreadPool(workerSlots.size) { runnable ->
+                    Thread(runnable, "FrogReader-EpubParse-${parallelThreadCounter.incrementAndGet()}").apply {
+                        isDaemon = true
+                    }
+                }
+                return true
+            }
+
+            fun mapSpineItemOnWorker(
+                spineItem: SpineItem,
+                slot: WorkerSlot,
+                startBytesRead: Long,
+            ): ParallelSpineResult {
+                return try {
+                    val item = spineItem.item
+                    val chapterPath = resolvePath(opfDir, item.href)
+                    val dtbook = item.mediaType.equals(DTBOOK_MEDIA_TYPE, ignoreCase = true)
+                    val chapterDir = chapterPath.substringBeforeLast('/', "")
+                    slot.zip.resetBytesRead(startBytesRead)
+                    val entry = zipEntry(slot.zip, chapterPath)
+                        ?: return ParallelSpineResult.Skipped(0L)
+                    val doc = parseChapterDocument(
+                        slot.zip,
+                        entry,
+                        limits,
+                        required = true,
+                        retainTree = !fb2EpubConversion,
+                    ) ?: return ParallelSpineResult.Skipped(slot.zip.bytesReadSoFar - startBytesRead)
+                    try {
+                        val publisherInfo = publisherDocumentInfo(
+                            document = doc,
+                            item = item,
+                            tocTitle = titlesByPath[chapterPath]?.firstOrNull()?.title,
+                        )
+                        val body = if (doc is RustChapterMarkup.MarkupDocument && !doc.treeMutated) {
+                            if (dtbook) doc.bookElement else doc.bodyElement
+                        } else {
+                            doc.selectFirst(if (dtbook) "book" else "body")
+                        }
+                        if (body == null) {
+                            return ParallelSpineResult.Mapped(
+                                spineItem = spineItem,
+                                chapterPath = chapterPath,
+                                publisherInfo = publisherInfo,
+                                hasBody = false,
+                                fontFaces = emptyList(),
+                                elements = emptyList(),
+                                publisherBoxes = emptyList(),
+                                anchors = emptyMap(),
+                                linkTargets = emptySet(),
+                                noteTargets = emptySet(),
+                                noteDocuments = emptyMap(),
+                                bytesRead = slot.zip.bytesReadSoFar - startBytesRead,
+                            )
+                        }
+                        if (fb2EpubConversion) {
+                            promoteFb2EpubNoteLinks(body, chapterPath, chapterDir)
+                        }
+                        val resolver = cssResolverFor(
+                            doc = doc,
+                            zip = slot.zip,
+                            chapterDir = chapterDir,
+                            cssCache = cssCache,
+                            sheetCache = sheetCache,
+                            resolvedSheetsCache = resolvedSheetsCache,
+                            resolverCache = slot.resolverCache,
+                            limits = limits,
+                            cssBudget = cssBudget,
+                            cssLock = cssLock,
+                        )
+                        val fontFaces = resolver?.fontFaces?.toList().orEmpty()
+                        val mapper = HtmlMapper(
+                            resolveImage = { src ->
+                                extractImageParallel(
+                                    zip = slot.zip,
+                                    entryPath = resolvePath(chapterDir, src),
+                                    imagesDir = imagesDir,
+                                    cache = extractedImages,
+                                    imageLock = imageLock,
+                                    inFlightLocks = inFlightImageLocks,
+                                    limits = limits,
+                                )
+                            },
+                            resolveLink = { href -> resolveLinkKey(href, chapterPath, chapterDir) },
+                            css = resolver,
+                            resolveInlineSvg = { markup ->
+                                synchronized(svgLock) {
+                                    writeInlineSvg(markup, imagesDir, inlineSvgs)
+                                }
+                            },
+                            expansionBudget = htmlExpansionBudget,
+                            publisherBoxIdPrefix = "$chapterPath@${spineItem.ordinal}",
+                        )
+                        val elements = mapper.map(body)
+                        ParallelSpineResult.Mapped(
+                            spineItem = spineItem,
+                            chapterPath = chapterPath,
+                            publisherInfo = publisherInfo,
+                            hasBody = true,
+                            fontFaces = fontFaces,
+                            elements = elements,
+                            publisherBoxes = mapper.publisherBoxes.toList(),
+                            anchors = mapper.anchors.toMap(),
+                            linkTargets = mapper.linkTargets.toSet(),
+                            noteTargets = mapper.noteTargets.toSet(),
+                            noteDocuments = mapper.noteDocuments.toMap(),
+                            bytesRead = slot.zip.bytesReadSoFar - startBytesRead,
+                        )
+                    } finally {
+                        (doc as? RustChapterMarkup.RetainedDocument)?.close()
+                    }
+                } catch (error: Throwable) {
+                    ParallelSpineResult.Failed(error)
+                }
+            }
+
+            try {
+                var spineIndex = 0
+                while (spineIndex < selectedSpine.size) {
+                    val canParallel = !parallelDisabled &&
+                        (onPreview == null || previewPublished) &&
+                        !cssBudget.wasLimited &&
+                        !synchronized(htmlExpansionBudget) { htmlExpansionBudget.wasAggregateLimited } &&
+                        isParallelEligible(selectedSpine[spineIndex])
+
+                    if (canParallel) {
+                        var runEnd = spineIndex + 1
+                        while (runEnd < selectedSpine.size && isParallelEligible(selectedSpine[runEnd])) {
+                            runEnd++
+                        }
+                        val runSize = runEnd - spineIndex
+                        if (runSize >= 2 && ensureWorkerPool()) {
+                            checkActive?.invoke()
+                            val workers = workerSlots.size
+                            val minWindowItems = minOf(runSize, workers * SLIDING_WINDOW_MIN_FACTOR)
+                            val maxWindowItems = minOf(runSize, workers * SLIDING_WINDOW_MAX_FACTOR)
+                            val runItems = selectedSpine.subList(spineIndex, runEnd)
+                            val runEntrySizes = LongArray(runSize) { i ->
+                                zipEntry(zip, resolvePath(opfDir, runItems[i].item.href))?.size ?: 0L
+                            }
+
+                            var committedBytes = zip.bytesReadSoFar
+                            val committedBytesRead = AtomicLong(committedBytes)
+                            val windowLock = ReentrantLock()
+                            val resultReady = windowLock.newCondition()
+                            val spaceAvailable = windowLock.newCondition()
+                            val results = arrayOfNulls<ParallelSpineResult>(maxWindowItems)
+                            var nextDispatch = 0
+                            var commitOffset = 0
+                            var inFlightSourceBytes = 0L
+                            var earliestFailure = runSize
+                            var abortRun = false
+                            var budgetTriggered = false
+                            var runCancellation: Throwable? = null
+                            var fatalError: Error? = null
+                            var activeWorkers = workers
+
+                            fun runWorker(slot: WorkerSlot) {
+                                try {
+                                    while (true) {
+                                        try {
+                                            checkActive?.invoke()
+                                        } catch (error: Throwable) {
+                                            windowLock.lock()
+                                            try {
+                                                if (runCancellation == null) runCancellation = error
+                                                abortRun = true
+                                                resultReady.signalAll()
+                                                spaceAvailable.signalAll()
+                                            } finally {
+                                                windowLock.unlock()
+                                            }
+                                            return
+                                        }
+
+                                        if (cssBudget.wasLimited ||
+                                            synchronized(htmlExpansionBudget) { htmlExpansionBudget.wasAggregateLimited }
+                                        ) {
+                                            windowLock.lock()
+                                            try {
+                                                budgetTriggered = true
+                                                abortRun = true
+                                                resultReady.signalAll()
+                                                spaceAvailable.signalAll()
+                                            } finally {
+                                                windowLock.unlock()
+                                            }
+                                            return
+                                        }
+
+                                        var localIndex = -1
+                                        windowLock.lock()
+                                        try {
+                                            while (true) {
+                                                if (abortRun || nextDispatch >= runSize || nextDispatch >= earliestFailure) {
+                                                    return
+                                                }
+                                                val inFlightCount = nextDispatch - commitOffset
+                                                val canTake = inFlightCount < minWindowItems ||
+                                                    (inFlightCount < maxWindowItems &&
+                                                        inFlightSourceBytes + runEntrySizes[nextDispatch] <= SLIDING_WINDOW_MAX_SOURCE_BYTES)
+                                                if (canTake) {
+                                                    localIndex = nextDispatch++
+                                                    inFlightSourceBytes += runEntrySizes[localIndex]
+                                                    break
+                                                }
+                                                spaceAvailable.await()
+                                            }
+                                        } catch (_: InterruptedException) {
+                                            Thread.currentThread().interrupt()
+                                            return
+                                        } finally {
+                                            windowLock.unlock()
+                                        }
+
+                                        val startBytesRead = committedBytesRead.get()
+                                        val result = mapSpineItemOnWorker(
+                                            spineItem = runItems[localIndex],
+                                            slot = slot,
+                                            startBytesRead = startBytesRead,
+                                        )
+
+                                        val budgetHitNow = cssBudget.wasLimited ||
+                                            synchronized(htmlExpansionBudget) { htmlExpansionBudget.wasAggregateLimited }
+
+                                        windowLock.lock()
+                                        try {
+                                            results[localIndex % maxWindowItems] = result
+                                            if (budgetHitNow) {
+                                                budgetTriggered = true
+                                                abortRun = true
+                                                spaceAvailable.signalAll()
+                                            } else if (result is ParallelSpineResult.Failed) {
+                                                val err = result.error
+                                                if (err is Error) {
+                                                    if (fatalError == null) fatalError = err
+                                                    abortRun = true
+                                                    spaceAvailable.signalAll()
+                                                }
+                                                if (localIndex < earliestFailure) {
+                                                    earliestFailure = localIndex
+                                                    spaceAvailable.signalAll()
+                                                }
+                                            }
+                                            if (localIndex == commitOffset || abortRun) {
+                                                resultReady.signalAll()
+                                            }
+                                        } finally {
+                                            windowLock.unlock()
+                                        }
+                                    }
+                                } catch (error: Throwable) {
+                                    windowLock.lock()
+                                    try {
+                                        if (error is Error) {
+                                            if (fatalError == null) fatalError = error
+                                        } else if (runCancellation == null) {
+                                            runCancellation = error
+                                        }
+                                        abortRun = true
+                                        resultReady.signalAll()
+                                        spaceAvailable.signalAll()
+                                    } finally {
+                                        windowLock.unlock()
+                                    }
+                                } finally {
+                                    windowLock.lock()
+                                    try {
+                                        activeWorkers--
+                                        if (activeWorkers == 0) {
+                                            resultReady.signalAll()
+                                        }
+                                    } finally {
+                                        windowLock.unlock()
+                                    }
+                                }
+                            }
+
+                            val pendingFontFaces = linkedSetOf<CssResolver.FontFace>()
+                            var committedCount = 0
+                            var failedResult: ParallelSpineResult.Failed? = null
+                            var readLimitExceeded = false
+                            var retrySequentialForBudget = false
+
+                            val executor = checkNotNull(workerExecutor)
+                            val futures = ArrayList<Future<Unit>>(workers)
+                            try {
+                                for (slotIndex in 0 until workers) {
+                                    val slot = workerSlots[slotIndex]
+                                    futures += executor.submit(Callable { runWorker(slot) })
+                                }
+
+                                while (committedCount < runSize) {
+                                    checkActive?.invoke()
+
+                                    var nextResult: ParallelSpineResult? = null
+                                    var shouldRetryBudget = false
+                                    var cancelError: Throwable? = null
+                                    var fatal: Error? = null
+                                    var timedOut = false
+
+                                    windowLock.lock()
+                                    try {
+                                        while (true) {
+                                            if (runCancellation != null) {
+                                                cancelError = runCancellation
+                                                break
+                                            }
+                                            if (fatalError != null) {
+                                                fatal = fatalError
+                                                break
+                                            }
+                                            if (budgetTriggered) {
+                                                shouldRetryBudget = true
+                                                break
+                                            }
+                                            val candidate = results[commitOffset % maxWindowItems]
+                                            if (candidate != null) {
+                                                results[commitOffset % maxWindowItems] = null
+                                                inFlightSourceBytes -= runEntrySizes[commitOffset]
+                                                commitOffset++
+                                                spaceAvailable.signalAll()
+                                                nextResult = candidate
+                                                break
+                                            }
+                                            if (abortRun || activeWorkers == 0) {
+                                                break
+                                            }
+                                            if (checkActive != null) {
+                                                if (!resultReady.await(25L, TimeUnit.MILLISECONDS)) {
+                                                    timedOut = true
+                                                    break
+                                                }
+                                            } else {
+                                                resultReady.await()
+                                            }
+                                        }
+                                    } finally {
+                                        windowLock.unlock()
+                                    }
+
+                                    if (timedOut) continue
+                                    if (cancelError != null) throw cancelError
+                                    if (fatal != null) throw fatal
+                                    if (shouldRetryBudget ||
+                                        cssBudget.wasLimited ||
+                                        synchronized(htmlExpansionBudget) { htmlExpansionBudget.wasAggregateLimited }
+                                    ) {
+                                        retrySequentialForBudget = true
+                                        break
+                                    }
+                                    val res = nextResult ?: break
+
+                                    if (res is ParallelSpineResult.Failed) {
+                                        failedResult = res
+                                        break
+                                    }
+
+                                    if (res.bytesRead > limits.maxArchiveReadBytes - committedBytes) {
+                                        readLimitExceeded = true
+                                        break
+                                    }
+                                    committedBytes += res.bytesRead
+                                    committedBytesRead.set(committedBytes)
+
+                                    if (res is ParallelSpineResult.Mapped) {
+                                        publisherDocuments.putIfAbsent(res.chapterPath, res.publisherInfo)
+                                        if (res.hasBody) {
+                                            if (res.fontFaces.isNotEmpty()) {
+                                                pendingFontFaces.addAll(res.fontFaces)
+                                            }
+                                            res.noteDocuments.forEach { (id, note) ->
+                                                exactNoteDocuments.putIfAbsent("${res.chapterPath}#$id", note)
+                                            }
+                                            if (res.elements.isNotEmpty()) {
+                                                linkTargets += res.linkTargets
+                                                noteTargets += res.noteTargets
+                                                appendLinearDocument(
+                                                    spineItem = res.spineItem,
+                                                    chapterPath = res.chapterPath,
+                                                    elements = res.elements,
+                                                    publisherBoxes = res.publisherBoxes,
+                                                    anchors = res.anchors,
+                                                )
+                                            }
+                                        }
+                                    }
+                                    committedCount++
+                                }
+                            } finally {
+                                // Always wait for all worker tasks to exit before touching
+                                // shared zip/resolver state or closing worker native handles.
+                                windowLock.lock()
+                                try {
+                                    abortRun = true
+                                    spaceAvailable.signalAll()
+                                    resultReady.signalAll()
+                                } finally {
+                                    windowLock.unlock()
+                                }
+                                var interrupted = false
+                                for (future in futures) {
+                                    while (true) {
+                                        try {
+                                            future.get()
+                                            break
+                                        } catch (_: InterruptedException) {
+                                            interrupted = true
+                                        } catch (_: Throwable) {
+                                            break
+                                        }
+                                    }
+                                }
+                                if (interrupted) Thread.currentThread().interrupt()
+                                zip.resetBytesRead(committedBytes)
+                            }
+
+                            runCancellation?.let { throw it }
+                            fatalError?.let { throw it }
+
+                            if (retrySequentialForBudget ||
+                                cssBudget.wasLimited ||
+                                synchronized(htmlExpansionBudget) { htmlExpansionBudget.wasAggregateLimited }
+                            ) {
+                                return ParseAttemptOutcome(
+                                    result = null,
+                                    retrySequential = true,
+                                    previewPublished = previewPublished,
+                                )
+                            }
+
+                            if (readLimitExceeded) {
+                                throw ResourceLimitException(
+                                    ResourceLimitKind.ACTUAL_AGGREGATE,
+                                    "Archive expands beyond ${limits.maxArchiveReadBytes} bytes during this open",
+                                )
+                            }
+
+                            if (pendingFontFaces.isNotEmpty()) {
+                                extractFonts(
+                                    pendingFontFaces.toList(),
+                                    zip,
+                                    imagesDir,
+                                    fonts,
+                                    encryption,
+                                    fontKeys,
+                                    limits,
+                                )
+                            }
+
+                            spineIndex += committedCount
+                            if (failedResult != null) {
+                                if (failedResult.error is Error) {
+                                    throw failedResult.error
+                                }
+                                parallelDisabled = true
+                                if (!processSequentialSpineItem(selectedSpine[spineIndex])) {
+                                    return ParseAttemptOutcome(null)
+                                }
+                                spineIndex++
+                            }
+                            continue
+                        }
+                    }
+
+                    if (!processSequentialSpineItem(selectedSpine[spineIndex])) {
+                        return ParseAttemptOutcome(null)
+                    }
+                    spineIndex++
+                }
+
+                if (target != null) {
+                    if (cssBudget.wasLimited || htmlExpansionBudget.wasAggregateLimited) {
+                        return ParseAttemptOutcome(null)
+                    }
+                    return ParseAttemptOutcome(
+                        ParsedContent(BookContent(target.buildChapters() ?: return ParseAttemptOutcome(null))),
+                    )
+                }
+
+                if (opening != null) {
+                    if (sourceRanges.isEmpty() || cssBudget.wasLimited || htmlExpansionBudget.wasAggregateLimited) {
+                        return ParseAttemptOutcome(null)
+                    }
+                    val (chapter, element) = opening.fragment?.let {
+                        anchorLocations["${opening.path}#$it"] ?: return ParseAttemptOutcome(null)
+                    } ?: (fileLocations[opening.path] ?: return ParseAttemptOutcome(null))
+                    val localOffset = chapterBuilders.subList(0, chapter).sumOf { it.elements.size } + element
+                    return ParseAttemptOutcome(ParsedContent(contentSnapshot(), localOffset))
+                }
+
+                val complete = contentSnapshot(
+                    publisherPublication = buildPublisherPublication(
+                        zip = zip,
+                        opfPath = publication.path,
+                        opfDir = opfDir,
+                        packageRendition = packageRendition,
+                        spine = spine,
+                        items = items,
+                        titlesByPath = titlesByPath,
+                        documents = publisherDocuments,
+                        encryption = encryption,
+                        limits = limits,
+                    ),
+                )
+                return ParseAttemptOutcome(ParsedContent(complete))
+            } finally {
+                workerSlots.forEach(WorkerSlot::close)
+                workerSlots.clear()
+                resolverCache.values.forEach(CssResolver::close)
+                workerExecutor?.shutdownNow()
+                if (acquiredPermits > 0) {
+                    parallelWorkerPermits.release(acquiredPermits)
+                }
+            }
         }
+    }
+
+    private fun readReadingPackage(zip: RustEpubArchive, limits: ReaderResourceLimits): ReadingPackage {
+        val path = findOpfPath(zip, limits) ?: throw IllegalArgumentException("Not a valid EPUB: missing OPF")
+        val directory = path.substringBeforeLast('/', "")
+        val opf = readOpf(zip, path, limits)
+        return ReadingPackage(
+            path,
+            directory,
+            opf,
+            spineItems(opf),
+            chapterTitles(zip, opf.spineToc, opf.manifest, directory, limits),
+            EpubRenditionParser.parsePackage(opf),
+        )
+    }
+
+    private fun isFixedLayout(
+        rendition: EpubRenditionParser.PackageRendition,
+        occurrence: SpineItem,
+    ): Boolean {
+        val layout = if (occurrence.itemRefProperties.isEmpty()) {
+            rendition.defaults.layout
+        } else {
+            rendition.resolveItemRef(properties = occurrence.itemRefProperties).layout
+        }
+        return layout == RenditionLayout.PRE_PAGINATED
     }
 
     /**
@@ -737,6 +1669,52 @@ object EpubParser {
         chapterPath: String,
         chapterDir: String,
     ) {
+        val bodyPre = body as? RustChapterMarkup.PreindexedElement
+        val owner = bodyPre?.owner
+        if (bodyPre != null && owner != null && !owner.treeMutated &&
+            (owner.mutatedAttrs and RustChapterMarkup.MUTATED_HREF) == 0
+        ) {
+            if (!bodyPre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_A_HREF)) return
+            val stack = ArrayList<RustChapterMarkup.PreindexedElement>()
+            stack.add(bodyPre)
+            while (stack.isNotEmpty()) {
+                val current = stack.removeAt(stack.lastIndex)
+                if (current.hasTag(RustChapterMarkup.TAG_A) &&
+                    current.hasAttrFlag(RustChapterMarkup.ATTR_HAS_HREF)
+                ) {
+                    if (FB2_EPUB_NOTE_MARKER.matches(current.text().trim())) {
+                        val key = resolveLinkKey(current.hrefAttr.orEmpty(), chapterPath, chapterDir)
+                        if (key != null && key.substringAfter('#', "").isNotEmpty()) {
+                            val basename = key.substringBefore('#').substringAfterLast('/')
+                            if (FB2_EPUB_NOTE_FILE.matches(basename)) {
+                                current.setPromotedNoteType()
+                            }
+                        }
+                    }
+                }
+                val startSize = stack.size
+                var child = current.firstElementChild()
+                while (child != null) {
+                    val childPre = child as? RustChapterMarkup.PreindexedElement
+                    if (childPre != null && childPre.owner === owner &&
+                        childPre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_A_HREF)
+                    ) {
+                        stack.add(childPre)
+                    }
+                    child = child.nextElementSibling()
+                }
+                var left = startSize
+                var right = stack.lastIndex
+                while (left < right) {
+                    val tmp = stack[left]
+                    stack[left] = stack[right]
+                    stack[right] = tmp
+                    left++
+                    right--
+                }
+            }
+            return
+        }
         for (link in body.select("a[href]")) {
             if (!FB2_EPUB_NOTE_MARKER.matches(link.text().trim())) continue
             val key = resolveLinkKey(link.attr("href"), chapterPath, chapterDir) ?: continue
@@ -752,26 +1730,20 @@ object EpubParser {
 
     /** Parses a spine XHTML document (shared XML-first/HTML-fallback logic). */
     private fun parseChapterDocument(
-        zip: ZipFile,
-        entry: ZipEntry,
-        budget: ArchiveResourceBudget,
+        zip: RustEpubArchive,
+        entry: RustEpubArchive.Entry,
         limits: ReaderResourceLimits,
         required: Boolean,
+        retainTree: Boolean,
     ): Document? {
-        val bytes = if (required) {
-            budget.readRequired(
-                entry,
-                limits.maxChapterBytes,
-                "EPUB spine document ${entry.name}",
-            )
-        } else {
-            budget.readOptional(
-                entry,
-                limits.maxChapterBytes,
-                "EPUB linked document ${entry.name}",
-            ) ?: return null
-        }
-        return parseChapterDocument(bytes)
+        val label = if (required) "EPUB spine document ${entry.name}" else "EPUB linked document ${entry.name}"
+        return zip.parseChapterDocument(
+            entry = entry,
+            maxBytes = limits.maxChapterBytes,
+            label = label,
+            optional = !required,
+            retainTree = retainTree,
+        )
     }
 
     /**
@@ -781,7 +1753,8 @@ object EpubParser {
      * broken spine falls back to manifest order; a spine consisting solely of
      * valid non-linear items must not accidentally promote them to chapters.
      */
-    private fun spineItems(opf: Document, items: List<ManifestItem>): List<SpineItem> {
+    private fun spineItems(opf: Package): List<SpineItem> {
+        val items = opf.manifest
         val itemsById = items.associateBy { it.id }
 
         fun renderable(item: ManifestItem): ManifestItem? {
@@ -799,16 +1772,16 @@ object EpubParser {
             return null
         }
 
-        val refs = opf.select("spine > itemref")
+        val refs = opf.itemRefs
         if (refs.isNotEmpty()) {
             val resolved = refs.mapIndexedNotNull { ordinal, ref ->
-                itemsById[ref.attr("idref")]?.let(::renderable)?.let { rendered ->
+                itemsById[ref.idref]?.let(::renderable)?.let { rendered ->
                     SpineItem(
                         item = rendered,
-                        linear = !ref.attr("linear").equals("no", ignoreCase = true),
+                        linear = !ref.linear.equals("no", ignoreCase = true),
                         ordinal = ordinal,
-                        itemRefId = ref.attr("id").trim().takeIf(String::isNotEmpty),
-                        itemRefProperties = ref.attr("properties"),
+                        itemRefId = ref.id.trim().takeIf(String::isNotEmpty),
+                        itemRefProperties = ref.properties,
                     )
                 }
             }
@@ -837,7 +1810,7 @@ object EpubParser {
      * books therefore remain readable while that renderer is unavailable.
      */
     private fun buildPublisherPublication(
-        zip: ZipFile,
+        zip: RustEpubArchive,
         opfPath: String,
         opfDir: String,
         packageRendition: EpubRenditionParser.PackageRendition,
@@ -906,7 +1879,7 @@ object EpubParser {
 
     /** Only declared, local, existing browser resources enter the allowlist. */
     private fun publisherResources(
-        zip: ZipFile,
+        zip: RustEpubArchive,
         opfDir: String,
         items: List<ManifestItem>,
         encryption: Map<String, String>,
@@ -958,6 +1931,77 @@ object EpubParser {
         item: ManifestItem,
         tocTitle: String?,
     ): PublisherDocumentInfo {
+        if (document is RustChapterMarkup.MarkupDocument &&
+            !document.treeMutated &&
+            (document.mutatedAttrs and RustChapterMarkup.MUTATED_STYLE) == 0
+        ) {
+            val hasVerticalWriting = if (document.hasDocFlag(RustChapterMarkup.DOC_MAYBE_VERTICAL_WRITING)) {
+                val styleText = buildString {
+                    val stack = ArrayList<Element>()
+                    var rootChild = document.firstElementChild()
+                    while (rootChild != null) {
+                        stack.add(rootChild)
+                        rootChild = rootChild.nextElementSibling()
+                    }
+                    stack.reverse()
+                    while (stack.isNotEmpty()) {
+                        val element = stack.removeAt(stack.lastIndex)
+                        val pre = (element as? RustChapterMarkup.PreindexedElement)
+                            ?.takeIf { it.owner === document }
+                        if (pre == null || pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_STYLE)) {
+                            element.attr("style").takeIf(String::isNotBlank)?.let {
+                                append(it).append('\n')
+                            }
+                        }
+                        if (element.localName() == "style") {
+                            append(element.data().ifBlank { element.text() }).append('\n')
+                        }
+                        val startSize = stack.size
+                        var child = element.firstElementChild()
+                        while (child != null) {
+                            stack.add(child)
+                            child = child.nextElementSibling()
+                        }
+                        var left = startSize
+                        var right = stack.lastIndex
+                        while (left < right) {
+                            val tmp = stack[left]
+                            stack[left] = stack[right]
+                            stack[right] = tmp
+                            left++
+                            right--
+                        }
+                    }
+                }
+                VERTICAL_WRITING_DECLARATION.containsMatchIn(styleText)
+            } else {
+                false
+            }
+            val capabilities = buildSet {
+                if (document.hasDocFlag(RustChapterMarkup.DOC_HAS_MATH)) add(PublisherCapability.MATHML)
+                if (document.hasDocFlag(RustChapterMarkup.DOC_HAS_SVG) &&
+                    !item.mediaType.equals("image/svg+xml", true)
+                ) {
+                    add(PublisherCapability.EMBEDDED_SVG)
+                }
+                if (document.hasDocFlag(RustChapterMarkup.DOC_HAS_SCRIPT)) add(PublisherCapability.SCRIPTED)
+                if (hasVerticalWriting) add(PublisherCapability.VERTICAL_WRITING)
+            }
+            val title = tocTitle
+                ?: document.headTitleElement?.text()?.trim()?.takeIf(String::isNotEmpty)
+            val viewport = if (item.mediaType.contains("html", ignoreCase = true) &&
+                document.viewportMetaElement != null
+            ) {
+                EpubRenditionParser.parseXhtmlViewport(document)
+            } else {
+                null
+            }
+            return PublisherDocumentInfo(
+                viewport = viewport,
+                title = title,
+                capabilities = capabilities,
+            )
+        }
         val all = document.getAllElements()
         val localNames = all.mapTo(mutableSetOf()) { it.localName() }
         val styleText = buildString {
@@ -1069,16 +2113,16 @@ object EpubParser {
      */
     private fun cssResolverFor(
         doc: Document,
-        zip: ZipFile,
+        zip: RustEpubArchive,
         chapterDir: String,
         cssCache: MutableMap<String, String?>,
+        sheetCache: MutableMap<String, CssResolver.Sheet>,
+        resolvedSheetsCache: MutableMap<String, List<CssResolver.Sheet>?>,
         resolverCache: MutableMap<String, CssResolver>,
-        budget: ArchiveResourceBudget,
         limits: ReaderResourceLimits,
         cssBudget: EpubCssBudget,
+        cssLock: Any? = null,
     ): CssResolver? {
-        val sheets = mutableListOf<CssResolver.Sheet>()
-
         data class Source(
             val key: String,
             val text: String,
@@ -1107,19 +2151,24 @@ object EpubParser {
             }.toList()
         }
 
-        fun externalSource(path: String): Source? {
+        fun readCssTextLocked(path: String): String? {
+            if (cssCache.containsKey(path)) return cssCache[path]
+            return zipEntry(zip, path)?.let { entry ->
+                zip.readOptional(
+                    entry,
+                    limits.maxStylesheetBytes,
+                    "EPUB stylesheet $path",
+                )?.decodeToString()
+            }.also { cssCache[path] = it }
+        }
+
+        fun externalSource(path: String, alreadyLocked: Boolean = false): Source? {
             sourceCache[path]?.let { return it }
             if (path in missingSources) return null
-            val text = if (cssCache.containsKey(path)) {
-                cssCache[path]
+            val text = if (cssLock != null && !alreadyLocked) {
+                synchronized(cssLock) { readCssTextLocked(path) }
             } else {
-                zipEntry(zip, path)?.let { entry ->
-                    budget.readOptional(
-                        entry,
-                        limits.maxStylesheetBytes,
-                        "EPUB stylesheet $path",
-                    )?.decodeToString()
-                }.also { cssCache[path] = it }
+                readCssTextLocked(path)
             }
             if (text == null) {
                 missingSources += path
@@ -1141,7 +2190,7 @@ object EpubParser {
          * the call stack. Only the active path is cycle-protected, preserving
          * a repeated import after its earlier branch has completed.
          */
-        fun appendRoot(root: Source) {
+        fun appendRootLocked(root: Source, sheets: MutableList<CssResolver.Sheet>) {
             val activePath = mutableSetOf<String>()
             val stack = java.util.ArrayDeque<Frame>()
 
@@ -1158,20 +2207,30 @@ object EpubParser {
                     cssBudget.traverseImport()
                 ) {
                     val path = frame.source.imports[frame.nextImport++]
-                    externalSource(path)?.let(::push)
+                    externalSource(path, alreadyLocked = true)?.let(::push)
                     continue
                 }
 
                 frame.nextImport = frame.source.imports.size
                 stack.removeLast()
                 activePath -= frame.source.key
-                sheets += CssResolver.Sheet(frame.source.text, frame.source.baseDir)
+                sheets += sheetCache.getOrPut(frame.source.key) {
+                    CssResolver.Sheet(frame.source.text, frame.source.baseDir)
+                }
             }
         }
 
         val roots = mutableListOf<Source>()
         var inlineIndex = 0
-        for (node in doc.select("link[href], style")) {
+        val usePreindexedSheets = doc is RustChapterMarkup.MarkupDocument &&
+            !doc.treeMutated &&
+            (doc.mutatedAttrs and RustChapterMarkup.MUTATED_HREF) == 0
+        val stylesheetNodes = if (usePreindexedSheets) {
+            doc.stylesheetElements
+        } else {
+            doc.select("link[href], style")
+        }
+        for (node in stylesheetNodes) {
             if (!screenMediaApplies(node.attr("media"))) continue
             if (node.normalName() == "link") {
                 val rel = node.attr("rel").split(Regex("""\s+"""))
@@ -1181,7 +2240,11 @@ object EpubParser {
                 ) {
                     continue
                 }
-                val path = resolvePath(chapterDir, node.attr("href"))
+                val href = (node as? RustChapterMarkup.PreindexedElement)
+                    ?.takeIf { usePreindexedSheets && it.owner === doc }
+                    ?.hrefAttr
+                    ?: node.attr("href")
+                val path = resolvePath(chapterDir, href)
                 externalSource(path)?.let(roots::add)
             } else {
                 val index = inlineIndex++
@@ -1199,14 +2262,32 @@ object EpubParser {
         }
         // Keep an empty resolver: style="..." and legacy color/bgcolor are
         // chapter-local author CSS too, even when no <style>/<link> exists.
-        if (roots.isEmpty()) return CssResolver(emptyList())
+        if (roots.isEmpty()) {
+            return resolverCache[""] ?: CssResolver(emptyList()).also {
+                resolverCache[""] = it
+            }
+        }
         val rootSignature = roots.joinToString(separator = "") { "${it.key.length}:${it.key}" }
         val cacheKey = resourceDigest(rootSignature)
         resolverCache[cacheKey]?.let { return it }
-        roots.forEach(::appendRoot)
-        if (sheets.isEmpty()) return null
-        if (!cssBudget.acceptResolver(cacheKey, sheets)) return null
-        return CssResolver(sheets).also { resolverCache[cacheKey] = it }
+        fun resolveSheetsLocked(): List<CssResolver.Sheet>? {
+            resolvedSheetsCache[cacheKey]?.let { return it }
+            val sheets = mutableListOf<CssResolver.Sheet>()
+            roots.forEach { appendRootLocked(it, sheets) }
+            if (sheets.isEmpty()) return null
+            if (!cssBudget.acceptResolver(cacheKey, sheets)) return null
+            val immutable = sheets.toList()
+            resolvedSheetsCache[cacheKey] = immutable
+            return immutable
+        }
+        val sheets = if (cssLock != null) {
+            synchronized(cssLock) { resolveSheetsLocked() }
+        } else {
+            resolveSheetsLocked()
+        } ?: return null
+        return CssResolver(sheets).also {
+            resolverCache[cacheKey] = it
+        }
     }
 
     /**
@@ -1285,17 +2366,17 @@ object EpubParser {
         val adobe: List<ByteArray>,
     )
 
-    private fun fontKeysFrom(opf: Document): FontKeys {
-        val identifiers = opf.select("metadata > dc|identifier")
-        val uniqueId = opf.selectFirst("package")?.attr("unique-identifier").orEmpty()
-        val unique = identifiers.firstOrNull { uniqueId.isNotEmpty() && it.attr("id") == uniqueId }
+    private fun fontKeysFrom(opf: Package): FontKeys {
+        val identifiers = opf.dcFields("identifier")
+        val uniqueId = opf.uniqueIdentifier
+        val unique = identifiers.firstOrNull { uniqueId.isNotEmpty() && it.id == uniqueId }
             ?: identifiers.firstOrNull()
         return FontKeys(
-            idpf = unique?.text()?.trim()
+            idpf = unique?.text?.trim()
                 ?.takeIf { it.isNotEmpty() }
                 ?.let { FontObfuscation.idpfKey(it) },
             adobe = identifiers
-                .mapNotNull { FontObfuscation.adobeKey(it.text()) }
+                .mapNotNull { FontObfuscation.adobeKey(it.text) }
                 .distinctBy { it.toList() },
         )
     }
@@ -1306,32 +2387,20 @@ object EpubParser {
      * local name.
      */
     private fun parseEncryption(
-        zip: ZipFile,
-        budget: ArchiveResourceBudget,
+        zip: RustEpubArchive,
         limits: ReaderResourceLimits,
     ): Map<String, String> {
         val entry = zipEntry(zip, "META-INF/encryption.xml") ?: return emptyMap()
-        val bytes = budget.readOptional(
+        val bytes = zip.readOptional(
             entry,
             limits.maxPackageXmlBytes,
             "EPUB encryption metadata",
         ) ?: return emptyMap()
-        val doc = runCatching {
-            Jsoup.parse(bytes.inputStream(), "UTF-8", "", Parser.xmlParser())
-        }.getOrNull() ?: return emptyMap()
-
-        fun Element.localName() = tagName().substringAfter(':')
+        val entries = RustEpubPackage.parseEncryption(bytes) ?: return emptyMap()
 
         val out = mutableMapOf<String, String>()
-        for (data in doc.getAllElements()) {
-            if (!data.localName().equals("EncryptedData", ignoreCase = true)) continue
-            val algorithm = data.getAllElements()
-                .firstOrNull { it.localName().equals("EncryptionMethod", ignoreCase = true) }
-                ?.attr("Algorithm")
-            val uri = data.getAllElements()
-                .firstOrNull { it.localName().equals("CipherReference", ignoreCase = true) }
-                ?.attr("URI")
-            if (algorithm.isNullOrEmpty() || uri.isNullOrEmpty()) continue
+        for ((uri, algorithm) in entries) {
+            if (algorithm.isEmpty() || uri.isEmpty()) continue
             // CipherReference URIs are package-root-relative.
             out[resolvePath("", uri)] = algorithm
         }
@@ -1359,16 +2428,15 @@ object EpubParser {
         )
 
     private fun extractFonts(
-        resolver: CssResolver,
-        zip: ZipFile,
+        fontFaces: List<CssResolver.FontFace>,
+        zip: RustEpubArchive,
         imagesDir: File,
         out: MutableMap<String, BookFont>,
         encryption: Map<String, String>,
         keys: FontKeys,
-        budget: ArchiveResourceBudget,
         limits: ReaderResourceLimits,
     ) {
-        for (face in resolver.fontFaces) {
+        for (face in fontFaces) {
             val entryPath = resolvePath(face.baseDir, face.src)
             val family = face.family.trim().lowercase()
             val key = "${entryPath.length}:$entryPath${family.length}:$family:${face.weightMin}:${face.weightMax}:${face.italic}:${face.stretchMin}:${face.stretchMax}:${face.unicodeRange.orEmpty()}"
@@ -1394,10 +2462,8 @@ object EpubParser {
                 )
                 continue
             }
-            if (target.exists() && !target.delete()) continue
-
             val entry = zipEntry(zip, entryPath) ?: continue
-            var bytes = budget.readOptional(
+            var bytes = zip.readOptional(
                 entry,
                 limits.maxFontBytes,
                 "EPUB font $entryPath",
@@ -1432,16 +2498,10 @@ object EpubParser {
             }
             if (bytes.size.toLong() > limits.maxFontBytes) continue
             if (!looksLikeFont(bytes)) continue
-            imagesDir.mkdirs()
             // Through a sibling temp file: the reuse check above trusts any
             // non-empty target, so a write cut short by a crash would be
             // believed forever after.
-            val partial = File(target.parentFile, target.name + ".tmp")
-            partial.writeBytes(bytes)
-            if (!partial.renameTo(target)) {
-                partial.delete()
-                continue
-            }
+            writeArchiveResourceAtomically(target) { it.writeBytes(bytes) }
             out[key] = BookFont(
                 family = family,
                 path = target.absolutePath,
@@ -1458,24 +2518,22 @@ object EpubParser {
     }
 
     private fun findOpfPath(
-        zip: ZipFile,
-        budget: ArchiveResourceBudget,
+        zip: RustEpubArchive,
         limits: ReaderResourceLimits,
     ): String? {
         val container = zipEntry(zip, "META-INF/container.xml")
         if (container != null) {
-            val bytes = budget.readRequired(
+            val bytes = zip.readRequired(
                 container,
                 limits.maxPackageXmlBytes,
                 "EPUB container metadata",
             )
-            val doc = Jsoup.parse(bytes.inputStream(), "UTF-8", "", Parser.xmlParser())
-            doc.selectFirst("rootfile")?.attr("full-path")
+            RustEpubPackage.rootfile(bytes)
                 ?.takeIf { it.isNotEmpty() && isSafeArchivePath(it) }
                 ?.let { return it }
         }
         // Broken books: no (or empty) container.xml — take any OPF in the zip.
-        return zip.entries().asSequence()
+        return zip.entries.asSequence()
             .firstOrNull {
                 !it.isDirectory && isSafeArchivePath(it.name) &&
                     it.name.endsWith(".opf", ignoreCase = true)
@@ -1483,47 +2541,34 @@ object EpubParser {
             ?.name
     }
 
-    private fun parseXml(
-        zip: ZipFile,
+    private fun readOpf(
+        zip: RustEpubArchive,
         path: String,
-        budget: ArchiveResourceBudget,
         limits: ReaderResourceLimits,
-    ): Document {
+    ): Package {
         val entry = zipEntry(zip, path) ?: throw IllegalArgumentException("Missing $path in EPUB")
-        val bytes = budget.readRequired(entry, limits.maxPackageXmlBytes, "EPUB package $path")
-        return Jsoup.parse(bytes.inputStream(), "UTF-8", "", Parser.xmlParser())
+        val bytes = zip.readRequired(entry, limits.maxPackageXmlBytes, "EPUB package $path")
+        return RustEpubPackage.parse(bytes)
     }
 
     private fun parseOptionalXml(
-        zip: ZipFile,
+        zip: RustEpubArchive,
         path: String,
-        budget: ArchiveResourceBudget,
         maxBytes: Long,
         label: String,
     ): Document? {
         val entry = zipEntry(zip, path) ?: return null
-        val bytes = budget.readOptional(entry, maxBytes, label) ?: return null
+        val bytes = zip.readOptional(entry, maxBytes, label) ?: return null
         return runCatching {
             Jsoup.parse(bytes.inputStream(), "UTF-8", "", Parser.xmlParser())
         }.getOrNull()
     }
 
-    private fun manifestItems(opf: Document): List<ManifestItem> =
-        opf.select("manifest > item").map {
-            ManifestItem(
-                id = it.attr("id"),
-                href = it.attr("href"),
-                mediaType = it.attr("media-type"),
-                properties = it.attr("properties"),
-                fallback = it.attr("fallback"),
-            )
-        }
-
-    private fun findCoverHref(opf: Document, items: List<ManifestItem>): String? {
+    private fun findCoverHref(items: List<ManifestItem>, metadata: List<Metadata>): String? {
         // EPUB 3: manifest item flagged as cover-image.
         items.firstOrNull { it.hasProperty("cover-image") }?.let { return it.href }
         // EPUB 2: <meta name="cover" content="item-id"/>.
-        val coverId = opf.selectFirst("metadata > meta[name=cover]")?.attr("content")
+        val coverId = metadata.firstOrNull { it.name.equals("cover", ignoreCase = true) }?.content
         if (!coverId.isNullOrEmpty()) {
             items.firstOrNull { it.id == coverId }?.let { return it.href }
         }
@@ -1550,11 +2595,10 @@ object EpubParser {
 
     /** Maps chapter zip paths to every TOC entry from EPUB 3 nav or EPUB 2 NCX. */
     private fun chapterTitles(
-        zip: ZipFile,
-        opf: Document,
+        zip: RustEpubArchive,
+        spineToc: String,
         items: List<ManifestItem>,
         opfDir: String,
-        budget: ArchiveResourceBudget,
         limits: ReaderResourceLimits,
     ): TocIndex {
         val titles = linkedMapOf<String, MutableList<TocEntry>>()
@@ -1577,56 +2621,26 @@ object EpubParser {
             val navPath = resolvePath(opfDir, navItem.href)
             val navDir = navPath.substringBeforeLast('/', "")
             zipEntry(zip, navPath)?.let { entry ->
-                val bytes = budget.readOptional(
+                val bytes = zip.readOptional(
                     entry,
                     limits.maxPackageXmlBytes,
                     "EPUB navigation document",
                 ) ?: return@let
-                val doc = runCatching {
-                    Jsoup.parse(bytes.inputStream(), null, "", Parser.xmlParser())
-                }.getOrNull()?.takeIf { it.selectFirst("nav") != null }
-                    ?: Jsoup.parse(bytes.inputStream(), null, "")
-                val toc = doc.getElementsByAttribute("epub:type").firstOrNull { element ->
-                    element.attr("epub:type").split(Regex("""\s+""")).any { it == "toc" }
-                }
-                    ?: doc.selectFirst("nav")
-                toc?.select("a[href]")?.forEach { a ->
-                    val href = a.attr("href")
-                    val target = resolvePath(navDir, href.substringBefore('#'))
-                    val rawFragment = href.substringAfter('#', "")
-                    val fragment = rawFragment
-                        .takeIf { '#' in href && it.isNotEmpty() }
+                RustEpubPackage.nav(bytes).forEach { point ->
+                    val target = resolvePath(navDir, point.source.substringBefore('#'))
+                    if (point.title.isEmpty() || target.isEmpty()) return@forEach
+                    val fragment = point.source.substringAfter('#', "")
+                        .takeIf { it.isNotEmpty() }
                         ?.let { decodeUrlPath(it) ?: it }
-                    var text = a.text().trim()
-                    if (text.isEmpty() || target.isEmpty()) return@forEach
-                    // Depth counts only LINKED ancestors — they exist as
-                    // chapter rows the entry can nest under. A label-only
-                    // ancestor (<li><span>Часть I</span>…) has no row, so its
-                    // designator is folded into the title instead.
-                    var depth = 0
-                    var unlinkedLabel: String? = null
-                    a.parents()
-                        .filter { it.tagName() == "li" }
-                        .drop(1) // the entry's own <li>
-                        .forEach { li ->
-                            val link = li.children().firstOrNull { it.tagName() == "a" }
-                            if (link != null) {
-                                depth++
-                            } else if (unlinkedLabel == null) {
-                                unlinkedLabel = li.children()
-                                    .firstOrNull { it.tagName() == "span" }
-                                    ?.text()?.trim()?.takeIf { it.isNotEmpty() }
-                            }
-                    }
-                    unlinkedLabel?.let { text = composeNestedChapterTitle(it, text) }
-                    addEntry(target, text, depth, fragment)
+                    val title = if (point.parentTitle.isEmpty()) point.title
+                    else composeNestedChapterTitle(point.parentTitle, point.title)
+                    addEntry(target, title, point.depth, fragment)
                 }
             }
         }
 
         if (ordered.isEmpty()) {
-            val declaredNcx = opf.selectFirst("spine")?.attr("toc")
-                ?.takeIf { it.isNotEmpty() }
+            val declaredNcx = spineToc.takeIf { it.isNotEmpty() }
                 ?.let { id -> items.firstOrNull { it.id == id } }
             val ncxItem = declaredNcx
                 ?.takeIf { it.mediaType == "application/x-dtbncx+xml" }
@@ -1635,30 +2649,19 @@ object EpubParser {
                 val ncxPath = resolvePath(opfDir, ncxItem.href)
                 val ncxDir = ncxPath.substringBeforeLast('/', "")
                 zipEntry(zip, ncxPath)?.let { entry ->
-                    val bytes = budget.readOptional(
+                    val bytes = zip.readOptional(
                         entry,
                         limits.maxPackageXmlBytes,
                         "EPUB NCX navigation",
                     ) ?: return@let
-                    val doc = Jsoup.parse(
-                        bytes.inputStream(),
-                        "UTF-8",
-                        "",
-                        Parser.xmlParser(),
-                    )
-                    doc.select("navPoint").forEach { navPoint ->
-                        val text = navPoint.selectFirst("navLabel > text")?.text()?.trim()
-                        val src = navPoint.selectFirst("content")?.attr("src")
-                        val path = src?.substringBefore('#')
-                        if (!text.isNullOrEmpty() && !path.isNullOrEmpty()) {
-                            val depth = navPoint.parents().count { it.tagName() == "navPoint" }
-                            val target = resolvePath(ncxDir, path)
-                            val rawFragment = src.substringAfter('#', "")
-                            val fragment = rawFragment
-                                .takeIf { '#' in src && it.isNotEmpty() }
-                                ?.let { decodeUrlPath(it) ?: it }
-                            addEntry(target, text, depth, fragment)
-                        }
+                    RustEpubPackage.ncx(bytes).forEach { point ->
+                        val path = point.source.substringBefore('#')
+                        if (point.title.isEmpty() || path.isEmpty()) return@forEach
+                        val target = resolvePath(ncxDir, path)
+                        val fragment = point.source.substringAfter('#', "")
+                            .takeIf { it.isNotEmpty() }
+                            ?.let { decodeUrlPath(it) ?: it }
+                        addEntry(target, point.title, point.depth, fragment)
                     }
                 }
             }
@@ -1692,13 +2695,12 @@ object EpubParser {
         cache: MutableMap<String, String>,
     ): String? {
         cache[markup]?.let { return it }
-        imagesDir.mkdirs()
         val target = File(
             imagesDir,
             resourceCacheFileName("svg_inline", markup, "inline.svg"),
         )
         val path = runCatching {
-            target.writeText(markup)
+            writeArchiveResourceAtomically(target) { it.writeText(markup) }
             target.absolutePath
         }.getOrNull() ?: return null
         cache[markup] = path
@@ -1706,11 +2708,10 @@ object EpubParser {
     }
 
     private fun extractImage(
-        zip: ZipFile,
+        zip: RustEpubArchive,
         entryPath: String,
         imagesDir: File,
         cache: MutableMap<String, String>,
-        budget: ArchiveResourceBudget,
         limits: ReaderResourceLimits,
         required: Boolean = false,
     ): String? {
@@ -1734,19 +2735,55 @@ object EpubParser {
             return null
         }
         val copied = if (required) {
-            budget.copyRequired(entry, target, limits.maxImageBytes, "EPUB spine image $entryPath")
+            zip.copyRequired(entry, target, limits.maxImageBytes, "EPUB spine image $entryPath")
             true
         } else {
-            budget.copyOptional(entry, target, limits.maxImageBytes, "EPUB image $entryPath")
+            zip.copyOptional(entry, target, limits.maxImageBytes, "EPUB image $entryPath")
         }
         if (!copied) return null
         cache[entryPath] = target.absolutePath
         return target.absolutePath
     }
 
+    private fun extractImageParallel(
+        zip: RustEpubArchive,
+        entryPath: String,
+        imagesDir: File,
+        cache: MutableMap<String, String>,
+        imageLock: Any,
+        inFlightLocks: MutableMap<String, Any>,
+        limits: ReaderResourceLimits,
+    ): String? {
+        val keyLock = synchronized(imageLock) {
+            cache[entryPath]?.let { return it }
+            inFlightLocks.getOrPut(entryPath) { Any() }
+        }
+        synchronized(keyLock) {
+            synchronized(imageLock) {
+                cache[entryPath]?.let { return it }
+            }
+            val entry = zipEntry(zip, entryPath) ?: return null
+            val target = File(
+                imagesDir,
+                resourceCacheFileName("epub", entryPath, entryPath),
+            )
+            if (target.exists()) {
+                if (target.length() in 1..limits.maxImageBytes) {
+                    synchronized(imageLock) { cache[entryPath] = target.absolutePath }
+                    return target.absolutePath
+                }
+                return null
+            }
+            val copied = zip.copyOptional(entry, target, limits.maxImageBytes, "EPUB image $entryPath")
+            if (!copied) return null
+            synchronized(imageLock) { cache[entryPath] = target.absolutePath }
+            return target.absolutePath
+        }
+    }
+
     // ---------------------------------------------------------------- paths
 
-    private fun zipEntry(zip: ZipFile, path: String): ZipEntry? {
+    private fun zipEntry(zip: RustEpubArchive, path: String): RustEpubArchive.Entry? {
         if (!isSafeArchivePath(path)) return null
         zip.getEntry(path)?.let { return it }
         val decoded = decodeUrlPath(path)

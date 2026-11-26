@@ -13,6 +13,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.DragInteraction
@@ -121,13 +122,16 @@ internal fun ReaderBarSurface(
     chromeStyle: ReaderChromeStyle,
     topBar: Boolean,
     modifier: Modifier = Modifier,
+    containerColor: Color = colors.chrome,
+    showContainer: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val floating = chromeStyle == ReaderChromeStyle.FLOATING
+    val translucent = containerColor.alpha < 1f
     val light = colors.background.luminance() > 0.5f
     // Full-width bars only need separation at the edge facing the page.
     // A single soft falloff avoids the dark seam of a divider plus elevation.
-    val edgeShadow = if (!floating && light) Modifier.drawBehind {
+    val edgeShadow = if (showContainer && !floating && light) Modifier.drawBehind {
         val depth = 6.dp.toPx()
         val start = if (topBar) size.height else -depth
         val ink = colors.shadow.copy(alpha = 0.055f)
@@ -143,17 +147,23 @@ internal fun ReaderBarSurface(
         )
     } else Modifier
     Surface(
-        color = colors.chrome,
+        color = if (showContainer) containerColor else Color.Transparent,
         contentColor = colors.onChrome,
         shape = if (floating) RoundedCornerShape(28.dp) else RectangleShape,
-        shadowElevation = if (floating) 2.dp else 0.dp,
+        // HWUI can draw the elevation shadow through a translucent panel, with cutouts
+        // at the bounds of child layers such as scrollable content and animated controls.
+        shadowElevation = if (showContainer && floating && !translucent) 2.dp else 0.dp,
+        border = if (showContainer && floating && translucent) {
+            BorderStroke(1.dp, colors.onChromeVariant.copy(alpha = 0.28f))
+        } else null,
         tonalElevation = 0.dp,
         modifier = modifier.then(edgeShadow),
     ) {
         Column {
-            if (!floating && !light && !topBar) HorizontalDivider(thickness = 0.5.dp, color = colors.track)
+            val divider = if (showContainer) colors.track else Color.Transparent
+            if (!floating && !light && !topBar) HorizontalDivider(thickness = 0.5.dp, color = divider)
             content()
-            if (!floating && !light && topBar) HorizontalDivider(thickness = 0.5.dp, color = colors.track)
+            if (!floating && !light && topBar) HorizontalDivider(thickness = 0.5.dp, color = divider)
         }
     }
 }
@@ -204,6 +214,10 @@ internal fun ReaderBookHeader(
     chromeStyle: ReaderChromeStyle = ReaderChromeStyle.FLOATING,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /** The trailing action; search by default, the PDF reader puts its page bookmark here. */
+    actionIcon: ImageVector = Icons.Rounded.Search,
+    actionDescription: String? = null,
+    actionSelected: Boolean = false,
 ) {
     val floating = chromeStyle == ReaderChromeStyle.FLOATING
     val maxMetadataHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() * 0.28f }
@@ -252,8 +266,9 @@ internal fun ReaderBookHeader(
             }
         }
         ReaderChromeButton(
-            Icons.Rounded.Search,
-            stringResource(R.string.reader_search), colors, onSearch,
+            actionIcon,
+            actionDescription ?: stringResource(R.string.reader_search), colors, onSearch,
+            selected = actionSelected,
             chromeStyle = chromeStyle,
             enabled = enabled,
         )
@@ -281,6 +296,9 @@ internal fun ReaderChapterFooter(
     itemCount: Int? = null,
     chapterAtFraction: ((Float) -> ReaderChapterPreview)? = null,
     chromeStyle: ReaderChromeStyle = ReaderChromeStyle.FLOATING,
+    approximateProgress: Boolean = false,
+    seekPending: Boolean = false,
+    externalSeekActive: Boolean = false,
     panelContent: @Composable () -> Unit = {},
 ) {
     ReaderBookProgress(
@@ -294,6 +312,9 @@ internal fun ReaderChapterFooter(
         defaultChapterLabel = chapterLabel,
         defaultChapterParents = chapterParents,
         enabled = progressValuesReady,
+        approximateProgress = approximateProgress,
+        seekPending = seekPending,
+        externalSeekActive = externalSeekActive,
         colors = colors,
         onSeek = onSeekBook,
         forceContinuous = chromeStyle == ReaderChromeStyle.REGULAR,
@@ -421,6 +442,22 @@ private fun ReaderChromeText(
 
 private data class ReaderProgressDraft(val fraction: Float, val preview: ReaderChapterPreview?)
 
+internal enum class ReaderProgressDraftAction { HOLD, CLEAR_IMMEDIATELY, CLEAR_AFTER_GRACE }
+
+internal fun readerProgressDraftAction(
+    adjusting: Boolean,
+    hasDraft: Boolean,
+    seekPending: Boolean,
+    externalSeekActive: Boolean,
+    seekReached: Boolean,
+): ReaderProgressDraftAction = when {
+    adjusting || !hasDraft -> ReaderProgressDraftAction.HOLD
+    externalSeekActive -> ReaderProgressDraftAction.CLEAR_IMMEDIATELY
+    seekReached -> ReaderProgressDraftAction.CLEAR_IMMEDIATELY
+    seekPending -> ReaderProgressDraftAction.HOLD
+    else -> ReaderProgressDraftAction.CLEAR_AFTER_GRACE
+}
+
 @Composable
 private fun ReaderBookProgress(
     fraction: Float,
@@ -436,6 +473,9 @@ private fun ReaderBookProgress(
     defaultChapterLabel: String = "",
     defaultChapterParents: List<String> = emptyList(),
     forceContinuous: Boolean = false,
+    approximateProgress: Boolean = false,
+    seekPending: Boolean = false,
+    externalSeekActive: Boolean = false,
     chapterHeader: @Composable (
         activeLabel: String,
         activeParents: List<String>,
@@ -471,11 +511,23 @@ private fun ReaderBookProgress(
     val shown = draft?.fraction ?: readerProgressVisualFraction(fraction)
     // Hold a committed position while navigation catches up, without adding
     // history for a cancelled gesture or a seek to the page already displayed.
-    LaunchedEffect(fraction, adjusting, draft, pageCount, itemCount) {
+    LaunchedEffect(fraction, adjusting, draft, seekPending, externalSeekActive, pageCount, itemCount) {
         val pending = draft
-        if (!adjusting && pending != null) {
-            if (!readerProgressSeekReached(fraction, pending.fraction, pageCount ?: itemCount)) delay(600)
-            draft = null
+        when (
+            readerProgressDraftAction(
+                adjusting = adjusting,
+                hasDraft = pending != null,
+                seekPending = seekPending,
+                externalSeekActive = externalSeekActive,
+                seekReached = pending != null && readerProgressSeekReached(fraction, pending.fraction, pageCount ?: itemCount),
+            )
+        ) {
+            ReaderProgressDraftAction.HOLD -> Unit
+            ReaderProgressDraftAction.CLEAR_IMMEDIATELY -> draft = null
+            ReaderProgressDraftAction.CLEAR_AFTER_GRACE -> {
+                delay(600)
+                draft = null
+            }
         }
     }
 
@@ -522,6 +574,7 @@ private fun ReaderBookProgress(
     val position = when {
         !enabled -> "…/…"
         page != null -> stringResource(R.string.reader_book_page_position, page, pageCount)
+        approximateProgress -> stringResource(R.string.reader_book_estimated_percent_position, (shown * 100).roundToInt())
         else -> stringResource(R.string.reader_book_percent_position, (shown * 100).roundToInt())
     }
     // Keep the last complete labels throughout the exit. A pending layout must

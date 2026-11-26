@@ -1,5 +1,6 @@
 package com.example.frogreader.data.parser
 
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -21,6 +22,8 @@ import com.example.frogreader.data.model.FOOTNOTE_TAG
 import com.example.frogreader.data.model.HIDDEN_TEXT_TAG
 import com.example.frogreader.data.model.INLINE_FONT_FAMILY_TAG
 import com.example.frogreader.data.model.INLINE_FONT_TYPOGRAPHY_TAG
+import com.example.frogreader.data.model.INLINE_IMAGE_ALT_TAG
+import com.example.frogreader.data.model.INLINE_IMAGE_CHAR
 import com.example.frogreader.data.model.INLINE_IMAGE_TAG
 import com.example.frogreader.data.model.INLINE_TEXT_BOX_TAG
 import com.example.frogreader.data.model.InlineTextBoxSpec
@@ -96,6 +99,7 @@ class HtmlMapper(
     private val out = mutableListOf<ContentElement>()
     private var pendingInline: MutableList<Node> = mutableListOf()
     private var pendingInlineOwner: Element? = null
+    private var preindexDoc: RustChapterMarkup.MarkupDocument? = null
 
     /** Containers whose inline descendants actually create CSS block flow. */
     private val cssBlockContainers = Collections.newSetFromMap(IdentityHashMap<Element, Boolean>())
@@ -158,50 +162,265 @@ class HtmlMapper(
     val noteDocuments = mutableMapOf<String, NoteDocument>()
 
     fun map(body: Element): List<ContentElement> {
-        if (css == null && (body.hasAttr("style") || body.selectFirst("[style]") != null)) {
+        val doc = body.ownerDocument() as? RustChapterMarkup.MarkupDocument
+        preindexDoc = doc
+        if (css == null && bodyHasStyleAttr(body)) {
             css = CssResolver(emptyList())
         }
-        indexCssBlockContainers(body)
-        val bodyBox = beginPublisherBox(body, allowRoot = true)
         try {
-            walk(body, quote = false)
-            flushPending(quote = false)
+            indexCssBlockContainers(body)
+            val bodyBox = beginPublisherBox(body, allowRoot = true)
+            try {
+                walk(body, quote = false)
+                flushPending(quote = false)
+            } finally {
+                endPublisherBox(bodyBox)
+            }
+            return out.toList()
         } finally {
-            endPublisherBox(bodyBox)
+            preindexDoc = null
+            css?.clearCache()
         }
-        return out.toList()
+    }
+
+    private fun preindexOf(element: Element): RustChapterMarkup.PreindexedElement? {
+        val doc = preindexDoc ?: return null
+        return (element as? RustChapterMarkup.PreindexedElement)?.takeIf { it.owner === doc }
+    }
+
+    private fun treePreindexValid(): Boolean = preindexDoc?.treeMutated == false
+
+    private fun attrValid(mask: Int): Boolean {
+        val doc = preindexDoc ?: return false
+        return (doc.mutatedAttrs and mask) == 0
+    }
+
+    private fun bodyHasStyleAttr(body: Element): Boolean {
+        val pre = preindexOf(body)
+        if (pre != null && treePreindexValid() && attrValid(RustChapterMarkup.MUTATED_STYLE)) {
+            return pre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_STYLE)
+        }
+        return body.hasAttr("style") || body.selectFirst("[style]") != null
+    }
+
+    private fun isTextBlank(node: TextNode): Boolean {
+        if (node is RustChapterMarkup.PreindexedTextNode &&
+            node.textFlags != RustChapterMarkup.TEXT_UNKNOWN
+        ) {
+            return (node.textFlags and RustChapterMarkup.TEXT_HTML_BLANK) != 0
+        }
+        return node.isBlank
+    }
+
+    private fun isRootTag(element: Element): Boolean =
+        preindexOf(element)?.hasTag(RustChapterMarkup.TAG_ROOT) ?: (element.normalName() in ROOT_TAGS)
+
+    private fun isPublisherBoxTag(element: Element): Boolean =
+        preindexOf(element)?.hasTag(RustChapterMarkup.TAG_PUBLISHER_BOX)
+            ?: (element.normalName() in PUBLISHER_BOX_TAGS)
+
+    private fun isNonBlockTag(element: Element): Boolean =
+        preindexOf(element)?.hasTag(RustChapterMarkup.TAG_NON_BLOCK)
+            ?: (element.normalName() in NON_BLOCK_TAGS)
+
+    private fun isNonContentTag(element: Element): Boolean =
+        preindexOf(element)?.hasTag(RustChapterMarkup.TAG_NON_CONTENT)
+            ?: (element.normalName() in NON_CONTENT_TAGS)
+
+    private fun isNonTextContentTag(element: Element): Boolean =
+        preindexOf(element)?.hasTag(RustChapterMarkup.TAG_NON_TEXT_CONTENT)
+            ?: (element.normalName() in NON_TEXT_CONTENT_TAGS)
+
+    private fun isImageTag(element: Element): Boolean =
+        preindexOf(element)?.hasTag(RustChapterMarkup.TAG_IMAGE)
+            ?: (element.normalName() in IMAGE_TAGS)
+
+    private fun isNestedListTag(element: Element): Boolean =
+        preindexOf(element)?.hasTag(RustChapterMarkup.TAG_NESTED_LIST)
+            ?: (element.normalName() in NESTED_LIST_TAGS)
+
+    private fun anchorIdOf(element: Element): String {
+        val pre = preindexOf(element)
+        if (pre != null && attrValid(RustChapterMarkup.MUTATED_ID)) {
+            return pre.anchorId.orEmpty()
+        }
+        return element.attr("id")
+    }
+
+    private fun srcOf(element: Element): String {
+        val pre = preindexOf(element)
+        if (pre != null && attrValid(RustChapterMarkup.MUTATED_SRC)) {
+            return pre.srcAttr.orEmpty()
+        }
+        return element.attr("src")
+    }
+
+    private fun hrefOf(element: Element): String {
+        val pre = preindexOf(element)
+        if (pre != null && attrValid(RustChapterMarkup.MUTATED_HREF)) {
+            return pre.hrefAttr.orEmpty()
+        }
+        return element.attr("href")
+    }
+
+    private fun xlinkHrefOf(element: Element): String {
+        val pre = preindexOf(element)
+        if (pre != null && attrValid(RustChapterMarkup.MUTATED_SRC)) {
+            return pre.xlinkHrefAttr.orEmpty()
+        }
+        return element.attr("xlink:href")
+    }
+
+    private fun hasBlockProbe(element: Element): Boolean {
+        val pre = preindexOf(element)
+        if (pre != null && treePreindexValid() && attrValid(RustChapterMarkup.MUTATED_OTHER)) {
+            return pre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_BLOCK_PROBE)
+        }
+        return element.selectFirst(BLOCK_PROBE) != null
+    }
+
+    private inline fun forEachMatchingPreindexed(
+        root: Element,
+        subtreeFlag: Int,
+        action: (RustChapterMarkup.PreindexedElement) -> Unit,
+    ): Boolean {
+        val rootPre = preindexOf(root) ?: return false
+        if (!treePreindexValid()) return false
+        if (!rootPre.hasSubtree(subtreeFlag)) return true
+        val stack = ArrayList<RustChapterMarkup.PreindexedElement>()
+        stack.add(rootPre)
+        while (stack.isNotEmpty()) {
+            val current = stack.removeAt(stack.lastIndex)
+            action(current)
+            val startSize = stack.size
+            var child = current.firstElementChild()
+            while (child != null) {
+                val childPre = preindexOf(child) ?: return false
+                if (childPre.hasSubtree(subtreeFlag)) {
+                    stack.add(childPre)
+                }
+                child = child.nextElementSibling()
+            }
+            var left = startSize
+            var right = stack.lastIndex
+            while (left < right) {
+                val tmp = stack[left]
+                stack[left] = stack[right]
+                stack[right] = tmp
+                left++
+                right--
+            }
+        }
+        return true
+    }
+
+    private fun registerAllIds(element: Element) {
+        if (attrValid(RustChapterMarkup.MUTATED_ID)) {
+            val handled = forEachMatchingPreindexed(element, RustChapterMarkup.SUBTREE_HAS_ID) { pre ->
+                pre.anchorId?.takeIf(String::isNotEmpty)?.let(::registerAnchor)
+            }
+            if (handled) return
+        }
+        element.select("[id]").forEach { registerAnchor(it.attr("id")) }
+    }
+
+    private fun collectImages(element: Element): List<Element> {
+        val rootPre = preindexOf(element)
+        if (rootPre != null && treePreindexValid()) {
+            if (!rootPre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_IMG)) return emptyList()
+            val images = mutableListOf<Element>()
+            val handled = forEachMatchingPreindexed(element, RustChapterMarkup.SUBTREE_HAS_IMG) { pre ->
+                if (pre.hasTag(RustChapterMarkup.TAG_IMG)) images.add(pre)
+            }
+            if (handled) return images
+        }
+        return element.select("img")
+    }
+
+    private inline fun forEachSvg(element: Element, action: (Element) -> Unit) {
+        val rootPre = preindexOf(element)
+        if (rootPre != null && treePreindexValid()) {
+            if (!rootPre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_SVG)) return
+            val svgs = mutableListOf<Element>()
+            val handled = forEachMatchingPreindexed(element, RustChapterMarkup.SUBTREE_HAS_SVG) { pre ->
+                if (pre.hasTag(RustChapterMarkup.TAG_SVG)) svgs.add(pre)
+            }
+            if (handled) {
+                svgs.forEach(action)
+                return
+            }
+        }
+        element.select("svg").forEach(action)
     }
 
     private fun isCssFlowBlock(element: Element): Boolean =
-        element.normalName() !in PUBLISHER_BOX_TAGS &&
-            element.normalName() !in NON_CONTENT_TAGS &&
+        !isPublisherBoxTag(element) &&
+            !isNonContentTag(element) &&
             css?.computed(element)?.display in CSS_BLOCK_DISPLAYS
 
     /** One bounded traversal avoids rescanning each enclosing inline wrapper. */
     private fun indexCssBlockContainers(body: Element) {
-        if (css == null) return
-        val visited = mutableListOf<Element>()
-        val pending = ArrayDeque<Pair<Element, Int>>()
-        pending.addLast(body to 0)
-        while (pending.isNotEmpty()) {
-            val (element, depth) = pending.removeLast()
-            visited.add(element)
-            if (depth >= maxStructureDepth || css?.computed(element)?.hidden == true) continue
-            element.children().forEach { pending.addLast(it to depth + 1) }
+        val resolver = css ?: return
+        val treeValid = treePreindexValid()
+        val requireStyleAttr = !resolver.hasDisplayRules && attrValid(RustChapterMarkup.MUTATED_STYLE)
+        val bodyPre = if (treeValid) preindexOf(body) else null
+        if (bodyPre != null) {
+            if (!bodyPre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_INLINE_FLOW_CANDIDATE)) return
+            if (requireStyleAttr && !bodyPre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_STYLE)) return
         }
-        for (element in visited.asReversed()) {
+        val visited = ArrayList<Element>()
+        val stackElements = ArrayList<Element>()
+        var stackDepths = IntArray(64)
+        var stackSize = 0
+        fun push(element: Element, depth: Int) {
+            if (stackSize == stackDepths.size) {
+                stackDepths = stackDepths.copyOf(stackDepths.size * 2)
+            }
+            stackElements.add(element)
+            stackDepths[stackSize++] = depth
+        }
+        push(body, 0)
+        while (stackSize > 0) {
+            val depth = stackDepths[--stackSize]
+            val element = stackElements.removeAt(stackSize)
+            visited.add(element)
+            if (depth >= maxStructureDepth || resolver.computed(element).hidden) continue
+            var child = element.firstElementChild()
+            while (child != null) {
+                val childPre = if (treeValid) preindexOf(child) else null
+                if (childPre == null ||
+                    (childPre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_INLINE_FLOW_CANDIDATE) &&
+                        (!requireStyleAttr || childPre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_STYLE)))
+                ) {
+                    push(child, depth + 1)
+                }
+                child = child.nextElementSibling()
+            }
+        }
+        for (i in visited.lastIndex downTo 0) {
+            val element = visited[i]
             if (isCssFlowBlock(element) || element in cssBlockContainers) {
                 element.parent()?.let(cssBlockContainers::add)
             }
-            if (element in cssBlockContainers && element.childNodes().all { child ->
-                    when (child) {
-                        is TextNode -> child.isBlank
+            if (element in cssBlockContainers) {
+                var allLineCompatible = true
+                val count = element.childNodeSize()
+                for (j in 0 until count) {
+                    val child = element.childNode(j)
+                    val ok = when (child) {
+                        is TextNode -> isTextBlank(child)
                         is Element -> css?.computed(child)?.hidden == true ||
-                            isCssFlowBlock(child) || child in cssLineGroups || child.normalName() == "br"
+                            isCssFlowBlock(child) || child in cssLineGroups ||
+                            (preindexOf(child)?.hasTag(RustChapterMarkup.TAG_BR) ?: (child.normalName() == "br"))
                         else -> true
                     }
+                    if (!ok) {
+                        allLineCompatible = false
+                        break
+                    }
                 }
-            ) cssLineGroups.add(element)
+                if (allLineCompatible) cssLineGroups.add(element)
+            }
         }
     }
 
@@ -212,18 +431,21 @@ class HtmlMapper(
     }
 
     private fun walk(container: Element, quote: Boolean, depth: Int = 0) {
+        val childCount = container.childNodeSize()
         if (depth >= maxStructureDepth) {
             // Preserve text directly owned by the boundary node without
             // descending into a hostile thousands-deep subtree.
-            container.childNodes()
-                .filterIsInstance<TextNode>()
-                .filterNot(TextNode::isBlank)
-                .forEach { queuePending(it, container) }
+            for (i in 0 until childCount) {
+                val child = container.childNode(i)
+                if (child is TextNode && !isTextBlank(child)) {
+                    queuePending(child, container)
+                }
+            }
             return
         }
-        for (node in container.childNodes()) {
-            when (node) {
-                is TextNode -> if (!node.isBlank || pendingInline.isNotEmpty()) {
+        for (i in 0 until childCount) {
+            when (val node = container.childNode(i)) {
+                is TextNode -> if (!isTextBlank(node) || pendingInline.isNotEmpty()) {
                     // Mixed block/inline paragraphs still collapse a source
                     // space between adjacent ruby, links, or abbreviations.
                     // Ignore formatting whitespace only outside an inline run.
@@ -239,7 +461,8 @@ class HtmlMapper(
                     if (richNoteContainer || isCssFlowBlock(node) || node in cssBlockContainers) {
                         flushPending(quote)
                     }
-                    registerAnchor(node.attr("id"))
+                    val nodeId = anchorIdOf(node)
+                    registerAnchor(nodeId)
                     val noteStart = out.size
                     walkElement(node, quote, depth + 1)
                     if (richNoteContainer) {
@@ -253,17 +476,30 @@ class HtmlMapper(
                                     endElementExclusive = out.size,
                                 ),
                             )
-                            buildList {
-                                node.attr("id").takeIf(String::isNotEmpty)?.let(::add)
-                                node.select("[id]").forEach { descendant ->
-                                    descendant.attr("id").takeIf(String::isNotEmpty)?.let(::add)
+                            if (nodeId.isNotEmpty()) noteDocuments.putIfAbsent(nodeId, document)
+                            val handled = if (attrValid(RustChapterMarkup.MUTATED_ID)) {
+                                forEachMatchingPreindexed(node, RustChapterMarkup.SUBTREE_HAS_ID) { pre ->
+                                    pre.anchorId?.takeIf(String::isNotEmpty)?.let { id ->
+                                        noteDocuments.putIfAbsent(id, document)
+                                    }
                                 }
-                                // Kindle frequently puts a zero-width filepos
-                                // anchor immediately before the semantic aside.
-                                // It points at the same output position and is
-                                // therefore an exact alias of this note body.
-                                addAll(anchorIdsByStart[noteStart].orEmpty())
-                            }.forEach { id -> noteDocuments.putIfAbsent(id, document) }
+                            } else {
+                                false
+                            }
+                            if (!handled) {
+                                node.select("[id]").forEach { descendant ->
+                                    descendant.attr("id").takeIf(String::isNotEmpty)?.let { id ->
+                                        noteDocuments.putIfAbsent(id, document)
+                                    }
+                                }
+                            }
+                            // Kindle frequently puts a zero-width filepos
+                            // anchor immediately before the semantic aside.
+                            // It points at the same output position and is
+                            // therefore an exact alias of this note body.
+                            anchorIdsByStart[noteStart]?.forEach { id ->
+                                noteDocuments.putIfAbsent(id, document)
+                            }
                         }
                     }
                 }
@@ -273,6 +509,12 @@ class HtmlMapper(
 
     /** Whether this element is the source-level boundary of one rich note. */
     private fun isSemanticNoteContainer(node: Element): Boolean {
+        val pre = preindexOf(node)
+        if (pre != null && treePreindexValid() &&
+            attrValid(RustChapterMarkup.MUTATED_ID or RustChapterMarkup.MUTATED_TYPE or RustChapterMarkup.MUTATED_OTHER)
+        ) {
+            return pre.hasAttrFlag(RustChapterMarkup.ATTR_IS_SEMANTIC_NOTE_CONTAINER)
+        }
         val ownTokens = buildString {
             append(node.attr("epub:type"))
             append(' ')
@@ -306,12 +548,12 @@ class HtmlMapper(
     private fun walkElement(node: Element, quote: Boolean, depth: Int) {
         // Raster image boxes are opened by emitImage as images discovered
         // inside p/h wrappers do not pass through this dispatcher.
-        val opensFlowBox = node.normalName() !in IMAGE_TAGS &&
+        val opensFlowBox = !isImageTag(node) &&
             isPublisherBoxElement(node, allowRoot = false)
         // Pending loose inline text belongs to the preceding flow context,
         // never to the next sibling's retained CSS box.
         if (opensFlowBox) flushPending(quote)
-        val openBox = if (opensFlowBox) beginPublisherBox(node) else null
+        val openBox = if (opensFlowBox) beginPublisherBox(node, allowRoot = false, knownBoxElement = true) else null
         try {
             walkElementContent(node, quote, depth)
         } finally {
@@ -338,7 +580,12 @@ class HtmlMapper(
             return
         }
 
-        if (emitCssHorizontalRow(node, quote)) return
+        if (css != null &&
+            !(preindexOf(node)?.hasTag(RustChapterMarkup.TAG_CSS_ROW_EXCLUDED) ?: false) &&
+            emitCssHorizontalRow(node, quote)
+        ) {
+            return
+        }
 
         // CSS can turn <span>, <em> or <a> into real blocks. Keeping them in
         // AnnotatedString inline runs loses both their line breaks and boxes.
@@ -418,7 +665,7 @@ class HtmlMapper(
 
             "figcaption", "caption" -> {
                 flushPending(quote)
-                if (node in cssBlockContainers || node.selectFirst(BLOCK_PROBE) != null) {
+                if (node in cssBlockContainers || hasBlockProbe(node)) {
                     walk(node, quote, depth)
                     flushPending(quote)
                 } else {
@@ -428,7 +675,7 @@ class HtmlMapper(
 
             "summary" -> {
                 flushPending(quote)
-                if (node.selectFirst(BLOCK_PROBE) != null) {
+                if (hasBlockProbe(node)) {
                     walk(node, quote, depth)
                     flushPending(quote)
                 } else {
@@ -472,21 +719,23 @@ class HtmlMapper(
                 // An intentionally blank publisher page (for example the
                 // reader's drawing page in Tristram Shandy) still owns a
                 // dimensioned box and its forced page boundaries.
-                val minimumHeight = css?.publisherBoxStyle(node)?.minHeightEm ?: 0f
-                if (out.size == emptyBoxStart && minimumHeight > 0f) {
-                    out += ContentElement.Spacer(minimumHeight)
+                if (out.size == emptyBoxStart) {
+                    val minimumHeight = css?.publisherBoxStyle(node)?.minHeightEm ?: 0f
+                    if (minimumHeight > 0f) {
+                        out += ContentElement.Spacer(minimumHeight)
+                    }
                 }
             }
 
             "img" -> {
                 flushPending(quote)
-                emitImage(node.attr("src"), node)
+                emitImage(srcOf(node), node)
             }
 
             "image" -> {
                 // SVG-style <image xlink:href=…/> used by some EPUB covers.
                 flushPending(quote)
-                emitImage(node.attr("xlink:href").ifEmpty { node.attr("href") }, node)
+                emitImage(xlinkHrefOf(node).ifEmpty { hrefOf(node) }, node)
             }
 
             "svg" -> {
@@ -526,7 +775,7 @@ class HtmlMapper(
             else -> {
                 // Unknown element: recurse if it holds block content,
                 // otherwise treat it as inline (span, a, em, …).
-                if (node in cssBlockContainers || node.selectFirst(BLOCK_PROBE) != null) {
+                if (node in cssBlockContainers || hasBlockProbe(node)) {
                     flushPending(quote)
                     walk(node, quote, depth)
                     flushPending(quote)
@@ -547,8 +796,16 @@ class HtmlMapper(
      * readable block fallback rather than pretending to be a full flexbox.
      */
     private fun emitCssHorizontalRow(element: Element, quote: Boolean): Boolean {
-        if (element.normalName() in CSS_ROW_EXCLUDED_TAGS) return false
+        val pre = preindexOf(element)
+        val excluded = pre?.hasTag(RustChapterMarkup.TAG_CSS_ROW_EXCLUDED)
+            ?: (element.normalName() in CSS_ROW_EXCLUDED_TAGS)
+        if (excluded) return false
         val resolver = css ?: return false
+        if (!resolver.hasDisplayRules && pre != null && treePreindexValid() &&
+            attrValid(RustChapterMarkup.MUTATED_STYLE) && !pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_STYLE)
+        ) {
+            return false
+        }
         val computed = resolver.computed(element)
         val display = computed.display
         if (display !in CSS_HORIZONTAL_DISPLAYS) return false
@@ -559,22 +816,28 @@ class HtmlMapper(
         val sourceCells = mutableListOf<List<Node>>()
         val anonymous = mutableListOf<Node>()
         fun finishAnonymous() {
-            if (anonymous.any { it is TextNode && !it.isBlank }) {
+            if (anonymous.any { it is TextNode && !isTextBlank(it) }) {
                 sourceCells += anonymous.toList()
             }
             anonymous.clear()
         }
-        for (child in element.childNodes()) {
-            when (child) {
+        val childCount = element.childNodeSize()
+        for (i in 0 until childCount) {
+            when (val child = element.childNode(i)) {
                 is TextNode -> anonymous += child
                 is Element -> {
-                    if (resolver.computed(child).hidden || child.normalName() in NON_TEXT_CONTENT_TAGS) continue
+                    if (resolver.computed(child).hidden || isNonTextContentTag(child)) continue
                     finishAnonymous()
                     // A nested table/list/media box needs its own block
                     // renderer, so leave complex flex containers in flow.
-                    if (child.normalName() in COMPLEX_HORIZONTAL_CELL_TAGS ||
-                        child.selectFirst("table, ul, ol, audio, video, img, svg") != null
-                    ) return false
+                    val childPre = preindexOf(child)
+                    val complex = if (childPre != null && treePreindexValid()) {
+                        childPre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_HORIZONTAL_COMPLEX)
+                    } else {
+                        child.normalName() in COMPLEX_HORIZONTAL_CELL_TAGS ||
+                            child.selectFirst("table, ul, ol, audio, video, img, svg") != null
+                    }
+                    if (complex) return false
                     if (!flex && resolver.computed(child).display != "table-cell") return false
                     sourceCells += listOf(child)
                 }
@@ -590,12 +853,12 @@ class HtmlMapper(
         if (count !in 2..MAX_CSS_ROW_CELLS) return false
 
         flushPending(quote)
-        element.select("[id]").forEach { registerAnchor(it.attr("id")) }
+        registerAllIds(element)
         val cells = mutableListOf<TableCell>()
         fun addGenerated(raw: CssResolver.GeneratedRun?) {
             if (!hasCell(raw)) return
             val run = raw?.takeIf { it.text.isEmpty() || expansionBudget.acceptGenerated(it.text.length) } ?: return
-            val builder = InlineTextBuilder()
+            val builder = HtmlInlineBuilder()
             appendGeneratedRun(builder, run)
             cells += TableCell(
                 text = builder.build(),
@@ -607,7 +870,7 @@ class HtmlMapper(
         addGenerated(rawBefore)
         for (nodes in sourceCells) {
             val cellElement = nodes.singleOrNull() as? Element
-            val builder = InlineTextBuilder()
+            val builder = HtmlInlineBuilder()
             if (cellElement != null) appendCellContent(cellElement, builder)
             else nodes.forEach { appendInline(it, builder) }
             cells += TableCell(
@@ -647,13 +910,14 @@ class HtmlMapper(
     private fun beginPublisherBox(
         element: Element,
         allowRoot: Boolean = false,
+        knownBoxElement: Boolean = false,
     ): OpenPublisherBox? {
-        if (!isPublisherBoxElement(element, allowRoot)) return null
+        if (!knownBoxElement && !isPublisherBoxElement(element, allowRoot)) return null
         val resolver = css ?: return null
         val computed = resolver.computed(element)
         if (computed.hidden) return null
         var style = resolver.publisherBoxStyle(element) ?: PublisherBoxStyle.DEFAULT
-        if (element in cssLineGroups && element.normalName() !in ROOT_TAGS) {
+        if (element in cssLineGroups && !isRootTag(element)) {
             style = style.copy(fitTextFlow = true)
         }
         val floatSide = when (computed.floatSide) {
@@ -725,8 +989,21 @@ class HtmlMapper(
     }
 
     private fun isPublisherBoxElement(element: Element, allowRoot: Boolean): Boolean {
-        val tag = element.normalName()
         if (isCssFlowBlock(element)) return true
+        val pre = preindexOf(element)
+        if (pre != null) {
+            val isRoot = pre.hasTag(RustChapterMarkup.TAG_ROOT)
+            if ((!allowRoot && isRoot) ||
+                (pre.hasTag(RustChapterMarkup.TAG_NON_BLOCK) && !pre.hasTag(RustChapterMarkup.TAG_IMAGE))
+            ) {
+                return false
+            }
+            return (allowRoot && isRoot) ||
+                pre.hasTag(RustChapterMarkup.TAG_PUBLISHER_BOX) ||
+                (pre.hasTag(RustChapterMarkup.TAG_MATH) && isDisplayMath(element)) ||
+                hasBlockProbe(element)
+        }
+        val tag = element.normalName()
         if ((!allowRoot && tag in ROOT_TAGS) ||
             (tag in NON_BLOCK_TAGS && tag !in IMAGE_TAGS)
         ) {
@@ -745,7 +1022,7 @@ class HtmlMapper(
         val owner = pendingInlineOwner
         pendingInline = mutableListOf()
         pendingInlineOwner = null
-        val builder = InlineTextBuilder()
+        val builder = HtmlInlineBuilder()
         nodes.forEach { appendInline(it, builder) }
         val hasText = !builder.isBlank
         if (hasText) {
@@ -788,31 +1065,127 @@ class HtmlMapper(
 
     /** Inline scopes still apply when their child blocks become separate leaves. */
     private fun flowAnnotations(text: AnnotatedString, owner: Element?): AnnotatedString {
-        if (text.isEmpty()) return text
-        val builder = AnnotatedString.Builder(text)
+        if (text.isEmpty() || owner == null) return text
+        val pre = preindexOf(owner)
+        if (pre != null && treePreindexValid() && !pre.hasAttr(RustChapterMarkup.ATTR_ANC_HAS_FLOW_SCOPE)) {
+            return text
+        }
+        var builder: AnnotatedString.Builder? = null
         var scope = owner
         var depth = 0
-        while (scope != null && scope.normalName() !in ROOT_TAGS && depth++ < maxStructureDepth) {
-            if (scope.normalName() !in PUBLISHER_BOX_TAGS) {
+        while (scope != null && !isRootTag(scope) && depth++ < maxStructureDepth) {
+            if (!isPublisherBoxTag(scope)) {
                 inlineBidiMode(scope)?.let { mode ->
-                    builder.addStringAnnotation(BIDI_TAG, mode.name, 0, text.length)
+                    val b = builder ?: AnnotatedString.Builder(text).also { builder = it }
+                    b.addStringAnnotation(BIDI_TAG, mode.name, 0, text.length)
                 }
             }
-            if (scope.normalName() == "a") {
-                val href = scope.attr("href").trim()
+            val isLink = preindexOf(scope)?.hasTag(RustChapterMarkup.TAG_A) ?: (scope.normalName() == "a")
+            if (isLink) {
+                val href = hrefOf(scope).trim()
                 val key = href.takeIf(String::isNotEmpty)?.let(resolveLink)
                 if (key != null) {
                     linkTargets += key
                     val note = isNoteReference(scope, key)
                     if (note) noteTargets += key
-                    builder.addStringAnnotation(if (note) FOOTNOTE_TAG else LINK_TAG, key, 0, text.length)
+                    val b = builder ?: AnnotatedString.Builder(text).also { builder = it }
+                    b.addStringAnnotation(if (note) FOOTNOTE_TAG else LINK_TAG, key, 0, text.length)
                 } else if (safeExternalHref(href)) {
-                    builder.addStringAnnotation(EXTERNAL_LINK_TAG, href, 0, text.length)
+                    val b = builder ?: AnnotatedString.Builder(text).also { builder = it }
+                    b.addStringAnnotation(EXTERNAL_LINK_TAG, href, 0, text.length)
                 }
             }
             scope = scope.parent()
         }
+        return builder?.toAnnotatedString() ?: text
+    }
+
+    private fun buildSimpleLeafAnnotatedString(
+        element: Element,
+        textNode: RustChapterMarkup.PreindexedTextNode,
+        trimTrailing: Boolean,
+    ): AnnotatedString {
+        val computed = css?.computed(element)
+        val raw = textNode.wholeText
+        val textFlags = textNode.textFlags
+        val transform = computed?.textTransform
+        val collapsed = if (transform == null || transform == "none") {
+            collapsePreindexedLeafText(raw, textFlags, trimTrailing)
+        } else {
+            val transformed = transformText(raw, transform, element, previousCharacter = null)
+            if (transformed === raw) {
+                collapsePreindexedLeafText(raw, textFlags, trimTrailing)
+            } else {
+                collapseLeafText(transformed, trimTrailing)
+            }
+        }
+        if (computed == null || collapsed.isEmpty()) {
+            return AnnotatedString(collapsed)
+        }
+        val family = if (computed.monospace) "monospace" else computed.fontFamilyName
+        val hidden = computed.visibilityHidden
+        val builder = AnnotatedString.Builder(collapsed.length)
+        if (family != null) builder.pushStringAnnotation(INLINE_FONT_FAMILY_TAG, family)
+        builder.pushStringAnnotation(INLINE_FONT_TYPOGRAPHY_TAG, computed.encodedFontTypography)
+        if (hidden) builder.pushStringAnnotation(HIDDEN_TEXT_TAG, "true")
+        builder.append(collapsed)
+        if (hidden) builder.pop()
+        builder.pop()
+        if (family != null) builder.pop()
         return builder.toAnnotatedString()
+    }
+
+    private fun collapsePreindexedLeafText(
+        raw: String,
+        textFlags: Int,
+        trimTrailing: Boolean,
+    ): String {
+        if ((textFlags and RustChapterMarkup.TEXT_ALREADY_COLLAPSED_ASCII) != 0) {
+            val start = if ((textFlags and RustChapterMarkup.TEXT_STARTS_HTML_WS) != 0) 1 else 0
+            val end = if (trimTrailing && (textFlags and RustChapterMarkup.TEXT_ENDS_HTML_WS) != 0) {
+                raw.length - 1
+            } else {
+                raw.length
+            }
+            if (start >= end) return ""
+            return if (start == 0 && end == raw.length) raw else raw.substring(start, end)
+        }
+        return collapseLeafText(raw, trimTrailing)
+    }
+
+    private fun collapseLeafText(raw: String, trimTrailing: Boolean): String {
+        val len = raw.length
+        var i = 0
+        while (i < len && isHtmlWhitespace(raw[i])) i++
+        if (i >= len) return ""
+        var end = len
+        if (trimTrailing) {
+            while (end > i && isHtmlWhitespace(raw[end - 1])) end--
+        }
+        val firstRunStart = i
+        while (i < end && !isHtmlWhitespace(raw[i])) i++
+        if (i >= end) {
+            return if (firstRunStart == 0 && end == len) raw else raw.substring(firstRunStart, end)
+        }
+        val sb = StringBuilder(end - firstRunStart)
+        sb.append(raw, firstRunStart, i)
+        var inSpace = false
+        while (i < end) {
+            if (isHtmlWhitespace(raw[i])) {
+                while (i < end && isHtmlWhitespace(raw[i])) i++
+                if (!inSpace) {
+                    sb.append(' ')
+                    inSpace = true
+                }
+            } else {
+                val runStart = i
+                i++
+                while (i < end && !isHtmlWhitespace(raw[i])) i++
+                sb.append(raw, runStart, i)
+                inSpace = false
+            }
+        }
+        return sb.toString()
     }
 
     private fun emitParagraph(
@@ -831,8 +1204,14 @@ class HtmlMapper(
             emitGeneratedParagraph(element, after = true, quote)
             return
         }
+        val pre = preindexOf(element)
+        val isSimpleLeafText = pre != null && pre.hasSubtreeFlag(RustChapterMarkup.SUBTREE_SIMPLE_LEAF_TEXT)
         // Anchors inside the paragraph (e.g. <a id="n53"/>) resolve to it.
-        element.select("[id]").forEach { registerAnchor(it.attr("id")) }
+        if (isSimpleLeafText) {
+            registerAnchor(anchorIdOf(element))
+        } else {
+            registerAllIds(element)
+        }
 
         val ownTitleLevel = titleClassLevel(element)
         val level = headingLevel ?: ownTitleLevel
@@ -845,7 +1224,37 @@ class HtmlMapper(
             return
         }
 
-        val builder = InlineTextBuilder()
+        if (isSimpleLeafText &&
+            ((!anonymous && element.normalName() == "p") ||
+                (anonymous && element.normalName() !in setOf("li", "pre"))) &&
+            css?.generated(element, after = false) == null &&
+            css?.generated(element, after = true) == null &&
+            css?.firstLetter(element) == null
+        ) {
+            val textNode = element.childNode(0) as? RustChapterMarkup.PreindexedTextNode
+            if (textNode != null && textNode.textFlags != RustChapterMarkup.TEXT_UNKNOWN) {
+                val styledText = buildSimpleLeafAnnotatedString(
+                    element = element,
+                    textNode = textNode,
+                    trimTrailing = false,
+                )
+                if (styledText.isNotEmpty()) {
+                    val block = if (anonymous) {
+                        looseBlockTextStyle(element, withFirstLetter = false).copy(isCssTextLine = true)
+                    } else {
+                        blockStyleFor(element, withFirstLetter = false)
+                    }
+                    out += ContentElement.Paragraph(
+                        flowAnnotations(styledText, element),
+                        if (quote) ParagraphStyle.QUOTE else ParagraphStyle.NORMAL,
+                        block,
+                    )
+                }
+                return
+            }
+        }
+
+        val builder = HtmlInlineBuilder()
         val preformatted = element.normalName() == "pre"
         if (preformatted) builder.pushStyle(SpanStyle(fontFamily = FontFamily.Monospace))
         var isListItem = false
@@ -871,8 +1280,10 @@ class HtmlMapper(
         appendGeneratedRun(builder, generated(element, after = false))
         // A list item's own text is inline, but a nested <ul>/<ol> inside it
         // is a block — walked separately below, not flattened into the text.
-        for (child in element.childNodes()) {
-            if (child is Element && child.normalName() in NESTED_LIST_TAGS) continue
+        val childCount = element.childNodeSize()
+        for (i in 0 until childCount) {
+            val child = element.childNode(i)
+            if (child is Element && isNestedListTag(child)) continue
             appendInline(
                 child,
                 builder,
@@ -884,11 +1295,12 @@ class HtmlMapper(
         if (preformatted) builder.pop()
         // A small CSS-floated image travels with the paragraph so the
         // renderer can wrap text around it (publisher's formatting mode).
+        val images = collectImages(element)
         var floatImage: FloatImage? = null
         var floatElement: Element? = null
         val resolver = css
-        if (resolver != null) {
-            for (img in element.select("img")) {
+        if (resolver != null && images.isNotEmpty()) {
+            for (img in images) {
                 val computed = resolver.computed(img)
                 if (computed.hidden) continue
                 val side = computed.floatSide ?: continue
@@ -896,7 +1308,7 @@ class HtmlMapper(
                     ?: computed.widthEm?.let { it / 30f }
                     ?: 0.33f
                 if (frac > 0.45f) continue
-                val path = resolveImage(img.attr("src")) ?: continue
+                val path = resolveImage(srcOf(img)) ?: continue
                 floatImage = FloatImage(
                     path = path,
                     widthFrac = frac.coerceIn(0.1f, 0.45f),
@@ -945,29 +1357,70 @@ class HtmlMapper(
         }
         // Images nested inside paragraphs still need to be shown (the
         // consumed float is drawn with its paragraph instead).
-        val inlineRefs = builder.imageRefs.toSet()
-        element.select("img").forEach { image ->
-            val path = resolveImage(image.attr("src"))
+        val inlineRefs = if (images.isNotEmpty() ||
+            (preindexOf(element)?.let { treePreindexValid() && it.hasSubtree(RustChapterMarkup.SUBTREE_HAS_SVG) } != false)
+        ) {
+            builder.imageRefs.toSet()
+        } else {
+            emptySet()
+        }
+        for (image in images) {
+            val src = srcOf(image)
+            val path = resolveImage(src)
             if (image !== floatElement &&
                 (!hasText || isBlockLikeMedia(image) || path != null && path !in inlineRefs)
             ) {
-                emitImage(image.attr("src"), image)
+                emitImage(src, image)
             }
         }
-        element.select("svg").forEach { svg ->
+        forEachSvg(element) { svg ->
             val path = resolveSvg(svg)
             if (!hasText || path !in inlineRefs) path?.let { out += ContentElement.Image(it) }
         }
-        element.children()
-            .filter { it.normalName() in NESTED_LIST_TAGS }
-            .forEach { nested ->
-                if (depth < maxStructureDepth) walkElement(nested, quote, depth + 1)
+        val hasNestedList = preindexOf(element)?.let { pre ->
+            if (treePreindexValid()) pre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_NESTED_LIST) else true
+        } ?: true
+        if (hasNestedList) {
+            var nested = element.firstElementChild()
+            while (nested != null) {
+                if (isNestedListTag(nested) && depth < maxStructureDepth) {
+                    walkElement(nested, quote, depth + 1)
+                }
+                nested = nested.nextElementSibling()
             }
+        }
     }
 
     private fun emitHeading(element: Element, level: Int) {
-        element.select("[id]").forEach { registerAnchor(it.attr("id")) }
-        val builder = InlineTextBuilder()
+        val pre = preindexOf(element)
+        val isSimpleLeafText = pre != null && pre.hasSubtreeFlag(RustChapterMarkup.SUBTREE_SIMPLE_LEAF_TEXT)
+        if (isSimpleLeafText) {
+            registerAnchor(anchorIdOf(element))
+            if (css?.generated(element, after = false) == null &&
+                css?.generated(element, after = true) == null &&
+                css?.firstLetter(element) == null
+            ) {
+                val textNode = element.childNode(0) as? RustChapterMarkup.PreindexedTextNode
+                if (textNode != null && textNode.textFlags != RustChapterMarkup.TEXT_UNKNOWN) {
+                    val styledText = buildSimpleLeafAnnotatedString(
+                        element = element,
+                        textNode = textNode,
+                        trimTrailing = true,
+                    )
+                    if (styledText.isNotEmpty()) {
+                        out += ContentElement.Heading(
+                            styledText = styledText,
+                            level = level.coerceIn(1, 6),
+                            block = blockStyleFor(element),
+                        )
+                    }
+                    return
+                }
+            }
+        } else {
+            registerAllIds(element)
+        }
+        val builder = HtmlInlineBuilder()
         appendGeneratedRun(builder, generated(element, after = false))
         appendChildrenInline(element, builder)
         appendGeneratedRun(builder, generated(element, after = true))
@@ -979,14 +1432,17 @@ class HtmlMapper(
                 block = blockStyleFor(element),
             )
         }
-        val inlineRefs = builder.imageRefs.toSet()
-        element.select("img").forEach { image ->
-            val path = resolveImage(image.attr("src"))
+        val images = collectImages(element)
+        val hasSvg = preindexOf(element)?.let { treePreindexValid() && it.hasSubtree(RustChapterMarkup.SUBTREE_HAS_SVG) } != false
+        val inlineRefs = if (images.isNotEmpty() || hasSvg) builder.imageRefs.toSet() else emptySet()
+        for (image in images) {
+            val src = srcOf(image)
+            val path = resolveImage(src)
             if (!hasText || isBlockLikeMedia(image) || path != null && path !in inlineRefs) {
-                emitImage(image.attr("src"), image)
+                emitImage(src, image)
             }
         }
-        element.select("svg").forEach { svg ->
+        forEachSvg(element) { svg ->
             val path = resolveSvg(svg)
             if (!hasText || path !in inlineRefs) path?.let { out += ContentElement.Image(it) }
         }
@@ -1012,8 +1468,8 @@ class HtmlMapper(
 
     /** `<figcaption>`: centered italic small print, like a table caption. */
     private fun emitCaptionLike(node: Element, quote: Boolean) {
-        node.select("[id]").forEach { registerAnchor(it.attr("id")) }
-        val builder = InlineTextBuilder()
+        registerAllIds(node)
+        val builder = HtmlInlineBuilder()
         appendChildrenInline(node, builder)
         val hasText = !builder.isBlank
         if (hasText) {
@@ -1031,14 +1487,17 @@ class HtmlMapper(
                 ),
             )
         }
-        val inlineRefs = builder.imageRefs.toSet()
-        node.select("img").forEach { image ->
-            val path = resolveImage(image.attr("src"))
+        val images = collectImages(node)
+        val hasSvg = preindexOf(node)?.let { treePreindexValid() && it.hasSubtree(RustChapterMarkup.SUBTREE_HAS_SVG) } != false
+        val inlineRefs = if (images.isNotEmpty() || hasSvg) builder.imageRefs.toSet() else emptySet()
+        for (image in images) {
+            val src = srcOf(image)
+            val path = resolveImage(src)
             if (!hasText || isBlockLikeMedia(image) || path != null && path !in inlineRefs) {
-                emitImage(image.attr("src"), image)
+                emitImage(src, image)
             }
         }
-        node.select("svg").forEach { svg ->
+        forEachSvg(node) { svg ->
             val path = resolveSvg(svg)
             if (!hasText || path !in inlineRefs) path?.let { out += ContentElement.Image(it) }
         }
@@ -1046,8 +1505,8 @@ class HtmlMapper(
 
     /** `<summary>`: the disclosure caption reads as a bold lead-in line. */
     private fun emitSummary(node: Element, quote: Boolean) {
-        node.select("[id]").forEach { registerAnchor(it.attr("id")) }
-        val builder = InlineTextBuilder()
+        registerAllIds(node)
+        val builder = HtmlInlineBuilder()
         appendChildrenInline(node, builder)
         if (builder.isBlank) return
         val base = blockStyleFor(node) ?: BlockStyle()
@@ -1069,7 +1528,10 @@ class HtmlMapper(
             emitImage(poster)
             return
         }
-        if (node.selectFirst(BLOCK_PROBE) != null || node.text().isNotBlank()) {
+        val hasFallbackText = preindexOf(node)?.let { pre ->
+            if (treePreindexValid()) pre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_JAVA_NON_WS_TEXT) else null
+        } ?: node.text().isNotBlank()
+        if (hasBlockProbe(node) || hasFallbackText) {
             // Keep the caller's structural depth. Resetting it here lets a
             // hostile chain of nested media fallback elements bypass the
             // shared HTML depth guard and overflow the stack.
@@ -1090,6 +1552,81 @@ class HtmlMapper(
         )
     }
 
+    private fun findFirstCaption(table: Element): Element? {
+        val pre = preindexOf(table)
+        if (pre != null && treePreindexValid()) {
+            if (!pre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_CAPTION)) return null
+            var found: Element? = null
+            val stack = ArrayList<RustChapterMarkup.PreindexedElement>()
+            stack.add(pre)
+            while (stack.isNotEmpty()) {
+                val current = stack.removeAt(stack.lastIndex)
+                if (current.hasTag(RustChapterMarkup.TAG_CAPTION)) {
+                    found = current
+                    break
+                }
+                val startSize = stack.size
+                var child = current.firstElementChild()
+                while (child != null) {
+                    val childPre = preindexOf(child) ?: return table.selectFirst("caption")
+                    if (childPre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_CAPTION)) {
+                        stack.add(childPre)
+                    }
+                    child = child.nextElementSibling()
+                }
+                var left = startSize
+                var right = stack.lastIndex
+                while (left < right) {
+                    val tmp = stack[left]
+                    stack[left] = stack[right]
+                    stack[right] = tmp
+                    left++
+                    right--
+                }
+            }
+            return found
+        }
+        return table.selectFirst("caption")
+    }
+
+    private fun collectOwnTableRows(table: Element): List<Element> {
+        val rows = ArrayList<Element>()
+        val stack = ArrayList<Element>()
+        var child = table.firstElementChild()
+        while (child != null) {
+            stack.add(child)
+            child = child.nextElementSibling()
+        }
+        stack.reverse()
+        while (stack.isNotEmpty()) {
+            val current = stack.removeAt(stack.lastIndex)
+            val isTable = preindexOf(current)?.hasTag(RustChapterMarkup.TAG_TABLE)
+                ?: (current.normalName() == "table")
+            if (isTable) continue
+            val isTr = preindexOf(current)?.hasTag(RustChapterMarkup.TAG_TR)
+                ?: (current.normalName() == "tr")
+            if (isTr) {
+                if (css?.computed(current)?.hidden != true) rows.add(current)
+            }
+            val startSize = stack.size
+            var grandChild = current.firstElementChild()
+            while (grandChild != null) {
+                stack.add(grandChild)
+                grandChild = grandChild.nextElementSibling()
+            }
+            var left = startSize
+            var right = stack.lastIndex
+            while (left < right) {
+                val tmp = stack[left]
+                stack[left] = stack[right]
+                stack[right] = tmp
+                left++
+                right--
+            }
+        }
+        return rows
+    }
+
     /**
      * Tables become real grids ([ContentElement.Table]) with colspan/rowspan
      * intact. Degenerate cases keep the old flattened behavior: no rows →
@@ -1101,13 +1638,10 @@ class HtmlMapper(
     private fun emitTable(table: Element) {
         val tableBlock = blockStyleFor(table)
         // The caption reads like a small centered title above the grid.
-        table.selectFirst("caption")?.let(::emitTableCaption)
+        findFirstCaption(table)?.let(::emitTableCaption)
 
         // Only this table's own rows; a nested table flattens into its cell.
-        val ownRows = table.select("tr").filter { row ->
-            row.parents().firstOrNull { it.normalName() == "table" } === table &&
-                css?.computed(row)?.hidden != true
-        }
+        val ownRows = collectOwnTableRows(table)
         if (ownRows.isEmpty()) {
             val text = table.text().trim()
             if (text.isNotEmpty()) out += ContentElement.Paragraph(AnnotatedString(text))
@@ -1115,18 +1649,31 @@ class HtmlMapper(
         }
 
         val sourceRows = ownRows.mapNotNull { rowElement ->
-            val cells = rowElement.children().filter {
-                (it.normalName() == "td" || it.normalName() == "th") &&
-                    css?.computed(it)?.hidden != true
+            val cells = ArrayList<Element>()
+            var cell = rowElement.firstElementChild()
+            while (cell != null) {
+                val name = cell.normalName()
+                if ((name == "td" || name == "th") && css?.computed(cell)?.hidden != true) {
+                    cells.add(cell)
+                }
+                cell = cell.nextElementSibling()
             }
             cells.takeIf { it.isNotEmpty() }?.let { rowElement to it }
         }
         val responsive = responsiveTableStyle(table, sourceRows.map { it.second })
         val rows = mutableListOf<TableRow>()
         for ((rowElement, cellElements) in sourceRows) {
-            val inHead = rowElement.parents().any { it.normalName() == "thead" }
+            var inHead = false
+            var parent = rowElement.parent()
+            while (parent != null) {
+                if (parent.normalName() == "thead") {
+                    inHead = true
+                    break
+                }
+                parent = parent.parent()
+            }
             val cells = cellElements.map { cellElement ->
-                val builder = InlineTextBuilder()
+                val builder = HtmlInlineBuilder()
                 appendCellContent(cellElement, builder)
                 val header = cellElement.normalName() == "th"
                 val cellComputed = css?.computed(cellElement)
@@ -1163,7 +1710,7 @@ class HtmlMapper(
 
             columnCount == 1 && !authoredGeometry -> {
                 // A layout "table": plain paragraphs read better than a grid.
-                table.select("[id]").forEach { registerAnchor(it.attr("id")) }
+                registerAllIds(table)
                 for (row in rows) {
                     for (cell in row.cells) {
                         if (cell.text.text.isBlank()) continue
@@ -1177,7 +1724,7 @@ class HtmlMapper(
             }
 
             columnCount > 12 -> {
-                table.select("[id]").forEach { registerAnchor(it.attr("id")) }
+                registerAllIds(table)
                 for (row in rows) {
                     for (cell in row.cells) {
                         if (cell.text.text.isBlank()) continue
@@ -1193,7 +1740,7 @@ class HtmlMapper(
             else -> {
                 // Row/cell anchors resolve to the retained grid, after its
                 // caption rather than to that unrelated caption paragraph.
-                table.select("[id]").forEach { registerAnchor(it.attr("id")) }
+                registerAllIds(table)
                 out += ContentElement.Table(
                     rows, tableBlock,
                     stackCellsBelowCssPx = responsive?.widthCssPx,
@@ -1368,7 +1915,7 @@ class HtmlMapper(
     private fun emitTableCaption(caption: Element) {
         val openBox = beginPublisherBox(caption)
         try {
-            val builder = InlineTextBuilder()
+            val builder = HtmlInlineBuilder()
             appendChildrenInline(caption, builder)
             if (!builder.isBlank) {
                 out += ContentElement.Paragraph(
@@ -1387,14 +1934,19 @@ class HtmlMapper(
     }
 
     /** Cell content: inline runs, block children separated by line breaks. */
-    private fun appendCellContent(cell: Element, builder: InlineTextBuilder) {
+    private fun appendCellContent(cell: Element, builder: HtmlInlineBuilder) {
         val wholeCellStyle = tableCellInlineStyle(cell)
         if (wholeCellStyle != null) builder.pushStyle(wholeCellStyle)
         appendGeneratedRun(builder, generated(cell, after = false))
-        for (child in cell.childNodes()) {
-            if (child is Element &&
-                (child.normalName() in CELL_BLOCK_TAGS || isCssFlowBlock(child))
-            ) {
+        val childCount = cell.childNodeSize()
+        for (i in 0 until childCount) {
+            val child = cell.childNode(i)
+            val isCellBlock = child is Element && (
+                (preindexOf(child)?.hasTag(RustChapterMarkup.TAG_CELL_BLOCK)
+                    ?: (child.normalName() in CELL_BLOCK_TAGS)) ||
+                    isCssFlowBlock(child)
+                )
+            if (isCellBlock) {
                 if (!builder.isBlank && builder.lastCharacter != '\n') builder.lineBreak()
                 // Treat the block as an inline formatting scope inside the
                 // cell. Calling appendChildrenInline directly used to drop a
@@ -1537,9 +2089,21 @@ class HtmlMapper(
      * hints participate at their owning element before CSS and inheritance.
      */
     private fun attributeAlign(element: Element): BlockAlign? {
+        val doc = preindexDoc
+        val canCheckAttr = attrValid(RustChapterMarkup.MUTATED_PRESENTATIONAL)
+        if (doc != null && treePreindexValid() && canCheckAttr &&
+            !doc.hasDocFlag(RustChapterMarkup.DOC_HAS_ANY_PRESENTATIONAL)
+        ) {
+            return null
+        }
         var node: Element? = element
-        while (node != null && node.normalName() !in ROOT_TAGS) {
+        while (node != null && !isRootTag(node)) {
             if (node.normalName() == "center") return BlockAlign.CENTER
+            val pre = preindexOf(node)
+            if (pre != null && canCheckAttr && !pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_PRESENTATIONAL)) {
+                node = node.parent()
+                continue
+            }
             when (node.attr("align").lowercase()) {
                 "center" -> return BlockAlign.CENTER
                 "right" -> return BlockAlign.RIGHT
@@ -1643,30 +2207,52 @@ class HtmlMapper(
      */
     private fun explicitFloatedInitial(paragraph: Element): ExplicitFloatedInitial? {
         val resolver = css ?: return null
+        val pre = preindexOf(paragraph)
+        if (pre != null && treePreindexValid() &&
+            !pre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_INLINE_FLOW_CANDIDATE)
+        ) {
+            return null
+        }
         // Generated content would precede the span in the flattened string,
         // so the floated glyph would no longer start at offset zero.
         if (resolver.generated(paragraph, after = false) != null) return null
 
-        val candidate = paragraph.childNodes().firstNotNullOfOrNull { node ->
-            when (node) {
-                is TextNode -> if (node.isBlank) null else return null
+        var candidate: Element? = null
+        val childCount = paragraph.childNodeSize()
+        for (i in 0 until childCount) {
+            when (val node = paragraph.childNode(i)) {
+                is TextNode -> if (!isTextBlank(node)) return null
                 is Element -> {
-                    if (resolver.computed(node).hidden) null else node
+                    if (!resolver.computed(node).hidden) {
+                        candidate = node
+                        break
+                    }
                 }
-                else -> null
             }
-        } ?: return null
-        if (candidate.normalName() !in EXPLICIT_INITIAL_TAGS) return null
-        if (candidate.childNodes().any { it !is TextNode }) return null
+        }
+        if (candidate == null) return null
+        val isInitialTag = preindexOf(candidate)?.hasTag(RustChapterMarkup.TAG_EXPLICIT_INITIAL)
+            ?: (candidate.normalName() in EXPLICIT_INITIAL_TAGS)
+        if (!isInitialTag) return null
+        val candCount = candidate.childNodeSize()
+        for (i in 0 until candCount) {
+            if (candidate.childNode(i) !is TextNode) return null
+        }
         if (resolver.generated(candidate, after = false) != null ||
             resolver.generated(candidate, after = true) != null
         ) {
             return null
         }
 
-        val raw = candidate.childNodes()
-            .filterIsInstance<TextNode>()
-            .joinToString(separator = "") { it.wholeText }
+        val raw = when (candCount) {
+            0 -> ""
+            1 -> (candidate.childNode(0) as TextNode).wholeText
+            else -> buildString {
+                for (i in 0 until candCount) {
+                    append((candidate.childNode(i) as TextNode).wholeText)
+                }
+            }
+        }
         val visible = raw.replace(INLINE_WHITESPACE, " ").trim()
         if (visible.isEmpty() || ' ' in visible) return null
         val codePoints = visible.codePointCount(0, visible.length)
@@ -1785,15 +2371,26 @@ class HtmlMapper(
 
         // A wrapper's forced break still belongs to its first semantic leaf;
         // unlike box geometry, it cannot be painted from a leaf range alone.
-        var child: Element = element
-        var ancestor = element.parent()
-        while (ancestor != null && ancestor.normalName() !in ROOT_TAGS) {
-            val box = resolver.computed(ancestor)
-            if (firstBlockChild(ancestor) === child) {
-                pageBreak = pageBreak || box.pageBreakBefore
+        if (!pageBreak) {
+            val doc = preindexDoc
+            val skipAncestorPageBreakWalk = !resolver.hasPageBreakBeforeRules &&
+                treePreindexValid() &&
+                attrValid(RustChapterMarkup.MUTATED_STYLE) &&
+                doc != null &&
+                !doc.hasDocFlag(RustChapterMarkup.DOC_HAS_ANY_STYLE)
+            if (!skipAncestorPageBreakWalk) {
+                var child: Element = element
+                var ancestor = element.parent()
+                while (ancestor != null && !isRootTag(ancestor)) {
+                    val box = resolver.computed(ancestor)
+                    if (box.pageBreakBefore && firstBlockChild(ancestor) === child) {
+                        pageBreak = true
+                        break
+                    }
+                    child = ancestor
+                    ancestor = ancestor.parent()
+                }
             }
-            child = ancestor
-            ancestor = ancestor.parent()
         }
 
         // The full alignment is stored; whether START/JUSTIFY of body text
@@ -1819,7 +2416,9 @@ class HtmlMapper(
             // need not allocate a non-default BlockStyle. A heading is
             // different: explicit 1em must override its semantic H1-H6 size.
             fontScale = computedFontScale.takeIf {
-                it !in 0.999f..1.001f || element.normalName() in HEADING_TAGS
+                it !in 0.999f..1.001f ||
+                    (preindexOf(element)?.hasTag(RustChapterMarkup.TAG_HEADING)
+                        ?: (element.normalName() in HEADING_TAGS))
             },
             firstLineIndent = computed.textIndentEm?.let { it > 0.05f },
             firstLineIndentEm = computed.textIndentEm,
@@ -1851,7 +2450,7 @@ class HtmlMapper(
     }
 
     /** A generated run appended as styled inline text. */
-    private fun appendGeneratedRun(builder: InlineTextBuilder, run: CssResolver.GeneratedRun?) {
+    private fun appendGeneratedRun(builder: HtmlInlineBuilder, run: CssResolver.GeneratedRun?) {
         if (run == null) return
         val family = run.fontFamilyName
         if (family != null) builder.pushAnnotation(INLINE_FONT_FAMILY_TAG, family)
@@ -1900,7 +2499,7 @@ class HtmlMapper(
     /** `div::before`/`::after` decorations become their own paragraphs. */
     private fun emitGeneratedParagraph(element: Element, after: Boolean, quote: Boolean) {
         val run = generated(element, after) ?: return
-        val builder = InlineTextBuilder()
+        val builder = HtmlInlineBuilder()
         appendGeneratedRun(builder, run)
         val generatedBox = run.publisherBox
         if (builder.isBlank && generatedBox == null) return
@@ -1936,11 +2535,23 @@ class HtmlMapper(
         return run.takeIf { it.text.isEmpty() || expansionBudget.acceptGenerated(it.text.length) }
     }
 
-    private fun firstBlockChild(container: Element): Element? =
-        container.children().firstOrNull { it.normalName() !in NON_BLOCK_TAGS }
+    private fun firstBlockChild(container: Element): Element? {
+        var child = container.firstElementChild()
+        while (child != null) {
+            if (!isNonBlockTag(child)) return child
+            child = child.nextElementSibling()
+        }
+        return null
+    }
 
     /** Heading level for `title`/`titleN` CSS classes, or null. */
     private fun titleClassLevel(element: Element): Int? {
+        val pre = preindexOf(element)
+        if (pre != null && attrValid(RustChapterMarkup.MUTATED_OTHER)) {
+            val level = pre.titleClassLevel
+            if (level == 0) return null
+            if (level in 1..6) return level
+        }
         for (name in element.classNames()) {
             val match = TITLE_CLASS.matchEntire(name) ?: continue
             val digit = match.groupValues[1]
@@ -1969,24 +2580,31 @@ class HtmlMapper(
     }
 
     /** Blocks that exist only to add vertical space (`<div class="empty-line"/>`). */
-    private fun isEmptyLineBlock(element: Element): Boolean =
-        element.classNames().any { it.equals("empty-line", ignoreCase = true) } &&
+    private fun isEmptyLineBlock(element: Element): Boolean {
+        val pre = preindexOf(element)
+        if (pre != null && attrValid(RustChapterMarkup.MUTATED_OTHER)) {
+            if (!pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_EMPTY_LINE_CLASS)) return false
+            if (treePreindexValid()) {
+                return !pre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_JAVA_NON_WS_TEXT)
+            }
+            return element.text().isBlank()
+        }
+        return element.classNames().any { it.equals("empty-line", ignoreCase = true) } &&
             element.text().isBlank()
+    }
 
     // -------------------------------------------------------------- inline
 
     /** Fixed-width author initials/ornaments remain inside their source line. */
     private fun appendInlineTextBox(
         element: Element,
-        builder: InlineTextBuilder,
+        own: CssResolver.Computed,
+        builder: HtmlInlineBuilder,
         preserveWhitespace: Boolean,
         depth: Int,
+        parentComputed: CssResolver.Computed? = null,
     ): Boolean {
         val resolver = css ?: return false
-        if (element.normalName() !in SIMPLE_INLINE_TEXT_BOX_TAGS ||
-            element.childNodes().any { it !is TextNode }
-        ) return false
-        val own = resolver.computed(element)
         val width = own.widthEm ?: return false
         if (own.display != "inline-block" || !width.isFinite() || width <= 0f ||
             own.superScript || own.subScript || own.floatSide != null || own.paddingSpecified ||
@@ -1996,20 +2614,38 @@ class HtmlMapper(
             own.marginStartEm != 0f || own.marginEndEm != 0f ||
             own.marginStartFrac != 0f || own.marginEndFrac != 0f ||
             own.marginInlineStartEm != 0f || own.marginInlineEndEm != 0f ||
-            own.marginInlineStartFrac != 0f || own.marginInlineEndFrac != 0f ||
-            resolver.generated(element, after = false) != null || resolver.generated(element, after = true) != null
+            own.marginInlineStartFrac != 0f || own.marginInlineEndFrac != 0f
+        ) return false
+        val isSimpleBoxTag = preindexOf(element)?.hasTag(RustChapterMarkup.TAG_SIMPLE_INLINE_TEXT_BOX)
+            ?: (element.normalName() in SIMPLE_INLINE_TEXT_BOX_TAGS)
+        if (!isSimpleBoxTag) return false
+        val childCount = element.childNodeSize()
+        for (i in 0 until childCount) {
+            if (element.childNode(i) !is TextNode) return false
+        }
+        if (resolver.generated(element, after = false) != null ||
+            resolver.generated(element, after = true) != null
         ) return false
         val raw = element.wholeText()
         if ('\n' in raw || raw.codePointCount(0, raw.length) !in 1..2) return false
-        val container = generateSequence(element.parent()) { it.parent() }.firstOrNull {
-            it.normalName() in INLINE_TEXT_BLOCK_TAGS || isCssFlowBlock(it)
-        } ?: element.parent() ?: return false
+        var ancestor = element.parent()
+        var container: Element? = null
+        while (ancestor != null) {
+            val isBlockTag = preindexOf(ancestor)?.hasTag(RustChapterMarkup.TAG_INLINE_TEXT_BLOCK)
+                ?: (ancestor.normalName() in INLINE_TEXT_BLOCK_TAGS)
+            if (isBlockTag || isCssFlowBlock(ancestor)) {
+                container = ancestor
+                break
+            }
+            ancestor = ancestor.parent()
+        }
+        container = container ?: element.parent() ?: return false
         val widthEm = width / resolver.computed(container).fontSizeEm
         if (!widthEm.isFinite() || widthEm !in 0.05f..16f) return false
-        val content = InlineTextBuilder()
-        val style = inlineStyleFor(element)
+        val content = HtmlInlineBuilder()
+        val style = inlineStyleFor(element, own, parentComputed)
         if (style != null) content.pushStyle(style)
-        appendChildrenInline(element, content, preserveWhitespace, depth)
+        appendChildrenInline(element, content, preserveWhitespace, depth, parentComputed = own)
         if (style != null) content.pop()
         val text = content.build()
         if (text.isEmpty() || text.text.codePointCount(0, text.length) > 2) return false
@@ -2052,18 +2688,23 @@ class HtmlMapper(
 
     private fun appendChildrenInline(
         element: Element,
-        out: InlineTextBuilder,
+        out: HtmlInlineBuilder,
         preserveWhitespace: Boolean = false,
         depth: Int = 0,
         suppressedStyleElement: Element? = null,
+        parentComputed: CssResolver.Computed? = null,
     ) {
-        for (child in element.childNodes()) {
+        val childCount = element.childNodeSize()
+        if (childCount == 0) return
+        val computed = parentComputed ?: css?.computed(element)
+        for (i in 0 until childCount) {
             appendInline(
-                child,
+                element.childNode(i),
                 out,
                 preserveWhitespace,
                 depth + 1,
                 suppressedStyleElement,
+                parentComputed = computed,
             )
         }
     }
@@ -2071,30 +2712,49 @@ class HtmlMapper(
     /** Native ruby keeps the base in source coordinates and retains rich rt. */
     private fun appendRuby(
         ruby: Element,
-        out: InlineTextBuilder,
+        out: HtmlInlineBuilder,
         preserveWhitespace: Boolean,
         depth: Int,
         suppressedStyleElement: Element?,
+        rubyComputed: CssResolver.Computed? = null,
     ) {
-        var base = InlineTextBuilder()
-        for (child in ruby.childNodes()) {
+        val parentStyle = rubyComputed ?: css?.computed(ruby)
+        var base = HtmlInlineBuilder()
+        val childCount = ruby.childNodeSize()
+        for (i in 0 until childCount) {
+            val child = ruby.childNode(i)
             if (child is Element && child.normalName() == "rp") continue
             if (child !is Element || child.normalName() != "rt") {
-                appendInline(child, base, preserveWhitespace, depth + 1, suppressedStyleElement)
+                appendInline(
+                    child,
+                    base,
+                    preserveWhitespace,
+                    depth + 1,
+                    suppressedStyleElement,
+                    parentComputed = parentStyle,
+                )
                 continue
             }
-            if (css?.computed(child)?.hidden == true) {
+            val childComputed = css?.computed(child)
+            if (childComputed?.hidden == true) {
                 out.appendAnnotated(base.build())
-                base = InlineTextBuilder()
+                base = HtmlInlineBuilder()
                 continue
             }
             val baseText = base.build().trimmed()
-            val reading = InlineTextBuilder()
-            val style = inlineStyleFor(child) ?: if (css == null) {
-                SpanStyle(fontSize = TextUnit(0.5f, TextUnitType.Em))
+            val reading = HtmlInlineBuilder()
+            val style = inlineStyleFor(child, childComputed, parentStyle) ?: if (css == null) {
+                RUBY_NO_CSS_RT_SPAN_STYLE
             } else null
             if (style != null) reading.pushStyle(style)
-            appendChildrenInline(child, reading, preserveWhitespace, depth + 1, suppressedStyleElement)
+            appendChildrenInline(
+                child,
+                reading,
+                preserveWhitespace,
+                depth + 1,
+                suppressedStyleElement,
+                parentComputed = childComputed,
+            )
             if (style != null) reading.pop()
             val readingText = reading.build().trimmed()
             val mark = if ('\n' !in baseText.text &&
@@ -2105,16 +2765,14 @@ class HtmlMapper(
                 // Malformed or unsupported complex ruby remains readable.
                 out.appendAnnotated(baseText)
                 if (readingText.isNotEmpty()) {
-                    out.pushStyle(SpanStyle(fontSize = TextUnit(0.6f, TextUnitType.Em),
-                        baselineShift = BaselineShift(0.35f)))
+                    out.pushStyle(RT_SPAN_STYLE)
                     out.appendAnnotated(readingText)
                     out.pop()
                 }
             } else {
                 val fallback = AnnotatedString.Builder().apply {
                     append(baseText)
-                    pushStyle(SpanStyle(fontSize = TextUnit(0.6f, TextUnitType.Em),
-                        baselineShift = BaselineShift(0.35f)))
+                    pushStyle(RT_SPAN_STYLE)
                     append(readingText)
                     pop()
                 }.toAnnotatedString()
@@ -2122,7 +2780,7 @@ class HtmlMapper(
                 out.inlineAnnotated(mark.id, fallback)
                 out.pop()
             }
-            base = InlineTextBuilder()
+            base = HtmlInlineBuilder()
         }
         out.appendAnnotated(base.build())
     }
@@ -2131,70 +2789,151 @@ class HtmlMapper(
     private fun AnnotatedString.trimmed(): AnnotatedString {
         var start = 0
         var end = length
-        while (start < end && text[start] in " \t\r\n\u000C") start++
-        while (end > start && text[end - 1] in " \t\r\n\u000C") end--
+        while (start < end && isHtmlWhitespace(text[start])) start++
+        while (end > start && isHtmlWhitespace(text[end - 1])) end--
         return if (start == 0 && end == length) this else subSequence(start, end)
+    }
+
+    private fun appendTextContent(
+        node: TextNode,
+        out: HtmlInlineBuilder,
+        preserveWhitespace: Boolean,
+        textTransform: String? = null,
+        parent: Element? = null,
+    ) {
+        val raw = node.wholeText
+        val textFlags = (node as? RustChapterMarkup.PreindexedTextNode)?.textFlags
+            ?: RustChapterMarkup.TEXT_UNKNOWN
+        val noTransform = textTransform == null || textTransform == "none"
+        if (textFlags != RustChapterMarkup.TEXT_UNKNOWN) {
+            if (preserveWhitespace) {
+                val text = if (noTransform || (textFlags and RustChapterMarkup.TEXT_HTML_BLANK) != 0) {
+                    raw
+                } else {
+                    transformText(raw, textTransform, parent, out.lastCharacter)
+                }
+                if (text === raw) {
+                    out.preindexedPreformattedText(raw, textFlags)
+                } else {
+                    out.preformattedText(text)
+                }
+            } else if (noTransform || (textFlags and RustChapterMarkup.TEXT_HTML_BLANK) != 0) {
+                out.preindexedText(raw, textFlags)
+            } else {
+                val text = transformText(raw, textTransform, parent, out.lastCharacter)
+                if (text === raw) {
+                    out.preindexedText(raw, textFlags)
+                } else {
+                    out.text(text)
+                }
+            }
+        } else {
+            val text = if (noTransform) {
+                raw
+            } else {
+                transformText(raw, textTransform, parent, out.lastCharacter)
+            }
+            if (preserveWhitespace) out.preformattedText(text) else out.text(text)
+        }
+    }
+
+    private fun appendInlineMath(node: Element, out: HtmlInlineBuilder) {
+        val mathBuilder = InlineTextBuilder()
+        val seedChar = out.lastCharacter
+        val seeded = when {
+            seedChar == null -> false
+            out.lastWasSpace && (seedChar == ' ' || seedChar == '\n') -> false
+            out.lastWasSpace -> {
+                mathBuilder.preformattedText(seedChar.toString())
+                true
+            }
+            else -> {
+                mathBuilder.text("\uFFFF")
+                true
+            }
+        }
+        mathFormatter.append(node, mathBuilder)
+        val built = mathBuilder.build()
+        if (seeded && built.length == 1) {
+            for (annotation in built.getStringAnnotations(1, 1)) {
+                out.pushAnnotation(annotation.tag, annotation.item)
+                out.pop()
+            }
+            return
+        }
+        val result = if (seeded) built.subSequence(1, built.length) else built
+        out.appendAnnotated(result, keepEmptyAnnotations = true)
     }
 
     private fun appendInline(
         node: Node,
-        out: InlineTextBuilder,
+        out: HtmlInlineBuilder,
         preserveWhitespace: Boolean = false,
         depth: Int = 0,
         suppressedStyleElement: Element? = null,
+        parentComputed: CssResolver.Computed? = null,
     ) {
         when (node) {
             is TextNode -> {
                 val parent = node.parent()
-                val computed = parent?.let { css?.computed(it) }
+                val computed = parentComputed ?: parent?.let { css?.computed(it) }
                 val hidden = computed?.visibilityHidden == true
                 // Code/pre defaults set monospace independently of an
                 // inherited body's family name. An explicit CSS family on
                 // the code resets computed.monospace and still takes effect.
                 val family = if (computed?.monospace == true) "monospace" else computed?.fontFamilyName
                 if (family != null) out.pushAnnotation(INLINE_FONT_FAMILY_TAG, family)
-                if (computed != null) out.pushAnnotation(INLINE_FONT_TYPOGRAPHY_TAG, computed.fontTypography.encode())
+                if (computed != null) out.pushAnnotation(INLINE_FONT_TYPOGRAPHY_TAG, computed.encodedFontTypography)
                 if (hidden) out.pushAnnotation(HIDDEN_TEXT_TAG, "true")
-                val text = transformText(node.wholeText, computed?.textTransform, parent, out.lastCharacter)
-                if (preserveWhitespace) out.preformattedText(text) else out.text(text)
+                appendTextContent(node, out, preserveWhitespace, computed?.textTransform, parent)
                 if (hidden) out.pop()
                 if (computed != null) out.pop()
                 if (family != null) out.pop()
             }
 
             is Element -> {
-                val bidiMode = inlineBidiMode(node)
+                val computed = css?.computed(node)
+                val bidiMode = inlineBidiMode(node, computed)
                 if (bidiMode != null) out.pushAnnotation(BIDI_TAG, bidiMode.name)
                 try {
-                    if (node.normalName() in NON_TEXT_CONTENT_TAGS) return
+                    if (isNonTextContentTag(node)) return
                     if (depth >= maxStructureDepth) {
-                        node.childNodes()
-                            .filterIsInstance<TextNode>()
-                            .forEach { child ->
-                                if (preserveWhitespace) out.preformattedText(child.wholeText)
-                                else out.text(child.wholeText)
+                        val childCount = node.childNodeSize()
+                        for (i in 0 until childCount) {
+                            val child = node.childNode(i)
+                            if (child is TextNode) {
+                                appendTextContent(child, out, preserveWhitespace)
                             }
+                        }
                         return
                     }
-                    if (css?.computed(node)?.hidden == true) return
-                    if (appendInlineTextBox(node, out, preserveWhitespace, depth)) return
+                    if (computed?.hidden == true) return
+                    if (computed?.widthEm != null &&
+                        appendInlineTextBox(node, computed, out, preserveWhitespace, depth, parentComputed)
+                    ) {
+                        return
+                    }
                     if (isMathElement(node)) {
                         registerMathAnchors(node)
-                        mathFormatter.append(node, out)
+                        appendInlineMath(node, out)
                         return
                     }
-                    val scopedStyle = if (node === suppressedStyleElement) null else inlineStyleFor(node)
+                    val scopedStyle = if (node === suppressedStyleElement) {
+                        null
+                    } else {
+                        inlineStyleFor(node, computed, parentComputed)
+                    }
                     if (scopedStyle != null) out.pushStyle(scopedStyle)
                     try {
-                    when (node.normalName()) {
+                    when (val tagName = node.normalName()) {
                     "br" -> out.lineBreak()
                     "wbr" -> out.wordBreakOpportunity()
                     "img", "image" -> {
                         if (!isBlockLikeMedia(node)) {
-                            val src = if (node.normalName() == "img") {
-                                node.attr("src")
+                            val src = if (tagName == "img") {
+                                srcOf(node)
                             } else {
-                                node.attr("xlink:href").ifEmpty { node.attr("href") }
+                                xlinkHrefOf(node).ifEmpty { hrefOf(node) }
                             }
                             val path = resolveImage(src)
                             if (path != null) {
@@ -2206,7 +2945,6 @@ class HtmlMapper(
                     }
 
                     "svg" -> {
-                        val computed = css?.computed(node)
                         val blockLike = (computed?.widthFrac ?: 0f) > 0.45f ||
                             (computed?.widthEm ?: 0f) > 12f ||
                             (computed?.heightEm ?: 0f) > 3f
@@ -2221,18 +2959,13 @@ class HtmlMapper(
                     }
 
                     "ruby" -> appendRuby(
-                        node, out, preserveWhitespace, depth, suppressedStyleElement,
+                        node, out, preserveWhitespace, depth, suppressedStyleElement, computed,
                     )
                     "rp" -> Unit
                     "rt" -> {
-                        out.pushStyle(
-                            SpanStyle(
-                                fontSize = TextUnit(0.6f, TextUnitType.Em),
-                                baselineShift = BaselineShift(0.35f),
-                            ),
-                        )
+                        out.pushStyle(RT_SPAN_STYLE)
                         appendChildrenInline(
-                            node, out, preserveWhitespace, depth, suppressedStyleElement,
+                            node, out, preserveWhitespace, depth, suppressedStyleElement, computed,
                         )
                         out.pop()
                     }
@@ -2246,7 +2979,7 @@ class HtmlMapper(
                             out.text(open)
                         }
                         appendChildrenInline(
-                            node, out, preserveWhitespace, depth, suppressedStyleElement,
+                            node, out, preserveWhitespace, depth, suppressedStyleElement, computed,
                         )
                         if (generatedAfter != null) {
                             appendGeneratedRun(out, generatedAfter)
@@ -2255,10 +2988,10 @@ class HtmlMapper(
                         }
                     }
                     "mark" -> {
-                        out.pushStyle(SpanStyle(background = Color(0x66FFD54F)))
+                        out.pushStyle(MARK_SPAN_STYLE)
                         appendGeneratedRun(out, generated(node, after = false))
                         appendChildrenInline(
-                            node, out, preserveWhitespace, depth, suppressedStyleElement,
+                            node, out, preserveWhitespace, depth, suppressedStyleElement, computed,
                         )
                         appendGeneratedRun(out, generated(node, after = true))
                         out.pop()
@@ -2266,10 +2999,12 @@ class HtmlMapper(
                     "a" -> {
                         fun appendLinkContent() {
                             appendGeneratedRun(out, generated(node, after = false))
-                            appendChildrenInline(node, out, preserveWhitespace, depth, suppressedStyleElement)
+                            appendChildrenInline(
+                                node, out, preserveWhitespace, depth, suppressedStyleElement, computed,
+                            )
                             appendGeneratedRun(out, generated(node, after = true))
                         }
-                        val href = node.attr("href").trim()
+                        val href = hrefOf(node).trim()
                         val key = href.takeIf { it.isNotEmpty() }?.let(resolveLink)
                         if (key != null) {
                             linkTargets += key
@@ -2293,7 +3028,7 @@ class HtmlMapper(
                     else -> {
                         appendGeneratedRun(out, generated(node, after = false))
                         appendChildrenInline(
-                            node, out, preserveWhitespace, depth, suppressedStyleElement,
+                            node, out, preserveWhitespace, depth, suppressedStyleElement, computed,
                         )
                         appendGeneratedRun(out, generated(node, after = true))
                     }
@@ -2313,99 +3048,175 @@ class HtmlMapper(
      * element's computed style and its parent's (so inherited properties are
      * not re-applied); without CSS, classic tag semantics.
      */
-    private fun inlineStyleFor(element: Element): SpanStyle? {
-        val languageStyle = inlineLanguageStyle(element)
+    private fun inlineStyleFor(element: Element): SpanStyle? =
+        inlineStyleFor(element, ownComputed = null, parentComputed = null)
+
+    private fun inlineStyleFor(
+        element: Element,
+        ownComputed: CssResolver.Computed?,
+        parentComputed: CssResolver.Computed?,
+    ): SpanStyle? {
         val resolver = css
             ?: return mergeSpanStyles(
                 mergeSpanStyles(tagStyleFor(element.normalName()), legacyInlineStyle(element)),
-                languageStyle,
+                inlineLanguageStyle(element),
             )
         val parent = element.parent() ?: return tagStyleFor(element.normalName())
-        val own = resolver.computed(element)
-        val base = resolver.computed(parent)
+        val own = ownComputed ?: resolver.computed(element)
+        val base = parentComputed ?: resolver.computed(parent)
 
-        var style = SpanStyle()
+        // Structural code keeps its semantic face even when publisher CSS is
+        // disabled. CSS family choices stay as annotations so the reader can
+        // apply or ignore them with the current setting.
+        val isMonospace = preindexOf(element)?.hasTag(RustChapterMarkup.TAG_SEMANTIC_MONOSPACE)
+            ?: (element.normalName() in SEMANTIC_MONOSPACE_TAGS)
+        val bgArgb = own.backgroundColorArgb?.takeIf { (it ushr 24) != 0 }
+
+        if (own === base) {
+            if (!own.superScript && !own.subScript && !isMonospace && bgArgb == null) {
+                val localeList = inlineLanguageLocaleList(element) ?: return null
+                return SpanStyle(localeList = localeList)
+            }
+            val baselineShift = when {
+                own.superScript -> BaselineShift.Superscript
+                own.subScript -> BaselineShift.Subscript
+                else -> null
+            }
+            val fontSize = if (baselineShift != null) SUB_SUPER_FONT_SIZE else TextUnit.Unspecified
+            return SpanStyle(
+                fontSize = fontSize,
+                fontFamily = if (isMonospace) FontFamily.Monospace else null,
+                baselineShift = baselineShift,
+                localeList = inlineLanguageLocaleList(element),
+                background = if (bgArgb != null) Color(bgArgb) else Color.Unspecified,
+            )
+        }
+
+        var fontFeatureSettings: String? = null
+        var fontStyle: FontStyle? = null
+        var fontWeight: FontWeight? = null
+        var fontSize: TextUnit = TextUnit.Unspecified
+        var baselineShift: BaselineShift? = null
+        var needUnderline = false
+        var needStrike = false
+        var fontFamily: FontFamily? = null
+        var color: Color = Color.Unspecified
+        var background: Color = Color.Unspecified
         var any = false
+
         if (own.fontFeatureSettings != base.fontFeatureSettings) {
-            style = style.copy(fontFeatureSettings = own.fontFeatureSettings ?: "")
+            fontFeatureSettings = own.fontFeatureSettings ?: ""
             any = true
         }
         if (own.italic != null && own.italic != base.italic) {
-            style = style.copy(fontStyle = if (own.italic) FontStyle.Italic else FontStyle.Normal)
+            fontStyle = if (own.italic) FontStyle.Italic else FontStyle.Normal
             any = true
         }
         if (own.fontWeight != null && own.fontWeight != base.fontWeight) {
-            style = style.copy(fontWeight = FontWeight(own.fontWeight))
+            fontWeight = FontWeight(own.fontWeight)
             any = true
         }
         val sizeRatio = own.fontSizeEm / base.fontSizeEm
         if (sizeRatio !in 0.99f..1.01f) {
-            style = style.copy(
-                fontSize = TextUnit(sizeRatio.coerceIn(0.5f, 2f), TextUnitType.Em),
-            )
+            fontSize = TextUnit(sizeRatio.coerceIn(0.5f, 2f), TextUnitType.Em)
             any = true
         }
         if (own.superScript) {
-            style = style.copy(baselineShift = BaselineShift.Superscript)
-            if (style.fontSize == TextUnit.Unspecified) {
-                style = style.copy(fontSize = TextUnit(0.75f, TextUnitType.Em))
+            baselineShift = BaselineShift.Superscript
+            if (fontSize == TextUnit.Unspecified) {
+                fontSize = SUB_SUPER_FONT_SIZE
             }
             any = true
         } else if (own.subScript) {
-            style = style.copy(baselineShift = BaselineShift.Subscript)
-            if (style.fontSize == TextUnit.Unspecified) {
-                style = style.copy(fontSize = TextUnit(0.75f, TextUnitType.Em))
+            baselineShift = BaselineShift.Subscript
+            if (fontSize == TextUnit.Unspecified) {
+                fontSize = SUB_SUPER_FONT_SIZE
             }
             any = true
         }
-        val decorations = mutableListOf<TextDecoration>()
-        if (own.underline && !base.underline) decorations += TextDecoration.Underline
-        if (own.strike && !base.strike) decorations += TextDecoration.LineThrough
-        if (decorations.isNotEmpty()) {
-            style = style.copy(textDecoration = TextDecoration.combine(decorations))
+        if (own.underline && !base.underline) {
+            needUnderline = true
             any = true
         }
-        // Structural code keeps its semantic face even when publisher CSS is
-        // disabled. CSS family choices stay as annotations so the reader can
-        // apply or ignore them with the current setting.
-        if (element.normalName() in SEMANTIC_MONOSPACE_TAGS) {
-            style = style.copy(fontFamily = FontFamily.Monospace)
+        if (own.strike && !base.strike) {
+            needStrike = true
+            any = true
+        }
+        if (isMonospace) {
+            fontFamily = FontFamily.Monospace
             any = true
         }
         if (own.foregroundColorArgb != base.foregroundColorArgb) {
             own.foregroundColorArgb?.let {
-                style = style.copy(color = Color(it))
+                color = Color(it)
                 any = true
             }
         }
-        own.backgroundColorArgb?.takeIf { (it ushr 24) != 0 }?.let {
-            style = style.copy(background = Color(it))
+        if (bgArgb != null) {
+            background = Color(bgArgb)
             any = true
         }
-        return mergeSpanStyles(if (any) style else null, languageStyle)
+        val localeList = inlineLanguageLocaleList(element)
+        if (!any && localeList == null) return null
+        val textDecoration = when {
+            needUnderline && needStrike -> COMBINED_UNDERLINE_LINE_THROUGH
+            needUnderline -> TextDecoration.Underline
+            needStrike -> TextDecoration.LineThrough
+            else -> null
+        }
+        return SpanStyle(
+            color = color,
+            fontSize = fontSize,
+            fontWeight = fontWeight,
+            fontStyle = fontStyle,
+            fontFamily = fontFamily,
+            fontFeatureSettings = fontFeatureSettings,
+            baselineShift = baselineShift,
+            localeList = localeList,
+            background = background,
+            textDecoration = textDecoration,
+        )
     }
 
 
     /** Presentational HTML attributes used heavily by MOBI6. */
     private fun legacyInlineStyle(element: Element): SpanStyle? {
-        var style = SpanStyle()
-        var any = false
-        element.attr("color").takeIf { it.isNotBlank() }?.let(CssColor::parse)?.let {
-            style = style.copy(color = Color(it))
-            any = true
+        val doc = preindexDoc
+        val canCheckAttr = attrValid(RustChapterMarkup.MUTATED_PRESENTATIONAL)
+        if (doc != null && treePreindexValid() && canCheckAttr &&
+            !doc.hasDocFlag(RustChapterMarkup.DOC_HAS_ANY_PRESENTATIONAL)
+        ) {
+            return null
         }
-        element.attr("bgcolor").takeIf { it.isNotBlank() }?.let(CssColor::parse)
+        val pre = preindexOf(element)
+        if (pre != null && canCheckAttr && !pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_PRESENTATIONAL)) {
+            return null
+        }
+        val colorArgb = element.attr("color").takeIf { it.isNotBlank() }?.let(CssColor::parse)
+        val bgArgb = element.attr("bgcolor").takeIf { it.isNotBlank() }?.let(CssColor::parse)
             ?.takeIf { (it ushr 24) != 0 }
-            ?.let {
-                style = style.copy(background = Color(it))
-                any = true
-            }
-        return style.takeIf { any }
+        if (colorArgb == null && bgArgb == null) return null
+        return SpanStyle(
+            color = if (colorArgb != null) Color(colorArgb) else Color.Unspecified,
+            background = if (bgArgb != null) Color(bgArgb) else Color.Unspecified,
+        )
     }
 
     private fun legacyForeground(element: Element): Int? {
+        val doc = preindexDoc
+        val canCheckAttr = attrValid(RustChapterMarkup.MUTATED_PRESENTATIONAL)
+        if (doc != null && treePreindexValid() && canCheckAttr &&
+            !doc.hasDocFlag(RustChapterMarkup.DOC_HAS_ANY_PRESENTATIONAL)
+        ) {
+            return null
+        }
         var node: Element? = element
         while (node != null && node.normalName() != "#root") {
+            val pre = preindexOf(node)
+            if (pre != null && canCheckAttr && !pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_PRESENTATIONAL)) {
+                node = node.parent()
+                continue
+            }
             val raw = node.attr("color").ifBlank {
                 node.attr("text").takeIf { node.normalName() == "body" }.orEmpty()
             }
@@ -2419,9 +3230,21 @@ class HtmlMapper(
         element: Element,
         stopExclusive: Element? = null,
     ): Int? {
+        val doc = preindexDoc
+        val canCheckAttr = attrValid(RustChapterMarkup.MUTATED_PRESENTATIONAL)
+        if (doc != null && treePreindexValid() && canCheckAttr &&
+            !doc.hasDocFlag(RustChapterMarkup.DOC_HAS_ANY_PRESENTATIONAL)
+        ) {
+            return null
+        }
         val layers = ArrayList<Int>(3)
         var node: Element? = element
         while (node != null && node !== stopExclusive && node.normalName() != "#root") {
+            val pre = preindexOf(node)
+            if (pre != null && canCheckAttr && !pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_PRESENTATIONAL)) {
+                node = node.parent()
+                continue
+            }
             node.attr("bgcolor").takeIf { it.isNotBlank() }?.let(CssColor::parse)?.let {
                 layers += it
             }
@@ -2457,16 +3280,36 @@ class HtmlMapper(
         else -> first.merge(second)
     }
 
-    private fun inlineLanguageStyle(element: Element): SpanStyle? {
-        val own = languageFor(element)
+    private fun inlineLanguageLocaleList(element: Element): LocaleList? {
+        val pre = preindexOf(element)
+        if (pre != null && attrValid(RustChapterMarkup.MUTATED_OTHER) &&
+            !pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_LANG)
+        ) {
+            return null
+        }
+        val own = languageFor(element) ?: return null
         val inherited = element.parent()?.let(::languageFor)
-        return own.takeIf { it != null && it != inherited }
-            ?.let { SpanStyle(localeList = LocaleList(it)) }
+        return own.takeIf { it != inherited }?.let(::LocaleList)
     }
 
+    private fun inlineLanguageStyle(element: Element): SpanStyle? =
+        inlineLanguageLocaleList(element)?.let { SpanStyle(localeList = it) }
+
     private fun languageFor(element: Element): String? {
+        val canCheckTree = treePreindexValid()
+        val canCheckAttr = attrValid(RustChapterMarkup.MUTATED_OTHER)
         var node: Element? = element
         while (node != null) {
+            val pre = preindexOf(node)
+            if (pre != null && canCheckAttr) {
+                if (canCheckTree && !pre.hasAttrFlag(RustChapterMarkup.ATTR_ANC_HAS_LANG)) {
+                    return null
+                }
+                if (!pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_LANG)) {
+                    node = node.parent()
+                    continue
+                }
+            }
             val raw = node.attr("lang").ifBlank { node.attr("xml:lang") }.trim()
             if (raw.isNotEmpty()) return LanguageTag.normalize(raw) ?: raw.lowercase()
             node = node.parent()
@@ -2475,8 +3318,20 @@ class HtmlMapper(
     }
 
     private fun attributeDirection(element: Element): BookTextDirection? {
+        val canCheckTree = treePreindexValid()
+        val canCheckAttr = attrValid(RustChapterMarkup.MUTATED_OTHER)
         var node: Element? = element
         while (node != null) {
+            val pre = preindexOf(node)
+            if (pre != null && canCheckAttr) {
+                if (canCheckTree && !pre.hasAttrFlag(RustChapterMarkup.ATTR_ANC_HAS_DIR)) {
+                    return null
+                }
+                if (!pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_DIR)) {
+                    node = node.parent()
+                    continue
+                }
+            }
             when (node.attr("dir").lowercase()) {
                 "ltr" -> return BookTextDirection.LTR
                 "rtl" -> return BookTextDirection.RTL
@@ -2492,21 +3347,52 @@ class HtmlMapper(
      * Retain a clean source-text range; [BidiLayoutText] later introduces the
      * corresponding UBA scope only in its temporary measured/rendered copy.
      */
-    private fun inlineBidiMode(element: Element): InlineBidiMode? {
-        val computed = css?.computed(element)
-        val rawDir = element.attr("dir").trim().lowercase()
-        val parentDirection = element.parent()?.let { css?.computed(it)?.direction }
+    private fun inlineBidiMode(
+        element: Element,
+        computed: CssResolver.Computed? = css?.computed(element),
+    ): InlineBidiMode? {
+        val computedBidi = computed?.unicodeBidi
+        if (computedBidi == "normal") return null
+        val pre = preindexOf(element)
+        val canSkipDir = pre != null && attrValid(RustChapterMarkup.MUTATED_OTHER) &&
+            !pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_DIR)
+        val tagName = element.normalName()
+        if (computedBidi == null && canSkipDir && tagName != "bdi" && tagName != "bdo") {
+            return null
+        }
+        val rawDir = if (canSkipDir) {
+            ""
+        } else {
+            val attr = element.attr("dir")
+            if (attr.isEmpty()) "" else attr.trim().lowercase()
+        }
+        val unicodeBidi = when (tagName) {
+            "bdi" -> computedBidi ?: "isolate"
+            "bdo" -> computedBidi ?: "bidi-override"
+            else -> computedBidi ?: if (rawDir.isNotEmpty()) "isolate" else "normal"
+        }
+        if (unicodeBidi == "normal") return null
+        if (unicodeBidi == "plaintext") return InlineBidiMode.PLAINTEXT
+        if (unicodeBidi != "isolate" &&
+            unicodeBidi != "embed" &&
+            unicodeBidi != "bidi-override" &&
+            unicodeBidi != "isolate-override"
+        ) {
+            return null
+        }
+
         val direction = when {
             // `dir` is a presentational hint, so an authored CSS direction
             // has precedence. CssResolver seeds the attribute before applying
             // the cascade and [computed.direction] is therefore the final
             // value in both the CSS and CSS-less cases.
-            rawDir in setOf("ltr", "rtl", "auto") -> computed?.direction ?: rawDir
+            rawDir == "ltr" || rawDir == "rtl" || rawDir == "auto" -> computed?.direction ?: rawDir
             // A bare bdi has HTML's auto direction. A direction that differs
             // from its parent must have been declared on the bdi itself.
-            element.normalName() == "bdi" -> computed?.direction
-                ?.takeIf { it != parentDirection }
-                ?: "auto"
+            tagName == "bdi" -> {
+                val parentDirection = element.parent()?.let { css?.computed(it)?.direction }
+                computed?.direction?.takeIf { it != parentDirection } ?: "auto"
+            }
             else -> computed?.direction ?: when (attributeDirection(element)) {
                 BookTextDirection.LTR -> "ltr"
                 BookTextDirection.RTL -> "rtl"
@@ -2514,82 +3400,89 @@ class HtmlMapper(
                 null -> "auto"
             }
         }
-        val unicodeBidi = when (element.normalName()) {
-            "bdi" -> computed?.unicodeBidi ?: "isolate"
-            "bdo" -> computed?.unicodeBidi ?: "bidi-override"
-            else -> computed?.unicodeBidi ?: if (rawDir.isNotEmpty()) "isolate" else "normal"
-        }
-        fun isolate() = when (direction) {
-            "ltr" -> InlineBidiMode.ISOLATE_LTR
-            "rtl" -> InlineBidiMode.ISOLATE_RTL
-            else -> InlineBidiMode.ISOLATE_AUTO
-        }
-        fun embed() = when (direction) {
-            "rtl" -> InlineBidiMode.EMBED_RTL
-            "ltr" -> InlineBidiMode.EMBED_LTR
-            else -> InlineBidiMode.ISOLATE_AUTO
-        }
-        fun override() = when (direction) {
-            "rtl" -> InlineBidiMode.OVERRIDE_RTL
-            else -> InlineBidiMode.OVERRIDE_LTR
-        }
-        fun isolateOverride() = when (direction) {
-            "rtl" -> InlineBidiMode.ISOLATE_OVERRIDE_RTL
-            else -> InlineBidiMode.ISOLATE_OVERRIDE_LTR
-        }
         return when (unicodeBidi) {
-            "isolate" -> isolate()
-            "embed" -> embed()
-            "bidi-override" -> override()
-            "isolate-override" -> isolateOverride()
-            "plaintext" -> InlineBidiMode.PLAINTEXT
+            "isolate" -> when (direction) {
+                "ltr" -> InlineBidiMode.ISOLATE_LTR
+                "rtl" -> InlineBidiMode.ISOLATE_RTL
+                else -> InlineBidiMode.ISOLATE_AUTO
+            }
+            "embed" -> when (direction) {
+                "rtl" -> InlineBidiMode.EMBED_RTL
+                "ltr" -> InlineBidiMode.EMBED_LTR
+                else -> InlineBidiMode.ISOLATE_AUTO
+            }
+            "bidi-override" -> when (direction) {
+                "rtl" -> InlineBidiMode.OVERRIDE_RTL
+                else -> InlineBidiMode.OVERRIDE_LTR
+            }
+            "isolate-override" -> when (direction) {
+                "rtl" -> InlineBidiMode.ISOLATE_OVERRIDE_RTL
+                else -> InlineBidiMode.ISOLATE_OVERRIDE_LTR
+            }
             else -> null
         }
     }
 
     private fun tagStyleFor(tag: String): SpanStyle? = when (tag) {
-        "i", "em", "dfn", "var" -> SpanStyle(fontStyle = FontStyle.Italic)
-        "b", "strong" -> SpanStyle(fontWeight = FontWeight.Bold)
-        "u", "ins" -> SpanStyle(textDecoration = TextDecoration.Underline)
-        "s", "strike", "del" -> SpanStyle(textDecoration = TextDecoration.LineThrough)
-        "code", "kbd", "samp", "tt" -> SpanStyle(fontFamily = FontFamily.Monospace)
-        "sup" -> SpanStyle(
-            baselineShift = BaselineShift.Superscript,
-            fontSize = TextUnit(0.75f, TextUnitType.Em),
-        )
-
-        "sub" -> SpanStyle(
-            baselineShift = BaselineShift.Subscript,
-            fontSize = TextUnit(0.75f, TextUnitType.Em),
-        )
-
-        "small" -> SpanStyle(fontSize = TextUnit(0.85f, TextUnitType.Em))
+        "i", "em", "dfn", "var" -> TAG_STYLE_ITALIC
+        "b", "strong" -> TAG_STYLE_BOLD
+        "u", "ins" -> TAG_STYLE_UNDERLINE
+        "s", "strike", "del" -> TAG_STYLE_LINE_THROUGH
+        "code", "kbd", "samp", "tt" -> TAG_STYLE_MONOSPACE
+        "sup" -> TAG_STYLE_SUP
+        "sub" -> TAG_STYLE_SUB
+        "small" -> TAG_STYLE_SMALL
         else -> null
     }
 
     /** EPUB 3 semantics plus conservative EPUB 2/Kindle legacy patterns. */
     private fun isNoteReference(link: Element, key: String): Boolean {
         if ('#' !in key) return false
-        val epubTypes = link.attr("epub:type").split(NOTE_WHITESPACE_SEPARATOR)
-        if (epubTypes.any { it.equals("noteref", ignoreCase = true) }) return true
-        if (link.attr("role").split(NOTE_WHITESPACE_SEPARATOR).any {
-                it.equals("doc-noteref", ignoreCase = true)
+        val pre = preindexOf(link)
+        if (pre != null && attrValid(RustChapterMarkup.MUTATED_OTHER)) {
+            if (pre.hasAttrFlag(RustChapterMarkup.ATTR_EPUB_NOTEREF)) return true
+            if (pre.hasAttrFlag(RustChapterMarkup.ATTR_ROLE_DOC_NOTEREF)) return true
+        } else {
+            val epubTypes = link.attr("epub:type").split(NOTE_WHITESPACE_SEPARATOR)
+            if (epubTypes.any { it.equals("noteref", ignoreCase = true) }) return true
+            if (link.attr("role").split(NOTE_WHITESPACE_SEPARATOR).any {
+                    it.equals("doc-noteref", ignoreCase = true)
+                }
+            ) {
+                return true
             }
-        ) {
-            return true
         }
-        if (link.attr("type").equals("note", ignoreCase = true)) return true
+        val isTypeNote = if (pre != null && attrValid(RustChapterMarkup.MUTATED_TYPE)) {
+            pre.hasAttrFlag(RustChapterMarkup.ATTR_TYPE_IS_NOTE) || pre.promotedNote
+        } else {
+            link.attr("type").equals("note", ignoreCase = true)
+        }
+        if (isTypeNote) return true
 
-        val hint = (link.className() + " " + link.id() + " " +
-            link.attr("rel") + " " + key.substringBefore('#').substringAfterLast('/'))
-            .lowercase()
-        if (NOTE_HINT.containsMatchIn(hint)) return true
+        val hasAttrHint = if (pre != null &&
+            attrValid(RustChapterMarkup.MUTATED_ID or RustChapterMarkup.MUTATED_OTHER)
+        ) {
+            pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_NOTE_HINT)
+        } else {
+            val attrHint = (link.className() + " " + link.id() + " " + link.attr("rel")).lowercase()
+            NOTE_HINT.containsMatchIn(attrHint)
+        }
+        if (hasAttrHint) return true
+        val fileHint = key.substringBefore('#').substringAfterLast('/').lowercase()
+        if (NOTE_HINT.containsMatchIn(fileHint)) return true
 
         // EPUB 2 generators commonly used only a superscript numeric marker.
+        val hasSup = if (pre != null && treePreindexValid()) {
+            pre.hasTag(RustChapterMarkup.TAG_SUP) ||
+                pre.hasAttrFlag(RustChapterMarkup.ATTR_ANC_HAS_SUP) ||
+                pre.hasSubtree(RustChapterMarkup.SUBTREE_HAS_SUP)
+        } else {
+            link.normalName() == "sup" || link.parents().any { it.normalName() == "sup" } ||
+                link.selectFirst("sup") != null
+        }
+        if (!hasSup) return false
         val marker = link.text().trim().trim('[', ']', '(', ')')
-        return (link.normalName() == "sup" || link.parents().any { it.normalName() == "sup" } ||
-            link.selectFirst("sup") != null) &&
-            marker.isNotEmpty() && marker.all { it.isDigit() || it in "*†‡" }
+        return marker.isNotEmpty() && marker.all { it.isDigit() || it in "*†‡" }
     }
 
     private fun safeExternalHref(href: String): Boolean {
@@ -2598,9 +3491,14 @@ class HtmlMapper(
     }
 
     private fun isMathElement(element: Element): Boolean =
-        element.normalName().substringAfterLast(':').equals("math", ignoreCase = true)
+        preindexOf(element)?.hasTag(RustChapterMarkup.TAG_MATH)
+            ?: element.normalName().substringAfterLast(':').equals("math", ignoreCase = true)
 
     private fun isDisplayMath(element: Element): Boolean {
+        val pre = preindexOf(element)
+        if (pre != null && attrValid(RustChapterMarkup.MUTATED_STYLE or RustChapterMarkup.MUTATED_OTHER)) {
+            return pre.hasAttrFlag(RustChapterMarkup.ATTR_IS_DISPLAY_MATH)
+        }
         if (element.attr("display").equals("block", ignoreCase = true)) return true
         return element.attr("style").split(';').any { declaration ->
             val (property, value) = declaration.split(':', limit = 2)
@@ -2614,18 +3512,41 @@ class HtmlMapper(
     }
 
     private fun registerMathAnchors(element: Element) {
-        registerAnchor(element.attr("id"))
+        if (attrValid(RustChapterMarkup.MUTATED_ID)) {
+            val handled = forEachMatchingPreindexed(element, RustChapterMarkup.SUBTREE_HAS_ID) { pre ->
+                pre.anchorId?.takeIf(String::isNotEmpty)?.let(::registerAnchor)
+            }
+            if (handled) return
+        }
+        registerAnchor(anchorIdOf(element))
         element.select("[id]").forEach { registerAnchor(it.attr("id")) }
     }
 
     private fun quoteMarksFor(element: Element): Pair<String, String> {
         val nested = element.parents().count { it.normalName() == "q" } % 2 == 1
-        val language = generateSequence(element as Element?) { it.parent() }
-            .mapNotNull { node ->
-                node.attr("lang").ifBlank { node.attr("xml:lang") }
-                    .substringBefore('-').lowercase().takeIf(String::isNotEmpty)
+        val canCheckTree = treePreindexValid()
+        val canCheckAttr = attrValid(RustChapterMarkup.MUTATED_OTHER)
+        var language: String? = null
+        var node: Element? = element
+        while (node != null) {
+            val pre = preindexOf(node)
+            if (pre != null && canCheckAttr) {
+                if (canCheckTree && !pre.hasAttrFlag(RustChapterMarkup.ATTR_ANC_HAS_LANG)) {
+                    break
+                }
+                if (!pre.hasAttrFlag(RustChapterMarkup.ATTR_HAS_LANG)) {
+                    node = node.parent()
+                    continue
+                }
             }
-            .firstOrNull()
+            val raw = node.attr("lang").ifBlank { node.attr("xml:lang") }
+                .substringBefore('-').lowercase()
+            if (raw.isNotEmpty()) {
+                language = raw
+                break
+            }
+            node = node.parent()
+        }
         return when (language) {
             "ru", "uk", "be", "fr" -> if (nested) "„" to "“" else "«" to "»"
             "de" -> if (nested) "‚" to "‘" else "„" to "“"
@@ -2633,7 +3554,203 @@ class HtmlMapper(
         }
     }
 
+    /**
+     * Inline [AnnotatedString] collector matching [InlineTextBuilder] while
+     * using precomputed [RustChapterMarkup.PreindexedTextNode.textFlags] to
+     * skip redundant whitespace scanning on pre-collapsed nodes.
+     */
+    private class HtmlInlineBuilder {
+        private val builder = AnnotatedString.Builder()
+        var lastWasSpace = true
+            private set
+        private var hasVisibleContent = false
+        var lastCharacter: Char? = null
+            private set
+        private val mutableImageRefs = mutableListOf<String>()
+
+        val length: Int get() = builder.length
+        val imageRefs: List<String> get() = mutableImageRefs
+        val isBlank: Boolean get() = !hasVisibleContent
+
+        fun text(raw: String) {
+            if (raw.isEmpty()) return
+            collapsedAppend(raw, RustChapterMarkup.TEXT_UNKNOWN)
+        }
+
+        fun preindexedText(raw: String, textFlags: Int) {
+            if (raw.isEmpty()) return
+            if ((textFlags and RustChapterMarkup.TEXT_HTML_BLANK) != 0) {
+                if (!lastWasSpace) {
+                    builder.append(' ')
+                    lastCharacter = ' '
+                    lastWasSpace = true
+                }
+                return
+            }
+            if ((textFlags and RustChapterMarkup.TEXT_ALREADY_COLLAPSED_ASCII) != 0) {
+                val start = if (
+                    lastWasSpace && (textFlags and RustChapterMarkup.TEXT_STARTS_HTML_WS) != 0
+                ) 1 else 0
+                if (start >= raw.length) return
+                if (start == 0) {
+                    builder.append(raw)
+                } else {
+                    builder.append(raw, start, raw.length)
+                }
+                lastCharacter = raw[raw.length - 1]
+                lastWasSpace = (textFlags and RustChapterMarkup.TEXT_ENDS_HTML_WS) != 0
+                if (!hasVisibleContent &&
+                    (textFlags and RustChapterMarkup.TEXT_HAS_KOTLIN_NON_WS) != 0
+                ) {
+                    hasVisibleContent = true
+                }
+                return
+            }
+            collapsedAppend(raw, textFlags)
+        }
+
+        private fun collapsedAppend(raw: String, textFlags: Int) {
+            val len = raw.length
+            var i = 0
+            var inSpace = lastWasSpace
+            var lastChar = '\u0000'
+            var appendedAny = false
+            while (i < len) {
+                if (isHtmlWhitespace(raw[i])) {
+                    while (i < len && isHtmlWhitespace(raw[i])) i++
+                    if (!inSpace) {
+                        builder.append(' ')
+                        lastChar = ' '
+                        inSpace = true
+                        appendedAny = true
+                    }
+                } else {
+                    val runStart = i
+                    i++
+                    while (i < len && !isHtmlWhitespace(raw[i])) i++
+                    builder.append(raw, runStart, i)
+                    lastChar = raw[i - 1]
+                    inSpace = false
+                    appendedAny = true
+                }
+            }
+            if (!appendedAny) return
+            lastCharacter = lastChar
+            lastWasSpace = inSpace
+            if (!hasVisibleContent) {
+                val visible = if (textFlags != RustChapterMarkup.TEXT_UNKNOWN) {
+                    (textFlags and RustChapterMarkup.TEXT_HAS_KOTLIN_NON_WS) != 0
+                } else {
+                    raw.isNotBlank()
+                }
+                if (visible) hasVisibleContent = true
+            }
+        }
+
+        fun preformattedText(raw: String) {
+            if (raw.isEmpty()) return
+            val chunk = if ('\r' in raw) raw.replace("\r\n", "\n").replace('\r', '\n') else raw
+            builder.append(chunk)
+            val tail = chunk[chunk.length - 1]
+            lastCharacter = tail
+            lastWasSpace = tail.isWhitespace()
+            if (!hasVisibleContent && chunk.any { !it.isWhitespace() }) {
+                hasVisibleContent = true
+            }
+        }
+
+        fun preindexedPreformattedText(raw: String, textFlags: Int) {
+            if (raw.isEmpty()) return
+            val chunk = if ((textFlags and RustChapterMarkup.TEXT_HAS_CR) == 0) {
+                raw
+            } else {
+                raw.replace("\r\n", "\n").replace('\r', '\n')
+            }
+            builder.append(chunk)
+            val tail = chunk[chunk.length - 1]
+            lastCharacter = tail
+            lastWasSpace = (textFlags and RustChapterMarkup.TEXT_ENDS_HTML_WS) != 0 || tail.isWhitespace()
+            if (!hasVisibleContent && (textFlags and RustChapterMarkup.TEXT_HAS_KOTLIN_NON_WS) != 0) {
+                hasVisibleContent = true
+            }
+        }
+
+        fun appendAnnotated(text: AnnotatedString, keepEmptyAnnotations: Boolean = false) {
+            if (text.isEmpty()) {
+                if (keepEmptyAnnotations &&
+                    (text.spanStyles.isNotEmpty() ||
+                        text.paragraphStyles.isNotEmpty() ||
+                        text.getStringAnnotations(0, 0).isNotEmpty())
+                ) {
+                    builder.append(text)
+                }
+                return
+            }
+            val images = text.getStringAnnotations(INLINE_IMAGE_TAG, 0, text.length)
+            builder.append(text)
+            lastCharacter = text.last()
+            lastWasSpace = text.last() == ' ' || text.last() == '\n'
+            mutableImageRefs += images.map { it.item }
+            if (!hasVisibleContent && text.text.indices.any { offset ->
+                    val char = text[offset]
+                    !char.isWhitespace() && !(char == INLINE_IMAGE_CHAR.single() &&
+                        images.any { offset in it.start until it.end })
+                }) hasVisibleContent = true
+        }
+
+        fun inlineAnnotated(id: String, text: AnnotatedString) {
+            if (text.isEmpty()) return
+            val contentAnnotation = AnnotatedString.Builder().apply {
+                appendInlineContent(id, text.text)
+            }.toAnnotatedString().getStringAnnotations(0, text.length).single()
+            appendAnnotated(AnnotatedString.Builder(text).apply {
+                addStringAnnotation(contentAnnotation.tag, id, 0, text.length)
+            }.toAnnotatedString())
+        }
+
+        fun lineBreak() {
+            builder.append("\n")
+            lastCharacter = '\n'
+            lastWasSpace = true
+        }
+
+        fun wordBreakOpportunity() {
+            builder.append('\u200B')
+            lastCharacter = '\u200B'
+            lastWasSpace = false
+        }
+
+        fun inlineImage(ref: String, altText: String? = null) {
+            val alt = altText?.trim()?.takeIf { it.isNotEmpty() }
+            if (alt != null) builder.pushStringAnnotation(INLINE_IMAGE_ALT_TAG, alt)
+            builder.pushStringAnnotation(INLINE_IMAGE_TAG, ref)
+            builder.appendInlineContent(ref, INLINE_IMAGE_CHAR)
+            lastCharacter = INLINE_IMAGE_CHAR.last()
+            builder.pop()
+            if (alt != null) builder.pop()
+            mutableImageRefs += ref
+            lastWasSpace = false
+        }
+
+        fun pushStyle(style: SpanStyle) {
+            builder.pushStyle(style)
+        }
+
+        fun pushAnnotation(tag: String, value: String) {
+            builder.pushStringAnnotation(tag, value)
+        }
+
+        fun pop() {
+            builder.pop()
+        }
+
+        fun build(): AnnotatedString = builder.toAnnotatedString()
+    }
+
     private companion object {
+        fun isHtmlWhitespace(ch: Char): Boolean =
+            ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\u000C'
+
         val EXPLICIT_INITIAL_TAGS = setOf("span", "font", "b", "strong", "i", "em")
         val INLINE_WHITESPACE = Regex("[\\s\\u00A0]+")
         const val DEFAULT_HTML_STRUCTURE_DEPTH = 256
@@ -2688,6 +3805,31 @@ class HtmlMapper(
             "footnotes", "endnotes", "rearnotes", "notes", "doc-endnotes",
         )
         val SAFE_EXTERNAL_SCHEMES = setOf("http", "https", "mailto", "tel")
+
+        val SUB_SUPER_FONT_SIZE = TextUnit(0.75f, TextUnitType.Em)
+        val COMBINED_UNDERLINE_LINE_THROUGH = TextDecoration.combine(
+            listOf(TextDecoration.Underline, TextDecoration.LineThrough),
+        )
+        val MARK_SPAN_STYLE = SpanStyle(background = Color(0x66FFD54F))
+        val RT_SPAN_STYLE = SpanStyle(
+            fontSize = TextUnit(0.6f, TextUnitType.Em),
+            baselineShift = BaselineShift(0.35f),
+        )
+        val RUBY_NO_CSS_RT_SPAN_STYLE = SpanStyle(fontSize = TextUnit(0.5f, TextUnitType.Em))
+        val TAG_STYLE_ITALIC = SpanStyle(fontStyle = FontStyle.Italic)
+        val TAG_STYLE_BOLD = SpanStyle(fontWeight = FontWeight.Bold)
+        val TAG_STYLE_UNDERLINE = SpanStyle(textDecoration = TextDecoration.Underline)
+        val TAG_STYLE_LINE_THROUGH = SpanStyle(textDecoration = TextDecoration.LineThrough)
+        val TAG_STYLE_MONOSPACE = SpanStyle(fontFamily = FontFamily.Monospace)
+        val TAG_STYLE_SUP = SpanStyle(
+            baselineShift = BaselineShift.Superscript,
+            fontSize = SUB_SUPER_FONT_SIZE,
+        )
+        val TAG_STYLE_SUB = SpanStyle(
+            baselineShift = BaselineShift.Subscript,
+            fontSize = SUB_SUPER_FONT_SIZE,
+        )
+        val TAG_STYLE_SMALL = SpanStyle(fontSize = TextUnit(0.85f, TextUnitType.Em))
 
         // English compile-time constants: the parser layer has no Android
         // resources. Localizing them means plumbing a strings provider

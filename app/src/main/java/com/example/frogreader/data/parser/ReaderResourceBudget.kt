@@ -6,6 +6,9 @@ import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
@@ -161,7 +164,7 @@ internal fun Throwable.rethrowIfResourceLimit() {
 }
 
 /**
- * A per-open EPUB/ZIP budget. Every decompressed byte consumed through this
+ * A per-open JVM ZIP budget. Every decompressed byte consumed through this
  * object counts toward one aggregate, including entries whose central
  * directory did not declare a size.
  */
@@ -256,63 +259,32 @@ internal class ArchiveResourceBudget(
             throw error
         }
 
-        target.parentFile?.mkdirs()
-        val partial = File(target.parentFile, target.name + ".tmp")
-        partial.delete()
         val archiveInput = try {
             zip.getInputStream(entry)
         } catch (error: IOException) {
-            partial.delete()
             if (optional) return false
             throw error
         }
         try {
             val input = if (optional) OptionalArchiveInputStream(archiveInput) else archiveInput
             input.use {
-                partial.outputStream().buffered().use { output ->
-                    copyBounded(input, output, maxBytes, label)
+                writeArchiveResourceAtomically(target) { partial ->
+                    partial.outputStream().buffered().use { output ->
+                        copyBounded(input, output, maxBytes, label)
+                    }
                 }
-            }
-            if (!partial.renameTo(target)) {
-                throw IOException("Could not publish extracted $label")
             }
             return true
         } catch (error: ResourceLimitException) {
-            partial.delete()
             if (optional && error.kind == ResourceLimitKind.ENTRY_SIZE) return false
             throw error
         } catch (_: OptionalArchiveReadException) {
-            partial.delete()
             return false
-        } catch (error: Throwable) {
-            partial.delete()
-            throw error
         }
     }
 
     private fun validateEntry(entry: ZipEntry, maxBytes: Long, label: String) {
-        if (!isSafeArchivePath(entry.name)) {
-            throw ResourceLimitException(
-                ResourceLimitKind.UNSAFE_PATH,
-                "Unsafe archive path for $label: ${entry.name}",
-            )
-        }
-        val declared = entry.size
-        if (declared > maxBytes) {
-            throw ResourceLimitException(
-                ResourceLimitKind.ENTRY_SIZE,
-                "$label declares $declared bytes; limit is $maxBytes",
-            )
-        }
-        val compressed = entry.compressedSize
-        if (declared >= limits.compressionRatioCheckFromBytes && compressed >= 0L &&
-            declared > saturatedMultiply(maxOf(1L, compressed), limits.maxCompressionRatio)
-        ) {
-            throw ResourceLimitException(
-                ResourceLimitKind.COMPRESSION_RATIO,
-                "$label has an implausible compression ratio",
-            )
-        }
+        validateArchiveEntry(entry.name, entry.size, entry.compressedSize, maxBytes, label, limits)
     }
 
     private fun readBounded(input: InputStream, maxBytes: Long, label: String): ByteArray {
@@ -353,6 +325,19 @@ internal class ArchiveResourceBudget(
     }
 }
 
+/** A concurrent extraction can only publish a complete sibling file. */
+internal inline fun writeArchiveResourceAtomically(target: File, write: (File) -> Unit) {
+    val directory = checkNotNull(target.absoluteFile.parentFile)
+    directory.mkdirs()
+    val partial = File.createTempFile(".reader-resource-", ".tmp", directory)
+    try {
+        write(partial)
+        Files.move(partial.toPath(), target.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
+    } finally {
+        partial.delete()
+    }
+}
+
 /** Marks only ZIP/input failures, so optional extraction never hides disk IO errors. */
 private class OptionalArchiveReadException(cause: IOException) : IOException(cause)
 
@@ -378,6 +363,27 @@ internal fun isSafeArchivePath(path: String): Boolean {
     if (path.isEmpty() || '\u0000' in path || '\\' in path || path.startsWith('/')) return false
     if (DRIVE_PATH.matches(path.substringBefore('/'))) return false
     return path.split('/').none { it == ".." }
+}
+
+internal fun validateArchiveEntry(
+    name: String,
+    declared: Long,
+    compressed: Long,
+    maxBytes: Long,
+    label: String,
+    limits: ReaderResourceLimits,
+) {
+    if (!isSafeArchivePath(name)) {
+        throw ResourceLimitException(ResourceLimitKind.UNSAFE_PATH, "Unsafe archive path for $label: $name")
+    }
+    if (declared > maxBytes) {
+        throw ResourceLimitException(ResourceLimitKind.ENTRY_SIZE, "$label declares $declared bytes, limit is $maxBytes")
+    }
+    if (declared >= limits.compressionRatioCheckFromBytes && compressed >= 0L &&
+        declared > saturatedMultiply(maxOf(1L, compressed), limits.maxCompressionRatio)
+    ) {
+        throw ResourceLimitException(ResourceLimitKind.COMPRESSION_RATIO, "$label has an implausible compression ratio")
+    }
 }
 
 private fun saturatedMultiply(left: Long, right: Long): Long =

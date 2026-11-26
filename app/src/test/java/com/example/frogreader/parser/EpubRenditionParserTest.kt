@@ -11,6 +11,7 @@ import com.example.frogreader.data.model.RenditionOrientation
 import com.example.frogreader.data.model.RenditionSpread
 import com.example.frogreader.data.model.ViewportSource
 import com.example.frogreader.data.parser.EpubRenditionParser
+import com.example.frogreader.data.parser.RustEpubPackage
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.parser.Parser
@@ -38,18 +39,16 @@ class EpubRenditionParserTest {
 
     @Test
     fun `namespace-prefixed OPF elements are parsed by local name`() {
-        val parsed = EpubRenditionParser.parsePackage(
-            xml(
-                """
-                    <opf:package xmlns:opf="http://www.idpf.org/2007/opf" version="3.0">
-                      <opf:metadata>
-                        <opf:meta property="rendition:layout">pre-paginated</opf:meta>
-                      </opf:metadata>
-                      <opf:manifest/>
-                      <opf:spine page-progression-direction="rtl"/>
-                    </opf:package>
-                """,
-            ),
+        val parsed = packageXml(
+            """
+                <opf:package xmlns:opf="http://www.idpf.org/2007/opf" version="3.0">
+                  <opf:metadata>
+                    <opf:meta property="rendition:layout">pre-paginated</opf:meta>
+                  </opf:metadata>
+                  <opf:manifest/>
+                  <opf:spine page-progression-direction="rtl"/>
+                </opf:package>
+            """,
         )
 
         assertSame(PublisherFormat.EPUB_3, parsed.format)
@@ -101,10 +100,8 @@ class EpubRenditionParserTest {
             xml("""<html><head><meta name="viewport" content="width=800,height=1200"/></head></html>"""),
         )
         val resolved = parsed.resolveItemRef(
-            itemRef(
-                "rendition:layout-pre-paginated rendition:orientation-landscape " +
-                    "rendition:spread-both rendition:page-spread-right",
-            ),
+            "rendition:layout-pre-paginated rendition:orientation-landscape " +
+                "rendition:spread-both rendition:page-spread-right",
             viewport,
         )
 
@@ -120,7 +117,7 @@ class EpubRenditionParserTest {
     fun `itemref deprecated portrait spread remains portrait-only`() {
         val resolved = packageRendition(
             metadata = """<meta property="rendition:spread">both</meta>""",
-        ).resolveItemRef(itemRef("rendition:spread-portrait"))
+        ).resolveItemRef("rendition:spread-portrait")
 
         assertSame(RenditionSpread.PORTRAIT, resolved.spread)
     }
@@ -135,11 +132,9 @@ class EpubRenditionParserTest {
             """,
         )
         val resolved = parsed.resolveItemRef(
-            itemRef(
-                "rendition:layout-reflowable rendition:layout-pre-paginated " +
-                    "rendition:orientation-auto rendition:orientation-portrait " +
-                    "rendition:spread-auto rendition:spread-both",
-            ),
+            "rendition:layout-reflowable rendition:layout-pre-paginated " +
+                "rendition:orientation-auto rendition:orientation-portrait " +
+                "rendition:spread-auto rendition:spread-both",
         )
 
         assertSame(RenditionLayout.PRE_PAGINATED, resolved.layout)
@@ -153,29 +148,25 @@ class EpubRenditionParserTest {
 
         assertSame(
             PagePlacement.CENTER,
-            parsed.resolveItemRef(
-                itemRef("page-spread-left rendition:page-spread-center layout-blank"),
-            ).placement,
+            parsed.resolveItemRef("page-spread-left rendition:page-spread-center layout-blank").placement,
         )
         assertEquals(
             true,
-            parsed.resolveItemRef(itemRef("layout-blank")).layoutBlank,
+            parsed.resolveItemRef("layout-blank").layoutBlank,
         )
         assertSame(
             PagePlacement.LEFT,
-            parsed.resolveItemRef(itemRef("page-spread-left facing-page-left")).placement,
+            parsed.resolveItemRef("page-spread-left facing-page-left").placement,
         )
         assertSame(
             PagePlacement.AUTO,
             parsed.resolveItemRef(
-                itemRef(
-                    "rendition:page-spread-left rendition:page-spread-right page-spread-left",
-                ),
+                "rendition:page-spread-left rendition:page-spread-right page-spread-left",
             ).placement,
         )
         assertSame(
             PagePlacement.AUTO,
-            parsed.resolveItemRef(itemRef("page-spread-left facing-page-right")).placement,
+            parsed.resolveItemRef("page-spread-left facing-page-right").placement,
         )
     }
 
@@ -426,22 +417,18 @@ class EpubRenditionParserTest {
         version: String = "3.0",
         metadata: String = "",
         spineAttributes: String = "",
-    ): EpubRenditionParser.PackageRendition = EpubRenditionParser.parsePackage(
-        xml(
-            """
-                <package xmlns="http://www.idpf.org/2007/opf" version="$version">
-                  <metadata>$metadata</metadata>
-                  <manifest/>
-                  <spine $spineAttributes><itemref idref="chapter"/></spine>
-                </package>
-            """,
-        ),
+    ): EpubRenditionParser.PackageRendition = packageXml(
+        """
+            <package xmlns="http://www.idpf.org/2007/opf" version="$version">
+              <metadata>$metadata</metadata>
+              <manifest/>
+              <spine $spineAttributes><itemref idref="chapter"/></spine>
+            </package>
+        """,
     )
 
-    private fun itemRef(properties: String) =
-        xml("""<itemref id="occurrence" idref="chapter" properties="$properties"/>""")
-            .getAllElements()
-            .first { it.normalName() == "itemref" }
+    private fun packageXml(markup: String): EpubRenditionParser.PackageRendition =
+        EpubRenditionParser.parsePackage(RustEpubPackage.parse(markup.trimIndent().encodeToByteArray()))
 
     private fun xml(markup: String): Document = Jsoup.parse(markup, "", Parser.xmlParser())
 }

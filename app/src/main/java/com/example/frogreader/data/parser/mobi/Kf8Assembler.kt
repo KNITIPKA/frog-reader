@@ -1,8 +1,11 @@
 package com.example.frogreader.data.parser.mobi
 
+import com.example.frogreader.engine.RustMobiNative
+import com.example.frogreader.engine.RustMobiWire
+import java.io.ByteArrayOutputStream
 import java.io.IOException
-import com.example.frogreader.data.parser.ResourceLimitException
-import com.example.frogreader.data.parser.ResourceLimitKind
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /** One reassembled KF8 part — a complete XHTML document (≈ a chapter). */
 internal class Kf8Part(val index: Int, val bytes: ByteArray)
@@ -23,168 +26,174 @@ internal class Kf8Book(
  */
 internal object Kf8Assembler {
 
+    private const val SKL_MAGIC = 0x314C4B53 // SKL1
+    private const val FRG_MAGIC = 0x31475246 // FRG1
+    private const val KF8_MAGIC = 0x3138464B // KF81
+
     fun assemble(section: MobiSection, rawText: ByteArray): Kf8Book {
+        RustMobiWire.requireLibrary()
         val mobi = section.mobi ?: throw IOException("Damaged KF8: no MOBI header")
-        val flows = readFlows(section, rawText)
-        val flow0 = flows[0]
+        val limits = section.pdb.limits
+        val fdst = findFdstRecord(section)
+        val flowWire = RustMobiWire.unwrapOrThrow(
+            RustMobiNative.kf8ParseFdst(
+                fdst ?: ByteArray(0),
+                rawText.size,
+                limits.maxKf8FlowAggregateBytes,
+            ),
+            "Damaged KF8: FDST header failed",
+        )!!
+        val flowRanges = decodeFlowRanges(flowWire)
 
         val skel = MobiIndex.parse(section, mobi.skelIndex, required = true)
             ?: throw IOException("Damaged KF8: skeleton index")
         val frag = MobiIndex.parse(section, mobi.fragIndex, required = true)
             ?: throw IOException("Damaged KF8: fragment index")
-        val limits = section.pdb.limits
-        if (skel.entries.size > limits.maxKf8Parts) {
-            throw ResourceLimitException(
-                ResourceLimitKind.ENTRY_COUNT,
-                "KF8 has more than ${limits.maxKf8Parts} reassembled parts",
-            )
+
+        val skelWire = encodeSkelWire(skel.entries)
+        val fragWire = encodeFragWire(frag.entries)
+        val limitsArray = longArrayOf(
+            limits.maxKf8Parts.toLong(),
+            limits.maxKf8Fragments.toLong(),
+            limits.maxKf8PartBytes,
+            limits.maxKf8AssembledBytes,
+        )
+        val assembledWire = RustMobiWire.unwrapOrThrow(
+            RustMobiNative.kf8Assemble(rawText, flowRanges, skelWire, fragWire, limitsArray),
+            "Damaged KF8: native assembly failed",
+        )!!
+        val (parts, fragLocations) = decodeAssembledWire(assembledWire)
+        val flows = if (flowRanges.size == 2 && flowRanges[0] == 0 && flowRanges[1] == rawText.size) {
+            listOf(rawText)
+        } else {
+            List(flowRanges.size / 2) { i ->
+                rawText.copyOfRange(flowRanges[2 * i], flowRanges[2 * i + 1])
+            }
         }
-
-        val parts = mutableListOf<Kf8Part>()
-        val fragLocations = mutableListOf<Pair<Int, Int>>()
-        var fragPtr = 0
-        var basePtr = 0L
-        var assembledBytes = 0L
-        var fragmentCount = 0
-
-        for ((partIndex, entry) in skel.entries.withIndex()) {
-            val numFragsLong = entry.tags[1]?.firstOrNull() ?: 0L
-            if (numFragsLong !in 0..limits.maxKf8Fragments.toLong() ||
-                numFragsLong > limits.maxKf8Fragments - fragmentCount
-            ) {
-                throw ResourceLimitException(
-                    ResourceLimitKind.ENTRY_COUNT,
-                    "KF8 has more than ${limits.maxKf8Fragments} fragments",
-                )
-            }
-            val numFrags = numFragsLong.toInt()
-            fragmentCount += numFrags
-            val geometry = entry.tags[6]
-                ?: throw IOException("Damaged KF8: skeleton geometry")
-            val skelPosLong = geometry.getOrNull(0) ?: -1L
-            val skelLenLong = geometry.getOrNull(1) ?: -1L
-            if (skelPosLong < 0 || skelLenLong < 0 ||
-                skelPosLong > flow0.size.toLong() - skelLenLong
-            ) {
-                throw IOException("Damaged KF8: skeleton range")
-            }
-            val skelPos = skelPosLong.toInt()
-            val skelLen = skelLenLong.toInt()
-            basePtr = skelPosLong + skelLenLong
-
-            // Collect this part's fragments (sequential in flow 0 after the
-            // skeleton; insert positions grow with the assembled document).
-            class Frag(val insertPos: Int, val start: Int, val length: Int)
-
-            val frags = ArrayList<Frag>(numFrags)
-            var totalFragLen = 0L
-            repeat(numFrags) {
-                val fragEntry = frag.entries.getOrNull(fragPtr++)
-                    ?: throw IOException("Damaged KF8: fragment table short")
-                val insertPos = fragEntry.label.trim().toLongOrNull()
-                    ?: throw IOException("Damaged KF8: fragment insert position")
-                val lengthLong = fragEntry.tags[6]?.getOrNull(1)
-                    ?: throw IOException("Damaged KF8: fragment length")
-                if (insertPos !in 0..Int.MAX_VALUE.toLong() || lengthLong < 0 ||
-                    basePtr > flow0.size.toLong() - lengthLong
-                ) {
-                    throw IOException("Damaged KF8: fragment range")
-                }
-                if (totalFragLen > limits.maxKf8PartBytes - lengthLong) {
-                    throw partLimit(limits.maxKf8PartBytes)
-                }
-                val length = lengthLong.toInt()
-                frags += Frag(insertPos.toInt(), basePtr.toInt(), length)
-                basePtr += lengthLong
-                totalFragLen += lengthLong
-            }
-
-            // Linear rebuild: split the skeleton at each fragment's
-            // skeleton-coordinate position (assembled position minus the
-            // fragments already inserted); disorder clamps forward.
-            val partBytes = skelLenLong + totalFragLen
-            if (partBytes > limits.maxKf8PartBytes ||
-                assembledBytes > limits.maxKf8AssembledBytes - partBytes
-            ) {
-                throw partLimit(
-                    minOf(limits.maxKf8PartBytes, limits.maxKf8AssembledBytes),
-                )
-            }
-            assembledBytes += partBytes
-            val out = ByteArray(partBytes.toInt())
-            var outPos = 0
-            var skelCursor = 0
-            var consumed = 0
-            for (piece in frags) {
-                val assembledAt = piece.insertPos - skelPos
-                var splitAt = assembledAt - consumed
-                if (splitAt < skelCursor) splitAt = skelCursor
-                if (splitAt > skelLen) splitAt = skelLen
-                val skelChunk = splitAt - skelCursor
-                System.arraycopy(flow0, skelPos + skelCursor, out, outPos, skelChunk)
-                outPos += skelChunk
-                skelCursor = splitAt
-                fragLocations += partIndex to outPos
-                System.arraycopy(flow0, piece.start, out, outPos, piece.length)
-                outPos += piece.length
-                consumed += piece.length
-            }
-            System.arraycopy(flow0, skelPos + skelCursor, out, outPos, skelLen - skelCursor)
-            parts += Kf8Part(partIndex, out)
-        }
-        if (parts.isEmpty()) throw IOException("Damaged KF8: no parts")
         return Kf8Book(parts, flows, fragLocations)
     }
 
-    private fun partLimit(maxBytes: Long) = ResourceLimitException(
-        ResourceLimitKind.ENTRY_SIZE,
-        "KF8 reassembled content exceeds $maxBytes bytes",
-    )
+    private fun decodeFlowRanges(wire: ByteArray): IntArray {
+        val input = ByteBuffer.wrap(wire, 1, wire.size - 1).order(ByteOrder.LITTLE_ENDIAN)
+        val count = RustMobiWire.readNonNegativeInt(
+            input,
+            "Truncated KF8 flow table",
+            "Invalid KF8 flow count",
+        )
+        if (count == 0 || count > input.remaining() / (2 * Int.SIZE_BYTES)) {
+            throw IOException("Invalid KF8 flow count")
+        }
+        val ranges = IntArray(count * 2) { input.int }
+        if (input.hasRemaining()) throw IOException("Trailing KF8 flow table data")
+        return ranges
+    }
 
-    /** FDST flow table; a lying header offset falls back to a record scan. */
-    private fun readFlows(section: MobiSection, rawText: ByteArray): List<ByteArray> {
-        var record: ByteArray? = null
+    private fun encodeSkelWire(entries: List<IndexEntry>): ByteArray {
+        val out = ByteArrayOutputStream(8 + entries.size * 32)
+        writeLeInt(out, SKL_MAGIC)
+        writeLeInt(out, entries.size)
+        for (entry in entries) {
+            val tag1 = entry.tags[1]?.firstOrNull()
+            if (tag1 == null) {
+                out.write(0)
+            } else {
+                out.write(1)
+                writeLeLong(out, tag1)
+            }
+            val tag6 = entry.tags[6]
+            if (tag6 == null) {
+                out.write(0)
+            } else {
+                out.write(1)
+                writeLeInt(out, tag6.size)
+                for (value in tag6) writeLeLong(out, value)
+            }
+        }
+        return out.toByteArray()
+    }
+
+    private fun encodeFragWire(entries: List<IndexEntry>): ByteArray {
+        val out = ByteArrayOutputStream(8 + entries.size * 24)
+        writeLeInt(out, FRG_MAGIC)
+        writeLeInt(out, entries.size)
+        for (entry in entries) {
+            val labelBytes = entry.label.toByteArray(Charsets.UTF_8)
+            writeLeInt(out, labelBytes.size)
+            out.write(labelBytes)
+            val len = entry.tags[6]?.getOrNull(1)
+            if (len == null) {
+                out.write(0)
+            } else {
+                out.write(1)
+                writeLeLong(out, len)
+            }
+        }
+        return out.toByteArray()
+    }
+
+    private fun decodeAssembledWire(wire: ByteArray): Pair<List<Kf8Part>, List<Pair<Int, Int>>> {
+        val input = RustMobiWire.openReader(wire, KF8_MAGIC, "Invalid KF8 assembly protocol")
+        val partCount = RustMobiWire.readNonNegativeInt(
+            input,
+            "Truncated KF8 parts",
+            "Invalid KF8 part count",
+        )
+        if (partCount > input.remaining() / Int.SIZE_BYTES) {
+            throw IOException("Invalid KF8 part count")
+        }
+        val parts = ArrayList<Kf8Part>(partCount)
+        for (index in 0 until partCount) {
+            val size = RustMobiWire.readNonNegativeInt(
+                input,
+                "Truncated KF8 part size",
+                "Truncated KF8 part bytes",
+            )
+            if (size > input.remaining()) throw IOException("Truncated KF8 part bytes")
+            val start = input.position()
+            input.position(start + size)
+            parts += Kf8Part(index, wire.copyOfRange(start, start + size))
+        }
+        val fragCount = RustMobiWire.readNonNegativeInt(
+            input,
+            "Truncated KF8 frag locations",
+            "Invalid KF8 frag location count",
+        )
+        if (fragCount > input.remaining() / (2 * Int.SIZE_BYTES)) {
+            throw IOException("Invalid KF8 frag location count")
+        }
+        val fragLocations = List(fragCount) {
+            input.int to input.int
+        }
+        if (input.hasRemaining()) throw IOException("Trailing KF8 assembly data")
+        return parts to fragLocations
+    }
+
+    private fun writeLeInt(out: ByteArrayOutputStream, value: Int) {
+        out.write(value and 0xFF)
+        out.write((value ushr 8) and 0xFF)
+        out.write((value ushr 16) and 0xFF)
+        out.write((value ushr 24) and 0xFF)
+    }
+
+    private fun writeLeLong(out: ByteArrayOutputStream, value: Long) {
+        for (shift in 0 until 64 step 8) {
+            out.write(((value ushr shift) and 0xFFL).toInt())
+        }
+    }
+
+    private fun findFdstRecord(section: MobiSection): ByteArray? {
         val declared = section.mobi?.fdstRecord ?: -1
         if (declared >= 0 && section.hasRecord(declared)) {
-            section.record(declared).takeIf { it.magic(0, "FDST") }?.let { record = it }
+            section.record(declared).takeIf { it.magic(0, "FDST") }?.let { return it }
         }
-        if (record == null) {
-            val firstNonText = (section.palmDoc.textRecordCount + 1)
-            for (i in firstNonText until section.recordCount) {
-                val prefix = section.recordPrefix(i, 4) ?: continue
-                if (prefix.magic(0, "FDST")) {
-                    record = section.record(i)
-                    break
-                }
+        val firstNonText = section.palmDoc.textRecordCount + 1
+        for (i in firstNonText until section.recordCount) {
+            val prefix = section.recordPrefix(i, 4) ?: continue
+            if (prefix.magic(0, "FDST")) {
+                return section.record(i)
             }
         }
-        val fdst = record ?: run {
-            if (rawText.size.toLong() > section.pdb.limits.maxKf8FlowAggregateBytes) {
-                throw ResourceLimitException(
-                    ResourceLimitKind.ACTUAL_AGGREGATE,
-                    "KF8 flow exceeds ${section.pdb.limits.maxKf8FlowAggregateBytes} bytes",
-                )
-            }
-            return listOf(rawText)
-        }
-        val count = fdst.index32(8)
-        if (count !in 1..4096 || 12 + count * 8 > fdst.size) return listOf(rawText)
-        val flows = ArrayList<ByteArray>(count)
-        var copiedBytes = 0L
-        for (i in 0 until count) {
-            val start = fdst.index32(12 + i * 8).coerceIn(0, rawText.size)
-            val end = fdst.index32(16 + i * 8).coerceIn(start, rawText.size)
-            val length = (end - start).toLong()
-            if (copiedBytes > section.pdb.limits.maxKf8FlowAggregateBytes - length) {
-                throw ResourceLimitException(
-                    ResourceLimitKind.ACTUAL_AGGREGATE,
-                    "KF8 flows exceed ${section.pdb.limits.maxKf8FlowAggregateBytes} bytes",
-                )
-            }
-            copiedBytes += length
-            flows += rawText.copyOfRange(start, end)
-        }
-        return if (flows.isEmpty()) listOf(rawText) else flows
+        return null
     }
 
     /** Kindle base-32 ("0123456789ABCDEFGHIJKLMNOPQRSTUV", case-insensitive). */
