@@ -3,4 +3,15 @@ plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.compose) apply false
     alias(libs.plugins.kotlin.serialization) apply false
+    alias(libs.plugins.ksp) apply false
+    alias(libs.plugins.androidx.room3) apply false
+}
+
+// The Compose wrapper and app must use the same source-maintained viewer implementation.
+subprojects {
+    configurations.configureEach {
+        resolutionStrategy.dependencySubstitution {
+            substitute(module("androidx.pdf:pdf-viewer")).using(project(":pdf-viewer"))
+        }
+    }
 }

@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, rust-engine, 'rust/**' ]
     tags: [ 'alpha-*', 'beta-*', 'v*' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, rust-engine ]
   workflow_dispatch:
 
 permissions:
@@ -38,7 +38,18 @@ jobs:
         run: |
           # Ignore only yes's SIGPIPE; an sdkmanager failure still fails CI.
           (set +o pipefail; yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null)
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;37.0.0" "ndk;30.0.16248370" "cmake;3.22.1"
+
+      - name: Set up pinned Rust and cargo-ndk
+        run: |
+          rustup show
+          cargo install cargo-ndk --version 4.1.2 --locked
+
+      - name: Check Rust workspace
+        run: |
+          cargo fmt --manifest-path rust/Cargo.toml --all -- --check
+          cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --manifest-path rust/Cargo.toml --workspace --locked
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew

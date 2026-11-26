@@ -25,9 +25,38 @@ https://github.com/tabler/tabler-icons
 
 Runtime libraries
 
+Rust engine — Rust standard library 1.90.0, JNI, LZ4, CRC32 and Brotli crates
+(including brotli-decompressor 6.4.0, alloc-stdlib 0.3.0 and alloc-no-stdlib 3.0.0).
+The native engine is packaged in every APK. Exact crate versions are locked in
+rust/Cargo.lock. Original MIT, Apache-2.0, BSD-3-Clause, Unicode-3.0 and Rust
+standard-library component notices are retained below and in
+rust-third-party-notices.txt and available in this offline viewer.
+https://github.com/rust-lang/rust/tree/1.90.0
+https://github.com/jni-rs/jni-rs
+https://github.com/dropbox/rust-brotli-decompressor
+https://github.com/dropbox/rust-alloc-no-stdlib
+
 AndroidX / Jetpack, Jetpack Compose and Material icons — Apache License 2.0.
+AndroidX PDF viewer 1.0.0-beta01 includes FrogReader modifications (2026) for
+bounded render-ahead, persistent page previews and render request scheduling.
+Upstream: https://android.googlesource.com/platform/frameworks/support/
 Copyright The Android Open Source Project.
 https://android.googlesource.com/platform/frameworks/support/
+
+PdfiumAndroidKt 2.0.3 — Apache License 2.0. Original work Copyright 2015
+Bekket McClane; modified work Copyright 2016 Bartosz Schiller and Copyright
+2023-2026 John Gray. Unmodified Maven Central binaries; used in the isolated
+worker for import metadata, first-page covers and text on Android versions
+without platform PDF text APIs.
+https://github.com/johngray1965/PdfiumAndroidKt/tree/2.0.3
+
+PDFium — Copyright 2014 The PDFium Authors. BSD-3-Clause and Apache License
+2.0, as identified in the retained upstream pdfium-LICENSE.txt.
+https://pdfium.googlesource.com/pdfium/
+
+Additional PDFium font, image-codec and rasterizer notices are retained in
+pdfium-third-party-notices.txt, including FreeType, OpenJPEG, Little CMS,
+LibTIFF, bigint, libjpeg-turbo/IJG, libpng, zlib and Anti-Grain Geometry 2.3.
 
 Kotlin standard library and kotlinx serialization/coroutines — Apache
 License 2.0. Copyright JetBrains s.r.o. and Kotlin Programming Language
@@ -54,9 +83,12 @@ https://github.com/google/guava
 jsoup — MIT. Copyright (c) 2009-2026 Jonathan Hedley.
 https://jsoup.org/
 
-Brotli Java decoder — MIT. Copyright (c) 2009, 2010, 2013-2016 by the Brotli
-Authors.
-https://github.com/google/brotli
+brotli-decompressor 6.4.0 (BSD-3-Clause/MIT), alloc-stdlib 0.3.0
+(BSD-3-Clause) and alloc-no-stdlib 3.0.0 (BSD-3-Clause) — Copyright (c) 2016
+Dropbox, Inc. Pure-Rust Brotli decompressor compiled into the native Rust
+engine for WOFF 2.0 font unpacking.
+https://github.com/dropbox/rust-brotli-decompressor
+https://github.com/dropbox/rust-alloc-no-stdlib
 
 commonmark-java and its GFM table/strikethrough extensions — BSD-2-Clause.
 Copyright (c) 2015, Atlassian Pty Ltd. All rights reserved.
@@ -262,3 +294,35 @@ distributed under the terms of the New BSD license:
 See the JSR-305 home page for more information:
 
   http://code.google.com/p/jsr-305/
+
+brotli-decompressor 6.4.0, alloc-stdlib 0.3.0 and alloc-no-stdlib 3.0.0 —
+upstream BSD-3-Clause licence (brotli-decompressor is dual-licensed
+BSD-3-Clause/MIT)
+
+Copyright (c) 2016 Dropbox, Inc.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

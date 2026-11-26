@@ -1,5 +1,37 @@
 # Changelog
 
+## BETA 3 — 2026-11-26
+
+Third beta release, introducing unified Room 3 + SQLite FTS5 storage, native PDF reading, and the native Rust reading engine (`frogreader-core`). The Android release label is **BETA 3**, version code **7**, requiring Android 9.0+ (`minSdk 28`). Because BETA 3 transitions to a permanent production signing key, upgrading from earlier debug-signed beta builds requires exporting a backup first and performing a clean reinstall.
+
+### Storage, database and backups
+
+- Migrated all library metadata, reading progress, shelves, quotes, bookmarks, Reading Queue, Reading Log, daily reading stats, achievement progress, and search indexes into a single native SQLite 3.50+ database (`files/databases/frogreader.db`) via **Room 3 (`androidx.room3`)** and **`BundledSQLiteDriver`** (`WAL` mode, foreign keys enforced, exported schemas).
+- Added FTS5 instant full-text search across the library, quotes, bookmarks, and Reading Log using stable `doc_id` mappings that survive compaction.
+- Switched `BookRepository` to ACID minimal-diff writes inside `withWriteTransaction` blocks through `DatabaseManager`.
+- Upgraded backups to **format version 4**: embeds a compacted, journal-free SQLite snapshot (`VACUUM INTO`), relativized custom font paths in `settings.json`, covers, and optional book files; restore validates staged snapshots with `PRAGMA quick_check`, `PRAGMA foreign_key_check`, and Room schema checks before swapping with `.pre_restore_bak` rollback protection.
+
+### Native PDF support
+
+- Added native PDF viewing in `:pdf-viewer` powered by **AndroidX PDF** and **PDFium**, with an isolated sandboxed document service.
+- Added a native C++ JNI PDFium adapter for annotations and word-level geometry maps, alongside cached outline/table-of-contents extraction.
+- Added PDF text selection, saved passages/quotes, notes, bookmarks, per-book reading settings, and exact reading position restoration.
+
+### Native Rust engine (`frogreader-core`)
+
+- Introduced the **FRB v2** chunked binary cache with independent LZ4-compressed, CRC32-verified manifest, globals, and chapter blocks for instant random-access chapter opens.
+- Moved EPUB, CSS, HTML, MathML, SVG, Ruby, FB2, Markdown, TXT, and MOBI/KF8 parsing into native Rust (`frogreader-core`).
+- Replaced Java font/Markdown runtime dependencies with native Rust WOFF/WOFF2 + Brotli decoding and Markdown parsing (`0` `org.commonmark` and `0` `org.brotli` runtime classes in the APK).
+- Added SIMD-accelerated native in-book search operating directly over FRB blocks without allocating Kotlin chapter models.
+- Added 6-worker parallel pagination with a direct Android `StaticLayout` fast-path (~5× faster full-book pagination on Pixel 9a), anchor-sliced instant jumps from persisted `.rpi` page indexes, and zero-flash seek and TOC transitions.
+- Added an optional **Reader loading overlay** toggle in Settings showing live loading stages and timings.
+
+### Signing, packaging and distribution
+
+- Switched to a permanent RSA-4096 PKCS12 release signing key compatible with Google Play and future in-place updates (upgrading from older debug-signed beta builds requires exporting a backup and doing a clean reinstall).
+- Added F-Droid and reproducible source build readiness: `dependenciesInfo` is excluded from both APKs and AABs, and release builds default to unsigned when external signing credentials are not supplied.
+- Unified the application as **Frog Reader** (`knitipka.frogreader`), retiring the temporary `-PrustEngineApp=true` / `.rust` parallel app split and removing stray partial locale overlays.
+
 ## BETA 2 — 2026-10-17
 
 Second beta release, covering reader performance optimizations, typography improvements, custom fonts, context menu overhaul, quotes management, and UI polish since the `beta-1` tag. The Android release label is **BETA 2**, version code **6**, retaining Android 8.0+ support.

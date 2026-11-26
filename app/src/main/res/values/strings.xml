@@ -3,7 +3,7 @@
 
     <!-- Library screen -->
     <string name="library_empty_title">No books yet</string>
-    <string name="library_empty_subtitle">Add your first EPUB, FB2, MOBI, TXT or Markdown book and it will appear here.</string>
+    <string name="library_empty_subtitle">Add your first EPUB, FB2, MOBI, PDF, TXT or Markdown book and it will appear here.</string>
     <!-- The two choices that rise above the plus button -->
     <string name="fab_menu_open">Add books</string>
     <string name="fab_menu_expanded">Expanded</string>
@@ -11,7 +11,7 @@
     <string name="fab_add_book">Add a book</string>
     <string name="fab_scan_folder">Scan a folder</string>
     <string name="library_imported">“%1$s” added to your library</string>
-    <string name="library_import_failed">Couldn\'t add this book. It may be damaged or not an EPUB, FB2, MOBI, TXT or Markdown file.</string>
+    <string name="library_import_failed">Couldn\'t add this book. It may be damaged or not an EPUB, FB2, MOBI, PDF, TXT or Markdown file.</string>
     <string name="library_import_failed_drm">This book is copy-protected (DRM) and can\'t be opened.</string>
     <string name="library_replaced">“%1$s” was replaced</string>
     <string name="library_import_cancelled">Nothing was added</string>
@@ -275,6 +275,8 @@
     <string name="theme_preview_material_note">System colours</string>
     <string name="settings_keep_screen_on">Keep screen on</string>
     <string name="settings_keep_screen_on_subtitle">The screen won\'t dim while you read</string>
+    <string name="settings_reader_load_hud">Reader loading overlay</string>
+    <string name="settings_reader_load_hud_subtitle">Show live loading stages and timings over the book</string>
     <string name="settings_volume_keys">Volume-key page turning</string>
     <string name="settings_volume_keys_subtitle">Volume down — next page, volume up — previous</string>
     <string name="settings_haptics">Vibration</string>
@@ -474,7 +476,7 @@
         <item quantity="one">%1$d bookmark</item>
         <item quantity="other">%1$d bookmarks</item>
     </plurals>
-    <string name="profile_search_hint">Search in profile (coming soon)</string>
+    <string name="profile_search_hint">Search quotes, queue, log, achievements…</string>
     <string name="profile_coming_soon">Coming soon</string>
     <string name="profile_achievements">Achievements</string>
     <string name="profile_stats">Statistics</string>
@@ -521,7 +523,7 @@
     <string name="scan_state_failed">Couldn\'t read this file</string>
     <string name="scan_retry">Try again</string>
     <string name="scan_empty">No books in this folder</string>
-    <string name="scan_empty_hint">Frog Reader looks for EPUB, FB2, MOBI, TXT and Markdown files, including in subfolders.</string>
+    <string name="scan_empty_hint">Frog Reader looks for EPUB, FB2, MOBI, PDF, TXT and Markdown files, including in subfolders.</string>
     <string name="scan_empty_search">No matching books</string>
     <string name="scan_access_lost">Lost access to this folder</string>
     <string name="scan_access_lost_hint">Pick it again to carry on.</string>
@@ -652,8 +654,58 @@
     <string name="reading_queue_more">Book actions</string>
     <string name="reading_queue_file_ready">%1$s ready to read</string>
     <string name="reading_queue_file_private">Ready to read when you choose Start reading</string>
-    <string name="reading_queue_file_failed">Could not attach this file. Choose a supported EPUB, FB2, MOBI, AZW3, TXT or MD book and try again.</string>
+    <string name="reading_queue_file_failed">Could not attach this file. Choose a supported EPUB, FB2, MOBI, AZW3, PDF, TXT or MD book and try again.</string>
     <string name="reading_queue_deleted">“%1$s” removed from your queue</string>
     <string name="reading_queue_saved_note">Your Reading Queue note</string>
     <string name="reading_queue_file_prompt">Attach a book file to start reading “%1$s”. It will stay in your queue until you start reading.</string>
+
+    <!-- Profile global search & category order -->
+    <string name="profile_search_placeholder">Search in profile…</string>
+    <string name="profile_search_back">Back</string>
+    <string name="profile_search_clear">Clear search</string>
+    <string name="profile_search_category_order_button">Category order</string>
+    <string name="profile_search_category_order_title">Category order</string>
+    <string name="profile_search_category_order_subtitle">Drag to reorder. Tap the eye to hide or show.</string>
+    <string name="profile_search_category_done">Done</string>
+    <string name="profile_search_category_quotes">Quotes</string>
+    <string name="profile_search_category_bookmarks">Bookmarks</string>
+    <string name="profile_search_category_reading_queue">Reading Queue</string>
+    <string name="profile_search_category_reading_log">Reading Log</string>
+    <string name="profile_search_category_achievements">Achievements</string>
+    <string name="profile_search_hide_category">Hide %1$s</string>
+    <string name="profile_search_show_category">Show %1$s</string>
+    <string name="profile_search_drag_category">Drag to reorder %1$s</string>
+    <string name="profile_search_move_up">Move %1$s up</string>
+    <string name="profile_search_move_down">Move %1$s down</string>
+    <string name="profile_search_show_less">Show fewer</string>
+    <string name="profile_search_empty_prompt_title">Search across your profile</string>
+    <string name="profile_search_empty_prompt_subtitle">Find saved quotes, bookmarks, Reading Queue intentions, Reading Log history, and achievements in one place.</string>
+    <string name="profile_search_no_results_title">No results for “%1$s”</string>
+    <string name="profile_search_no_results_subtitle">Check the spelling or show hidden categories in Category order.</string>
+    <string name="profile_search_all_hidden_title">All categories are hidden</string>
+    <string name="profile_search_all_hidden_subtitle">Turn on at least one category in Category order to see search results.</string>
+    <string name="profile_search_meta_page">%1$s · p. %2$d</string>
+    <string name="profile_search_meta_chapter">%1$s · Ch. %2$d</string>
+    <string name="profile_search_quoted_text">“%1$s”</string>
+    <string name="profile_search_log_subtitle_with_author">%1$s · %2$s</string>
+    <string name="profile_search_achievement_unlocked">Unlocked · %1$s</string>
+    <string name="profile_search_achievement_progress">In progress · %1$s</string>
+
+    <!-- Reader achievements catalog -->
+    <string name="achievement_first_book_title">First Chapter Closed</string>
+    <string name="achievement_first_book_desc">Finish your first book</string>
+    <string name="achievement_five_books_title">Steady Reader</string>
+    <string name="achievement_five_books_desc">Finish 5 books</string>
+    <string name="achievement_twenty_five_books_title">Personal Library</string>
+    <string name="achievement_twenty_five_books_desc">Finish 25 books</string>
+    <string name="achievement_time_well_spent_title">Time Well Spent</string>
+    <string name="achievement_time_well_spent_desc">Read for 10 hours in total</string>
+    <string name="achievement_hundred_hours_title">Deep Immersion</string>
+    <string name="achievement_hundred_hours_desc">Read for 100 hours in total</string>
+    <string name="achievement_week_streak_title">Week of Reading</string>
+    <string name="achievement_week_streak_desc">Keep a 7-day reading streak</string>
+    <string name="achievement_quote_keeper_title">Keeper of Words</string>
+    <string name="achievement_quote_keeper_desc">Save 10 quotes in your books</string>
+    <string name="achievement_curious_queue_title">Next on the Desk</string>
+    <string name="achievement_curious_queue_desc">Keep 5 books in your Reading Queue</string>
 </resources>

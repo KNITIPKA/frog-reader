@@ -4,8 +4,8 @@
 
 Built with **Kotlin, Jetpack Compose and Material 3**, FrogReader combines a carefully designed native interface with a dedicated reading engine, a personal library and tools to track your reading — all without an account or cloud dependency.
 
-[![Release](https://img.shields.io/badge/Release-BETA%202-2f7356?style=for-the-badge&logo=android&logoColor=white)](https://github.com/KNITIPKA/frog-reader/releases/tag/beta-2)
-[![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://developer.android.com/)
+[![Release](https://img.shields.io/badge/Release-BETA%203-2f7356?style=for-the-badge&logo=android&logoColor=white)](https://github.com/KNITIPKA/frog-reader/releases/tag/beta-3)
+[![Android](https://img.shields.io/badge/Android-9.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://developer.android.com/)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0%2B-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 [![Material 3](https://img.shields.io/badge/Jetpack%20Compose-Material%203-4285F4?style=for-the-badge&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![CI](https://img.shields.io/github/actions/workflow/status/KNITIPKA/frog-reader/ci.yml?branch=main&label=CI&logo=github&style=for-the-badge)](https://github.com/KNITIPKA/frog-reader/actions/workflows/ci.yml)
@@ -19,11 +19,11 @@ Built with **Kotlin, Jetpack Compose and Material 3**, FrogReader combines a car
   <img src="assets/banners/frogreader-dark.webp" alt="FrogReader — Midnight & Dark Theme Showcase" width="100%" />
 </p>
 
-### [Download FrogReader BETA 2](https://github.com/KNITIPKA/frog-reader/releases/tag/beta-2)
+### [Download Frog Reader BETA 3](https://github.com/KNITIPKA/frog-reader/releases/tag/beta-3)
 
-[Release notes](docs/releases/BETA_2.md) · [Changelog](CHANGELOG.md) · [Report a bug](https://github.com/KNITIPKA/frog-reader/issues)
+[Changelog](CHANGELOG.md) · [Releases](https://github.com/KNITIPKA/frog-reader/releases) · [Report a bug](https://github.com/KNITIPKA/frog-reader/issues)
 
-**Requires Android 8.0 or later.** Download the APK from the release assets and open it on your device.
+**Requires Android 9.0 or later.** Download the APK from the release assets and open it on your device.
 
 > **Beta software:** Bugs and unfinished features remain. FrogReader is not on Google Play yet. Export a backup before upgrading or installing a development build.
 
@@ -60,14 +60,14 @@ The **Profile** brings together recent activity, streaks and daily reading goals
 | **MOBI / KF8 / AZW3 / PalmDoc** | Supported Kindle text and resource structures |
 | **TXT** | Plain text with UTF-8, marked UTF-16 and legacy Cyrillic decoding |
 | **Markdown** | CommonMark, GFM tables, strikethrough and heading-based navigation |
+| **PDF** | PDFium Info metadata, first-page cover and cached embedded contents; native sandboxed rendering, zoom, page navigation, bookmarks and exact position; text-layer search, selection and saved highlights on Android 9+ |
 
-The engine renders books natively rather than through a full browser CSS implementation. Complex publisher formatting can have limitations. **PDF, KFX, DRM-protected books and full fixed-layout EPUB/KF8 are not supported in Beta 1.** See the [EPUB rendering audit](docs/epub-standard-ebooks-audit.md) for technical details and limitations.
+The engine renders books natively rather than through a full browser CSS implementation. Complex publisher formatting can have limitations. **KFX, DRM-protected books and full fixed-layout EPUB/KF8 are not supported.** Embedded PDF contents come from the isolated PDFium worker and are cached separately from the viewer; files without an outline retain page navigation. See [PDF support](docs/pdf-support.md) and the [EPUB rendering audit](docs/epub-standard-ebooks-audit.md) for details and limitations.
 
 ## Roadmap
 
 Planned features and continuing improvements include:
 
-- **PDF reading** support.
 - **Text-to-Speech:** Android's TTS engines and an optional **on-device AI narration model**.
 - **Console-style achievements** for reading milestones, completed books and streaks.
 - **Detailed statistics** for reading time, habits, progress and personal records.
@@ -79,15 +79,28 @@ These are plans, not promises for a particular release. Statistics, Achievements
 
 ## Build from source
 
-Use **JDK 21**, a compatible Android Studio version and Android SDK platform **37** (min SDK 26; target SDK 36).
+Use **JDK 21**, a compatible Android Studio version and Android SDK platform **37** (`minSdk` 28 / Android 9.0+; `targetSdk` 36).
+Install **rustup** with Cargo on `PATH`: **Frog Reader** (`knitipka.frogreader`) ships the native Rust reading engine (`frogreader-core`) by default, so JVM tests build the pinned Rust 1.90.0 host JNI library and APK/AAB builds require the pinned `cargo-ndk` builder.
 
 ```sh
 git clone https://github.com/KNITIPKA/frog-reader.git
 cd frog-reader
+rustup show
+cargo install cargo-ndk --version 4.1.2 --locked
 ./gradlew test :app:assembleDebug
 ```
 
-For release builds, signing information, contribution guidelines and testing expectations, see [CONTRIBUTING.md](CONTRIBUTING.md). For the complete release history, see [CHANGELOG.md](CHANGELOG.md).
+### Release builds & F-Droid / Play Store signing
+
+Release builds (`./gradlew :app:assembleRelease` or `:app:bundleRelease`) run R8 optimization and omit Google's encrypted `dependenciesInfo` block (`includeInApk = false`, `includeInBundle = false`) for reproducible and F-Droid builds. Without signing credentials, release artifacts are intentionally produced **unsigned**.
+
+To produce a signed release APK or AAB, configure your keystore (`FROGREADER_KEYSTORE_PATH`, `FROGREADER_KEYSTORE_PASSWORD`, `FROGREADER_KEY_ALIAS`, `FROGREADER_KEY_PASSWORD`) using either:
+
+- environment variables,
+- `-PsigningProperties=/path/to/signing.properties`, or
+- a gitignored `signing.properties` file in the repository root.
+
+For pinned `cargo-ndk` setup, native format internals and benchmark commands, see [the Rust engine build guide](rust/README.md). For contribution guidelines and testing expectations, see [CONTRIBUTING.md](CONTRIBUTING.md). For the complete release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Feedback and contributions
 

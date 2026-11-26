@@ -9,6 +9,7 @@
 /.idea/assetWizardSettings.xml
 .DS_Store
 /build
+/pdf-viewer/build/
 /captures
 .externalNativeBuild
 .cxx
@@ -22,6 +23,7 @@ local.properties
 *.apks
 *.jks
 *.keystore
+*.p12
 /signing.properties
 /keystore.properties
 /release-signing.properties
@@ -37,3 +39,6 @@ AGENTS.md
 
 # Local session notes and unpublished review evidence
 /docs/epub-engine-next-session.md
+
+# Rebuildable Rust outputs; Cargo.lock is checked in for reproducible builds.
+/rust/target/

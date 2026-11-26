@@ -7,5 +7,21 @@
             android:taskAffinity="${applicationId}.reader_test"
             android:theme="@style/Theme.FrogReader"
             android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name="com.example.frogreader.debug.PdfSelectionTestActivity"
+            android:exported="false"
+            android:taskAffinity="${applicationId}.pdf_selection_test"
+            android:theme="@style/Theme.FrogReader" />
+        <activity
+            android:name="com.example.frogreader.debug.PdfChromeTestActivity"
+            android:exported="false"
+            android:taskAffinity="${applicationId}.pdf_chrome_test"
+            android:theme="@style/Theme.FrogReader" />
+        <activity
+            android:name="com.example.frogreader.debug.PdfSinglePageTestActivity"
+            android:exported="false"
+            android:taskAffinity="${applicationId}.pdf_single_page_test"
+            android:theme="@style/Theme.FrogReader"
+            android:windowSoftInputMode="adjustResize" />
     </application>
 </manifest>

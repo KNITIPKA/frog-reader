@@ -107,6 +107,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="content" />
+                <data android:mimeType="application/pdf" />
                 <data android:mimeType="application/epub+zip" />
                 <data android:mimeType="application/x-fictionbook+xml" />
                 <data android:mimeType="application/zip" />
@@ -131,6 +132,13 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/book_share_paths" />
         </provider>
+
+        <!-- Compatibility text extraction has no app UID, storage or network permissions. -->
+        <service
+            android:name=".data.pdf.compat.PdfTextService"
+            android:exported="false"
+            android:isolatedProcess="true"
+            android:process=":pdf_text" />
 
         <receiver
             android:name=".widget.ContinueReadingWidgetReceiver"

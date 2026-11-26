@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Frog Reader"
 include(":app")
+include(":pdf-viewer")

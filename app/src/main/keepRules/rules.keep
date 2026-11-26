@@ -4,9 +4,12 @@
 # For more details, see
 #   https://d.android.com/r/tools/r8/keep-rules
 
-# Room (used by WorkManager, which Glance widgets depend on) instantiates its
-# generated *_Impl database classes reflectively.
+# Room (WorkManager uses androidx.room; FrogReader uses androidx.room3)
+# instantiates its generated *_Impl database classes reflectively.
 -keep class * extends androidx.room.RoomDatabase {
+    <init>();
+}
+-keep class * extends androidx.room3.RoomDatabase {
     <init>();
 }
 
@@ -38,3 +41,59 @@
 }
 -keep class com.example.frogreader.data.model.FirstLaunchState { *; }
 -keep class com.example.frogreader.data.model.FirstLaunchState$$serializer { *; }
+
+# PDFium registers these JNI classes by their literal names in JNI_OnLoad.
+# Its 2.0.3 AAR supplies no consumer rules, so retain every registered entry point,
+# including Kotlin companion/static bridges, in optimized release builds.
+-keep class io.legere.pdfiumandroid.core.jni.** { *; }
+# FindClass/ThrowNew and native callbacks also refer to these literal type/member names.
+-keep class io.legere.pdfiumandroid.api.PdfPasswordException { <init>(...); }
+-keep interface io.legere.pdfiumandroid.api.PdfWriteCallback { *; }
+-keep class io.legere.pdfiumandroid.core.util.PdfiumNativeSourceBridge { *; }
+
+# Rust exports JNI methods with this literal class/member name.
+-keep class com.example.frogreader.engine.RustNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.engine.RustChunkedCacheNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.engine.RustPageIndexNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.engine.RustEpubZipNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.engine.RustEpubPackageNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.engine.RustCssSyntaxNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.data.parser.RustCssMatchNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.data.parser.RustCssSelectorsNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.data.parser.RustCssValuesNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.data.parser.RustCssComputedNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.data.parser.RustChapterMarkupNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.engine.RustMobiNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.engine.RustFb2TxtNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.engine.RustSearchNative {
+    native <methods>;
+}
+-keep class com.example.frogreader.engine.RustWoffNative {
+    native <methods>;
+}

@@ -30,7 +30,8 @@ OFL, reserve additional font names, or alter the third-party icon licence.
 
 | Component | Licence | Upstream |
 | --- | --- | --- |
-| AndroidX / Jetpack libraries, Compose and Material icons | Apache-2.0 | [AndroidX](https://android.googlesource.com/platform/frameworks/support/) |
+| AndroidX / Jetpack libraries, Compose and Material icons (PDF viewer includes FrogReader render-ahead modifications; see `pdf-viewer/UPSTREAM.md`) | Apache-2.0 | [AndroidX](https://android.googlesource.com/platform/frameworks/support/) |
+| PdfiumAndroidKt 2.0.3, including the native PDFium import and text backend | Apache-2.0 (binding), BSD-3-Clause and Apache-2.0 (PDFium) | [PdfiumAndroidKt](https://github.com/johngray1965/PdfiumAndroidKt/tree/2.0.3), Copyright 2015 Bekket McClane, 2016 Bartosz Schiller, 2023–2026 John Gray; [PDFium](https://pdfium.googlesource.com/pdfium/), Copyright 2014 The PDFium Authors; [retained PDFium licence](app/src/main/assets/licenses/pdfium-LICENSE.txt) |
 | Kotlin standard library and kotlinx serialization/coroutines | Apache-2.0 | [Kotlin](https://github.com/JetBrains/kotlin), [kotlinx serialization](https://github.com/Kotlin/kotlinx.serialization), [kotlinx coroutines](https://github.com/Kotlin/kotlinx.coroutines) |
 | Coil | Apache-2.0 | [Coil](https://github.com/coil-kt/coil) |
 | AndroidSVG (used by Coil for SVG images) | Apache-2.0 | [AndroidSVG](https://github.com/BigBadaboom/androidsvg) |
@@ -46,11 +47,35 @@ OFL, reserve additional font names, or alter the third-party icon licence.
 | Checker Framework qualifiers | MIT | [Checker Framework](https://github.com/typetools/checker-framework) |
 | JSR305 annotations (Guava dependency) | New BSD upstream notice; Apache-2.0 in Maven metadata | [Original FindBugs notice](https://github.com/findbugsproject/findbugs/blob/master/findbugs/licenses/LICENSE-jsr305.txt) |
 | jsoup | MIT | [jsoup](https://jsoup.org/), Copyright (c) 2009–2026 Jonathan Hedley; [full notice](app/src/main/assets/licenses/jsoup-MIT.txt) |
-| Brotli Java decoder | MIT | [Brotli](https://github.com/google/brotli), Copyright (c) 2009, 2010, 2013–2016 by the Brotli Authors; [full notice](app/src/main/assets/licenses/brotli-MIT.txt) |
 | commonmark-java and its GFM table/strikethrough extensions | BSD-2-Clause | [commonmark-java](https://github.com/commonmark/commonmark-java), Copyright (c) 2015 Atlassian Pty Ltd; [full notice](app/src/main/assets/licenses/commonmark-BSD.txt) |
+| Rust standard library 1.90.0 and native engine crates (versions in `rust/Cargo.lock`), including `brotli-decompressor 6.4.0`, `alloc-stdlib 0.3.0` and `alloc-no-stdlib 3.0.0` | MIT, Apache-2.0, MPL-2.0, BSD-3-Clause, Zlib, Unicode-3.0 and other upstream licences in the full notices | [Rust 1.90.0](https://github.com/rust-lang/rust/tree/1.90.0), [jni-rs](https://github.com/jni-rs/jni-rs), [zip](https://github.com/zip-rs/zip2), [zlib-rs](https://github.com/trifectatechfoundation/zlib-rs), [rust-brotli-decompressor](https://github.com/dropbox/rust-brotli-decompressor), [rust-alloc-no-stdlib](https://github.com/dropbox/rust-alloc-no-stdlib), [full Rust notices](app/src/main/assets/licenses/rust-third-party-notices.txt) |
+
+The unmodified MPL-2.0 source used in the APK is available from the published
+[cssparser 0.38.0](https://static.crates.io/crates/cssparser/cssparser-0.38.0.crate),
+[cssparser-macros 0.7.1](https://static.crates.io/crates/cssparser-macros/cssparser-macros-0.7.1.crate),
+[dtoa-short 0.3.5](https://static.crates.io/crates/dtoa-short/dtoa-short-0.3.5.crate)
+and [selectors 0.41.0](https://static.crates.io/crates/selectors/selectors-0.41.0.crate)
+source archives. The in-app Rust notices contain the same links and the MPL text.
+
+Chapter markup uses [html5ever 0.40.1](https://static.crates.io/crates/html5ever/html5ever-0.40.1.crate)
+and [quick-xml](https://github.com/tafia/quick-xml). Character decoding uses
+[encoding_rs 0.8.35](https://static.crates.io/crates/encoding_rs/encoding_rs-0.8.35.crate).
+WOFF2 Brotli decompression uses pure-Rust
+[brotli-decompressor 6.4.0](https://static.crates.io/crates/brotli-decompressor/brotli-decompressor-6.4.0.crate)
+(`BSD-3-Clause/MIT`),
+[alloc-stdlib 0.3.0](https://static.crates.io/crates/alloc-stdlib/alloc-stdlib-0.3.0.crate)
+(`BSD-3-Clause`) and
+[alloc-no-stdlib 3.0.0](https://static.crates.io/crates/alloc-no-stdlib/alloc-no-stdlib-3.0.0.crate)
+(`BSD-3-Clause`), Copyright (c) 2016 Dropbox, Inc.
+The [in-app notices](app/src/main/assets/licenses/third-party-notices.txt) and
+[in-app Rust notices](app/src/main/assets/licenses/rust-third-party-notices.txt)
+retain their licences and the BSD-3-Clause notice for the WHATWG encoding data.
 
 The [Apache 2.0 text](app/src/main/assets/licenses/Apache-2.0.txt) is included
-for Apache-licensed dependencies. Declared versions are in
+for Apache-licensed dependencies. PDFium's font, image-codec and rasterizer
+component notices are retained in
+[pdfium-third-party-notices.txt](app/src/main/assets/licenses/pdfium-third-party-notices.txt).
+Declared versions are in
 `gradle/libs.versions.toml`; Gradle's `releaseRuntimeClasspath` dependency report
 provides the resolved transitive graph for a build. This table describes the
 runtime components rather than changing their licences. Additional original
@@ -62,7 +87,8 @@ which is packaged in the APK and available in the offline viewer.
 
 Gradle and its wrapper scripts retain their Apache-2.0 notices. JVM and
 instrumentation test dependencies retain their upstream licences: JUnit 4
-(EPL-1.0), Mockito (MIT), mockito-kotlin (MIT), AndroidX Test / Espresso
+(EPL-1.0), Brotli Java decoder `org.brotli:dec` (MIT, [full notice](app/src/main/assets/licenses/brotli-MIT.txt)),
+Mockito (MIT), mockito-kotlin (MIT), AndroidX Test / Espresso
 (Apache-2.0), kXML2 (BSD-3-Clause), XML Pull API (public domain), and the Kotlin
 coroutines test library (Apache-2.0). These test libraries are not packaged in
 the release APK.
