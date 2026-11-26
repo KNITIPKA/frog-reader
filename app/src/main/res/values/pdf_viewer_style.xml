@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Resource identities for PdfViewerResources; the live values come from ReaderColors. -->
+    <color name="pdf_viewer_on_chrome">#00000000</color>
+    <color name="pdf_viewer_chrome">#00000000</color>
+    <color name="pdf_viewer_accent">#00000000</color>
+    <style name="ThemeOverlay.FrogReader.PdfViewer" parent="">
+        <item name="showFastScrollPageIndicator">false</item>
+        <item name="colorOnSurface">@color/pdf_viewer_on_chrome</item>
+        <item name="colorSurfaceContainerHigh">@color/pdf_viewer_chrome</item>
+        <item name="colorPrimary">@color/pdf_viewer_accent</item>
+    </style>
+</resources>

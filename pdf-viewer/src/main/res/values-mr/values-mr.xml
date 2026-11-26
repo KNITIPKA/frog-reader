@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    <string msgid="5882082700509010966" name="action_edit">"फाइल संपादित करा"</string>
+    <string msgid="3857939523964276535" name="annotation_color_palette_button_content_desc">"कलर पॅलेट"</string>
+    <string msgid="7095965950282529732" name="annotation_eraser_button_content_desc">"इरेझर"</string>
+    <string msgid="4145607409953592495" name="annotation_highlighter_button_content_desc">"हायलायटर"</string>
+    <string msgid="3429267369324256891" name="annotation_pen_button_content_desc">"पेन"</string>
+    <string msgid="6173017390316607430" name="annotation_redo_button_content_desc">"पुन्हा करा"</string>
+    <string msgid="7576992521535921829" name="annotation_toggle_annotation_button_content_desc">"भाष्य टॉगल करा"</string>
+    <string msgid="8677860607653139057" name="annotation_undo_button_content_desc">"पहिल्यासारखे करा"</string>
+    <string msgid="5855794576957267334" name="button_cancel">"रद्द करा"</string>
+    <string msgid="5445014062438566842" name="button_open">"उघडा"</string>
+    <string msgid="7677598370087228978" name="cannot_edit_pdf">"ही PDF संपादित केली जाऊ शकत नाही"</string>
+    <string msgid="8943155331324944981" name="clipboard_label">"आशय PDF वरून कॉपी केला आहे"</string>
+    <string msgid="7379823906921067675" name="close_button_description">"बंद करा"</string>
+    <string msgid="8730230629127076731" name="combobox_custom_option">"कस्टम"</string>
+    <string msgid="7020926320719465164" name="confirm_selection">"कन्फर्म करा"</string>
+    <string msgid="385275789223074637" name="desc_copy">"निवडलेला आशय तुमच्या क्लिपबोर्डवर कॉपी करतो"</string>
+    <string msgid="4764327179483836535" name="desc_copy_link">"लिंक तुमच्या क्लिपबोर्डवर कॉपी करतो"</string>
+    <string msgid="7027325672358507448" name="desc_email_link">"ईमेल: <xliff:g id="EMAIL_ADDRESS">%1$s</xliff:g>"</string>
+    <string msgid="5041794048330057239" name="desc_empty_page">"रिक्त पेज"</string>
+    <string msgid="1333698934111921601" name="desc_goto">"इथे जा"</string>
+    <string msgid="2461368384824849714" name="desc_goto_link">"पेज <xliff:g id="PAGE_NUMBER">%1$d</xliff:g> वर जा"</string>
+    <string msgid="7700601988820586333" name="desc_image_alt_text">"इमेज: <xliff:g id="ALT_TEXT">%1$s</xliff:g>"</string>
+    <string msgid="9085362382536609454" name="desc_jump_to">"PDF मधील विभागावर किंवा पेजवर जातो"</string>
+    <string msgid="6702471448987833953" name="desc_page">"पेज <xliff:g id="PAGE">%1$d</xliff:g>"</string>
+    <string msgid="5286496438609641577" name="desc_page_range">"<xliff:g id="TOTAL">%3$d</xliff:g> पैकी पेज <xliff:g id="FIRST">%1$d</xliff:g> ते <xliff:g id="LAST">%2$d</xliff:g>"</string>
+    <string msgid="8459583146661044094" name="desc_page_single">"<xliff:g id="TOTAL">%2$d</xliff:g> पैकी पेज <xliff:g id="PAGE">%1$d</xliff:g>"</string>
+    <string msgid="2564017005407577604" name="desc_page_with_text">"पेज <xliff:g id="PAGE_NUMBER">%1$d</xliff:g>: <xliff:g id="PAGE_TEXT">%2$s</xliff:g>"</string>
+    <string msgid="6636473611443746739" name="desc_password">"पासवर्ड फील्ड"</string>
+    <string msgid="4718823067483963845" name="desc_password_incorrect">"पासवर्ड चुकीचा आहे"</string>
+    <string msgid="4676206571020946870" name="desc_password_incorrect_message">"पासवर्ड चुकीचा आहे. पुन्हा प्रयत्न करा."</string>
+    <string msgid="4353979540148077296" name="desc_pdf_view">"PDF दृश्य"</string>
+    <string msgid="4986414958429253135" name="desc_phone_link">"फोन: <xliff:g id="PHONE_NUMBER">%1$s</xliff:g>"</string>
+    <string msgid="428248654717550270" name="desc_select_all">"PDF मधील सर्व मजकूर निवडतो"</string>
+    <string msgid="3249210022376857070" name="desc_selection_start">"निवडणे सुरू करा"</string>
+    <string msgid="2690168835536726898" name="desc_selection_stop">"निवडणे संपवा"</string>
+    <string msgid="2776023299237058419" name="desc_web_link">"लिंक: <xliff:g id="DESTINATION">%1$s</xliff:g>"</string>
+    <string msgid="3323639528531061592" name="desc_web_link_shortened_to_domain">"लिंक: <xliff:g id="DESTINATION_DOMAIN">%1$s</xliff:g> वरील वेबपेज"</string>
+    <string msgid="7318480946145947242" name="desc_zoom">"<xliff:g id="FIRST">%1$d</xliff:g> टक्के झूम करा"</string>
+    <string msgid="345675813790884187" name="discard_button">"काढून टाका"</string>
+    <string msgid="6052519273995024254" name="discard_changes_dialog_message">"तुमचे बदल सेव्ह केले नाहीत."</string>
+    <string msgid="8471151263363129054" name="discard_changes_dialog_title">"बदल काढून टाकायचे आहेत का?"</string>
+    <string msgid="3400883576932438749" name="error_cannot_open_password_protected_pdf">"पासवर्ड संरक्षित PDFs ना सपोर्ट नाही."</string>
+    <string msgid="2361919778558145071" name="error_cannot_open_pdf">"PDF फाइल उघडू शकत नाही"</string>
+    <string msgid="7567006188638831878" name="error_file_format_pdf">"PDF दाखवू शकत नाही (<xliff:g id="TITLE">%1$s</xliff:g> चा फॉरमॅट चुकीचा आहे)"</string>
+    <string msgid="1592475819957182385" name="error_on_page">"<xliff:g id="PAGE">%1$d</xliff:g> पेज दाखवू शकत नाही (फाइल एरर)"</string>
+    <string msgid="1491143649111222713" name="fast_scroller_thumb">"स्क्रोल बार"</string>
+    <string msgid="4003885928556884091" name="file_error">"फाइल उघडता आली नाही. परवानगीशी संबंधित संभाव्य समस्या?"</string>
+    <string msgid="2305283577544618880" name="form_click_enters_text_edit_mode_instruction">"क्लिक केल्याने मजकूर संपादन मोडमध्ये एंटर होईल."</string>
+    <string msgid="5648228168212004143" name="form_click_opens_choices_menu_instruction">"क्लिक केल्याने निवडण्यासाठीचा मेनू उघडेल."</string>
+    <string msgid="7171111300244445911" name="form_click_toggle_instruction">"क्लिक केल्याने मूल्य टॉगल केले जाईल."</string>
+    <string msgid="3883820498421821863" name="form_current_value">"वर्तमान मूल्य: <xliff:g id="WIDGET_VALUE">%1$s</xliff:g>."</string>
+    <string msgid="6137116306327174299" name="form_multiselect_type">"प्रकार: मल्टी-सिलेक्ट <xliff:g id="WIDGET_TYPE_NAME">%1$s</xliff:g>."</string>
+    <string msgid="4928929192592391646" name="form_read_only">"विजेट फक्त रीड-ओन्ली आहे आणि त्यात बदल केले जाऊ शकत नाही."</string>
+    <string msgid="2718582322716402117" name="form_title">"शीर्षक: <xliff:g id="WIDGET_ACCESSIBILITY_TITLE">%1$s</xliff:g>."</string>
+    <string msgid="1302137779809645840" name="form_type">"प्रकार: <xliff:g id="WIDGET_TYPE_NAME">%1$s</xliff:g>."</string>
+    <string msgid="6371515914365431330" name="form_unknown">"अज्ञात"</string>
+    <string msgid="960532222685914495" name="form_value">"मूल्य: <xliff:g id="WIDGET_VALUE">%1$s</xliff:g>."</string>
+    <string msgid="5841730047544552656" name="form_widget">"फॉर्म विजेट"</string>
+    <string msgid="2905625606101301245" name="form_widget_type_checkbox">"चेक बॉक्स"</string>
+    <string msgid="3912742706795495520" name="form_widget_type_combo_box">"काँबो बॉक्स"</string>
+    <string msgid="431828611710070971" name="form_widget_type_list_box">"सूची बॉक्स"</string>
+    <string msgid="7978535904272874920" name="form_widget_type_push_button">"पुश बटण"</string>
+    <string msgid="4798553968129281550" name="form_widget_type_radio_button">"रेडिओ बटण"</string>
+    <string msgid="3811511096215331673" name="form_widget_type_signature">"स्वाक्षरी"</string>
+    <string msgid="4443782242324937941" name="form_widget_type_text_field">"मजकूर फील्ड"</string>
+    <string msgid="5385388836603550565" name="hint_find">"फाइल शोधा"</string>
+    <string msgid="7573006208701305988" name="keep_editing_button">"संपादन करणे सुरू ठेवा"</string>
+    <string msgid="869104793055534158" name="label_copy_link">"लिंक कॉपी करा"</string>
+    <string msgid="462543500326296329" name="label_jump_to">"यावर जा"</string>
+    <string msgid="8290964180158460076" name="label_page_range">"<xliff:g id="FIRST">%1$d</xliff:g>-<xliff:g id="LAST">%2$d</xliff:g> / <xliff:g id="TOTAL">%3$d</xliff:g>"</string>
+    <string msgid="456123685879261101" name="label_page_single">"<xliff:g id="PAGE">%1$d</xliff:g> / <xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="4456258714097111908" name="label_password_first">"पासवर्ड"</string>
+    <string msgid="5291118378657145978" name="label_password_incorrect">"पासवर्ड चुकीचा आहे. पुन्हा प्रयत्न करा."</string>
+    <string msgid="4996847358326345288" name="match_status_description">"<xliff:g id="TOTAL">%2$d</xliff:g> पैकी <xliff:g id="POSITION">%1$d</xliff:g>"</string>
+    <string msgid="6288242289981639727" name="message_match_status">"<xliff:g id="POSITION">%1$d</xliff:g> / <xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="5929387004361286433" name="message_no_match_status">"कोणतेही जुळणारे परिणाम नाहीत"</string>
+    <string msgid="3520133467908240802" name="needs_more_data">"PDF दस्तऐवजावर प्रक्रिया करण्यासाठी डेटा पुरेसा नाही"</string>
+    <string msgid="4702699322249103693" name="next_button_description">"पुढील"</string>
+    <string msgid="2968770793669433462" name="page_broken">"पीडीएफ दस्तऐवजासाठी पेज खंडित झाले आहे"</string>
+    <string msgid="8875370870743585303" name="password_not_entered">"अनलॉक करण्यासाठी पासवर्ड एंटर करा"</string>
+    <string msgid="7693112422816705779" name="pdf_brush_slider_content_description">"रेषेची रुंदी"</string>
+    <string msgid="3287950599604474450" name="pdf_error">"PDF दस्तऐवजावर प्रक्रिया करता आली नाही!"</string>
+    <string msgid="465951735046038490" name="pdf_highlighter_color_palette_item_beige">"बेज"</string>
+    <string msgid="8165260767569639713" name="pdf_highlighter_color_palette_item_bright_yellow">"उजळ पिवळा"</string>
+    <string msgid="449068479718102588" name="pdf_highlighter_color_palette_item_coral_red">"कोरल लाल"</string>
+    <string msgid="129747852317213657" name="pdf_highlighter_color_palette_item_dark_gray">"गडद राखाडी"</string>
+    <string msgid="6204969508698655017" name="pdf_highlighter_color_palette_item_dusty_rose">"डस्टी रोझ"</string>
+    <string msgid="7650371560127252297" name="pdf_highlighter_color_palette_item_light_blue">"फिकट निळा"</string>
+    <string msgid="8359141260355077279" name="pdf_highlighter_color_palette_item_lilac">"लायलॅक"</string>
+    <string msgid="702328612689542595" name="pdf_highlighter_color_palette_item_lime_green">"लाइम ग्रीन"</string>
+    <string msgid="197052696316136021" name="pdf_highlighter_color_palette_item_medium_green">"मध्यम हिरवा"</string>
+    <string msgid="7817217551335552373" name="pdf_highlighter_color_palette_item_medium_purple">"मध्यम जांभळा"</string>
+    <string msgid="5477535957920899892" name="pdf_highlighter_color_palette_item_olive_green">"ऑलिव्ह ग्रीन"</string>
+    <string msgid="9039462823926560002" name="pdf_highlighter_color_palette_item_orange">"नारिंगी"</string>
+    <string msgid="6661538285172874930" name="pdf_highlighter_color_palette_item_pale_green">"फिकट हिरवा"</string>
+    <string msgid="5090029667187265117" name="pdf_highlighter_color_palette_item_pale_pink">"फिकट गुलाबी"</string>
+    <string msgid="677800720719433260" name="pdf_highlighter_color_palette_item_peach">"पीच"</string>
+    <string msgid="5855323132087647114" name="pdf_highlighter_color_palette_item_periwinkle_blue">"पेरिविंकल ब्ल्यू"</string>
+    <string msgid="1021474840088432691" name="pdf_highlighter_color_palette_item_rose_pink">"गुलाबी"</string>
+    <string msgid="3055450785882188986" name="pdf_highlighter_color_palette_item_sage_green">"सेज ग्रीन"</string>
+    <string msgid="652842313614405631" name="pdf_highlighter_color_palette_item_steel_blue">"स्टील ब्ल्यू"</string>
+    <string msgid="2772905536293009655" name="pdf_highlighter_color_palette_item_white">"पांढरा"</string>
+    <string msgid="8722349618048494139" name="pdf_highlighter_color_palette_item_yellow">"पिवळा"</string>
+    <string msgid="2349482864795708538" name="pdf_pen_color_palette_item_black">"काळा"</string>
+    <string msgid="6624561290795093542" name="pdf_pen_color_palette_item_blue">"निळा"</string>
+    <string msgid="9133647461570342884" name="pdf_pen_color_palette_item_brown">"तपकिरी"</string>
+    <string msgid="3472790346783163237" name="pdf_pen_color_palette_item_coral_red">"कोरल लाल"</string>
+    <string msgid="8227114459819696973" name="pdf_pen_color_palette_item_dark_blue">"गडद निळा"</string>
+    <string msgid="1624337798517256053" name="pdf_pen_color_palette_item_deep_red">"गडद लाल"</string>
+    <string msgid="3591366007431445814" name="pdf_pen_color_palette_item_gold">"गोल्ड"</string>
+    <string msgid="758196389357724982" name="pdf_pen_color_palette_item_gray">"राखाडी"</string>
+    <string msgid="4048949964965941329" name="pdf_pen_color_palette_item_green">"हिरवा"</string>
+    <string msgid="2201920941939797490" name="pdf_pen_color_palette_item_lavender">"लॅव्हेंडर"</string>
+    <string msgid="1221502826981830146" name="pdf_pen_color_palette_item_light_blue">"फिकट निळा"</string>
+    <string msgid="71510397000580323" name="pdf_pen_color_palette_item_light_gray">"फिकट राखाडी"</string>
+    <string msgid="2925975266430165024" name="pdf_pen_color_palette_item_lime_green">"लाइम ग्रीन"</string>
+    <string msgid="3385312517845353964" name="pdf_pen_color_palette_item_mint_green">"मिंट ग्रीन"</string>
+    <string msgid="1872421165852966098" name="pdf_pen_color_palette_item_olive_green">"ऑलिव्ह ग्रीन"</string>
+    <string msgid="4364496006674819380" name="pdf_pen_color_palette_item_orange">"नारिंगी"</string>
+    <string msgid="7640276023460122441" name="pdf_pen_color_palette_item_pale_green">"फिकट हिरवा"</string>
+    <string msgid="6222272594988730012" name="pdf_pen_color_palette_item_pale_lime">"पेल लाइम"</string>
+    <string msgid="6793633656166022181" name="pdf_pen_color_palette_item_pale_pink">"फिकट गुलाबी"</string>
+    <string msgid="4574864310357012821" name="pdf_pen_color_palette_item_peach">"पीच"</string>
+    <string msgid="5726500338191639795" name="pdf_pen_color_palette_item_pink">"गुलाबी"</string>
+    <string msgid="7007410838826542299" name="pdf_pen_color_palette_item_purple">"जांभळा"</string>
+    <string msgid="6367852274869305090" name="pdf_pen_color_palette_item_red">"लाल"</string>
+    <string msgid="5729612885142439660" name="pdf_pen_color_palette_item_salmon">"सॅल्मन"</string>
+    <string msgid="3391398601008659651" name="pdf_pen_color_palette_item_steel_blue">"स्टील ब्ल्यू"</string>
+    <string msgid="4446741184644224946" name="pdf_pen_color_palette_item_tan">"टॅन"</string>
+    <string msgid="8520258422897015917" name="pdf_pen_color_palette_item_white">"पांढरा"</string>
+    <string msgid="3408908880225489347" name="pdf_pen_color_palette_item_yellow">"पिवळा"</string>
+    <string msgid="1169511027880317546" name="previous_button_description">"मागील"</string>
+    <string msgid="3443862378337999137" name="retry_button_text">"पुन्हा प्रयत्न करा"</string>
+    <string msgid="5720892205323882483" name="scrollbar_description">"स्क्रोलबार"</string>
+    <string msgid="2018068413709926925" name="title_dialog_password">"ही फाइल संरक्षित आहे"</string>
+</resources>

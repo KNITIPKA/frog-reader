@@ -1,0 +1,243 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    <color name="default_brush_preview_color">#1E6586</color>
+    <color name="default_brush_size_selector_background_color">#FFFFFF</color>
+    <color name="default_dark_tick_color">#71787E</color>
+    <color name="default_highlight_color">#99FFED45</color>
+    <color name="default_light_tick_color">#EEF1F6</color>
+    <color name="default_outline_color">#C4C7C5</color>
+    <color name="default_palette_color">#FCBD00</color>
+    <color name="form_fields_highlight_color">#d3e3fd</color>
+    <color name="pdf_viewer_selection_handles">@color/m3_sys_color_primary_fixed_dim</color>
+    <color name="selection_handle_color">#FFD0BCFF</color>
+    <dimen name="annotation_tool_cornerRadius">16dp</dimen>
+    <dimen name="annotation_tool_height">56dp</dimen>
+    <dimen name="annotation_tool_width">48dp</dimen>
+    <dimen name="annotation_toolbar_corner_radius">28dp</dimen>
+    <dimen name="annotation_toolbar_elevation">4dp</dimen>
+    <dimen name="brush_preview_height">48dp</dimen>
+    <dimen name="brush_preview_width">48dp</dimen>
+    <dimen name="color_palette_content_size">32dp</dimen>
+    <dimen name="color_palette_expanded_content_width">40dp</dimen>
+    <dimen name="color_palette_icon_corner_radius">24dp</dimen>
+    <dimen name="color_palette_item_size">48dp</dimen>
+    <dimen name="color_palette_item_stroke_width">1dp</dimen>
+    <dimen name="color_palette_max_height">212dp</dimen>
+    <dimen name="color_palette_max_width">176dp</dimen>
+    <dimen name="corner_radius_20dp">20dp</dimen>
+    <dimen name="corner_radius_8dp">8dp</dimen>
+    <dimen name="default_brush_preview_size">16dp</dimen>
+    <dimen name="find_in_file_button_size">48dp</dimen>
+    <dimen name="form_widget_edit_text_boundary_width">2dp</dimen>
+    <dimen name="margin_12dp">12dp</dimen>
+    <dimen name="margin_16dp">16dp</dimen>
+    <dimen name="margin_4dp">4dp</dimen>
+    <dimen name="margin_8dp">8dp</dimen>
+    <dimen name="padding_4dp">4dp</dimen>
+    <dimen name="padding_8dp">8dp</dimen>
+    <dimen name="page_indicator_right_margin">42dp</dimen>
+    <dimen name="page_indicator_text_offset">12dp</dimen>
+    <dimen name="page_indicator_text_size">12sp</dimen>
+    <dimen name="pdf_horizontal_page_spacing">8dp</dimen>
+    <dimen name="pdf_signature_border_width">4dp</dimen>
+    <dimen name="pdf_signature_handle_radius">10dp</dimen>
+    <dimen name="pdf_signature_text_padding_x">10dp</dimen>
+    <dimen name="pdf_signature_vector_stroke_width">4dp</dimen>
+    <dimen name="pdf_vertical_page_spacing">8dp</dimen>
+    <dimen name="scroll_thumb_margin_end">0dp</dimen>
+    <dimen name="scroller_bottom_margin">2dp</dimen>
+    <dimen name="scroller_top_margin">2dp</dimen>
+    <dimen name="text_select_handle_touch_size">48dp</dimen>
+    <dimen name="toolbar_anchor_length">388dp</dimen>
+    <dimen name="toolbar_anchor_width">72dp</dimen>
+    <dimen name="viewer_doc_padding_x">0dp</dimen>
+    <dimen name="viewer_doc_padding_y">4dp</dimen>
+    <dimen name="viewer_edit_fab_margin_bottom">16dp</dimen>
+    <dimen name="viewer_edit_fab_margin_right">16dp</dimen>
+    <dimen name="viewer_fastscroll_edge_offset">24dp</dimen>
+    <item name="pdf_annotation_toolbar_coordinator" type="id"/>
+    <item name="pdf_annotation_view" type="id"/>
+    <item name="pdf_wet_strokes_view" type="id"/>
+    <item name="start_drag_handle" type="id"/>
+    <item name="stop_drag_handle" type="id"/>
+    <string name="action_edit">Edit file</string>
+    <string name="annotation_color_palette_button_content_desc">Color Palette</string>
+    <string name="annotation_eraser_button_content_desc">Eraser</string>
+    <string name="annotation_highlighter_button_content_desc">Highlighter</string>
+    <string name="annotation_pen_button_content_desc">Pen</string>
+    <string name="annotation_redo_button_content_desc">Redo</string>
+    <string name="annotation_toggle_annotation_button_content_desc">Toggle Annotation</string>
+    <string name="annotation_undo_button_content_desc">Undo</string>
+    <string name="button_cancel">Cancel</string>
+    <string name="button_open">Open</string>
+    <string name="cannot_edit_pdf">This PDF can\'t be edited</string>
+    <string name="clipboard_label">Content copied from PDF</string>
+    <string name="close_button_description">Close</string>
+    <string name="combobox_custom_option">Custom</string>
+    <string name="confirm_selection">Confirm</string>
+    <string name="desc_copy">Copies selected content to your clipboard</string>
+    <string name="desc_copy_link">Copies link to your clipboard</string>
+    <string name="desc_email_link">Email: <xliff:g example="larry@example.com" id="email_address">%1$s</xliff:g></string>
+    <string name="desc_empty_page">Empty page</string>
+    <string name="desc_goto">Go to</string>
+    <string name="desc_goto_link">Go to page <xliff:g example="12" id="page_number">%1$d</xliff:g></string>
+    <string name="desc_image_alt_text">Image: <xliff:g example="A wolf howling in front of the moon" id="alt_text">%1$s</xliff:g></string>
+    <string name="desc_jump_to">Jumps to the section or page in the PDF</string>
+    <string name="desc_page">Page <xliff:g example="3" id="page">%1$d</xliff:g></string>
+    <string name="desc_page_range">pages <xliff:g example="1" id="first">%1$d</xliff:g> to <xliff:g example="5" id="last">%2$d</xliff:g> of <xliff:g example="500" id="total">%3$d</xliff:g></string>
+    <string name="desc_page_single">page <xliff:g example="1" id="page">%1$d</xliff:g> of <xliff:g example="500" id="total">%2$d</xliff:g></string>
+    <string name="desc_page_with_text">Page <xliff:g example="3" id="page_number">%1$d</xliff:g>: <xliff:g example="This is the text" id="page_text">%2$s</xliff:g></string>
+    <string name="desc_password">password field</string>
+    <string name="desc_password_incorrect">password incorrect</string>
+    <string name="desc_password_incorrect_message">Wrong password. Try again.</string>
+    <string name="desc_pdf_view">PDF view</string>
+    <string name="desc_phone_link">Phone: <xliff:g example="012-555-1234" id="phone_number">%1$s</xliff:g></string>
+    <string name="desc_select_all">Selects all of the text in the PDF</string>
+    <string name="desc_selection_start">selection start</string>
+    <string name="desc_selection_stop">selection end</string>
+    <string name="desc_web_link">Link: <xliff:g example="www.example.com/page1.html" id="destination">%1$s</xliff:g></string>
+    <string name="desc_web_link_shortened_to_domain">Link: webpage at <xliff:g example="www.example.com" id="destination_domain">%1$s</xliff:g></string>
+    <string name="desc_zoom">zoom <xliff:g example="66" id="first">%1$d</xliff:g> percent</string>
+    <string name="discard_button">Discard</string>
+    <string name="discard_changes_dialog_message">Your changes are not saved.</string>
+    <string name="discard_changes_dialog_title">Discard changes?</string>
+    <string name="error_cannot_open_password_protected_pdf">Password protected PDFs are not supported.</string>
+    <string name="error_cannot_open_pdf">Can\'t open PDF file</string>
+    <string name="error_file_format_pdf">Cannot display PDF ("<xliff:g example="Treasure Island" id="title">%1$s</xliff:g>" is of invalid format)</string>
+    <string name="error_on_page">Cannot display page <xliff:g example="3" id="page">%1$d</xliff:g>
+        (file error)</string>
+    <string name="fast_scroller_thumb">Scroll bar</string>
+    <string name="file_error">Failed to open the file. Possible permission issue?</string>
+    <string name="form_click_enters_text_edit_mode_instruction"> Click will enter text edit mode.</string>
+    <string name="form_click_opens_choices_menu_instruction"> Click will open choice selection menu.</string>
+    <string name="form_click_toggle_instruction">Click will toggle value.</string>
+    <string name="form_current_value">Current value: <xliff:g example="Smith" id="widget_value">%1$s</xliff:g>.</string>
+    <string name="form_multiselect_type">Type: Multi-select <xliff:g example="LISTBOX" id="widget_type_name">%1$s</xliff:g>.</string>
+    <string name="form_read_only">Widget is read only and cannot be changed.</string>
+    <string name="form_title">Title: <xliff:g example="Family Name" id="widget_accessibility_title">%1$s</xliff:g>.</string>
+    <string name="form_type">Type: <xliff:g example="LISTBOX" id="widget_type_name">%1$s</xliff:g>.</string>
+    <string name="form_unknown">"Unknown"</string>
+    <string name="form_value">Value: <xliff:g example="Smith" id="widget_value">%1$s</xliff:g>.</string>
+    <string name="form_widget">Form widget</string>
+    <string name="form_widget_type_checkbox">"Check box"</string>
+    <string name="form_widget_type_combo_box">"Combo box"</string>
+    <string name="form_widget_type_list_box">"List box"</string>
+    <string name="form_widget_type_push_button">"Push button"</string>
+    <string name="form_widget_type_radio_button">"Radio button"</string>
+    <string name="form_widget_type_signature">"Signature"</string>
+    <string name="form_widget_type_text_field">"Text field"</string>
+    <string name="hint_find">Find in file</string>
+    <string name="keep_editing_button">Keep Editing</string>
+    <string name="label_copy_link">Copy link</string>
+    <string name="label_jump_to">Jump to</string>
+    <string name="label_page_range"><xliff:g example="1" id="first">%1$d</xliff:g>-<xliff:g example="5" id="last">%2$d</xliff:g> / <xliff:g example="500" id="total">%3$d</xliff:g></string>
+    <string name="label_page_single"><xliff:g example="1" id="page">%1$d</xliff:g> / <xliff:g example="500" id="total">%2$d</xliff:g></string>
+    <string name="label_password_first">Password</string>
+    <string name="label_password_incorrect">Wrong password. Try again.</string>
+    <string name="match_status_description"><xliff:g example="3" id="position">%1$d</xliff:g> of <xliff:g example="12" id="total">%2$d</xliff:g></string>
+    <string name="match_status_searching_description"><xliff:g example="3" id="position">%1$d</xliff:g> of <xliff:g example="12" id="total">%2$d</xliff:g>, searching</string>
+    <string name="message_match_status"><xliff:g example="3" id="position">%1$d</xliff:g> / <xliff:g example="12" id="total">%2$d</xliff:g></string>
+    <string name="message_no_match_status">No matching results</string>
+    <string name="needs_more_data">Insufficient data for processing the PDF document</string>
+    <string name="next_button_description">Next</string>
+    <string name="page_broken">Page broken for the PDF document</string>
+    <string name="password_not_entered">Enter password to unlock</string>
+    <string name="pdf_brush_slider_content_description">Line weight</string>
+    <string name="pdf_error">Failed to process the PDF document!</string>
+    <string name="pdf_highlighter_color_palette_item_beige">Beige</string>
+    <string name="pdf_highlighter_color_palette_item_bright_yellow">Bright yellow</string>
+    <string name="pdf_highlighter_color_palette_item_coral_red">Coral red</string>
+    <string name="pdf_highlighter_color_palette_item_dark_gray">Dark gray</string>
+    <string name="pdf_highlighter_color_palette_item_dusty_rose">Dusty rose</string>
+    <string name="pdf_highlighter_color_palette_item_light_blue">Light blue</string>
+    <string name="pdf_highlighter_color_palette_item_lilac">Lilac</string>
+    <string name="pdf_highlighter_color_palette_item_lime_green">Lime green</string>
+    <string name="pdf_highlighter_color_palette_item_medium_green">Medium green</string>
+    <string name="pdf_highlighter_color_palette_item_medium_purple">Medium purple</string>
+    <string name="pdf_highlighter_color_palette_item_olive_green">Olive green</string>
+    <string name="pdf_highlighter_color_palette_item_orange">Orange</string>
+    <string name="pdf_highlighter_color_palette_item_pale_green">Pale green</string>
+    <string name="pdf_highlighter_color_palette_item_pale_pink">Pale pink</string>
+    <string name="pdf_highlighter_color_palette_item_peach">Peach</string>
+    <string name="pdf_highlighter_color_palette_item_periwinkle_blue">Periwinkle blue</string>
+    <string name="pdf_highlighter_color_palette_item_rose_pink">Rose pink</string>
+    <string name="pdf_highlighter_color_palette_item_sage_green">Sage green</string>
+    <string name="pdf_highlighter_color_palette_item_steel_blue">Steel blue</string>
+    <string name="pdf_highlighter_color_palette_item_white">White</string>
+    <string name="pdf_highlighter_color_palette_item_yellow">Yellow</string>
+    <string name="pdf_pen_color_palette_item_black">Black</string>
+    <string name="pdf_pen_color_palette_item_blue">Blue</string>
+    <string name="pdf_pen_color_palette_item_brown">Brown</string>
+    <string name="pdf_pen_color_palette_item_coral_red">Coral red</string>
+    <string name="pdf_pen_color_palette_item_dark_blue">Dark blue</string>
+    <string name="pdf_pen_color_palette_item_deep_red">Deep red</string>
+    <string name="pdf_pen_color_palette_item_gold">Gold</string>
+    <string name="pdf_pen_color_palette_item_gray">Gray</string>
+    <string name="pdf_pen_color_palette_item_green">Green</string>
+    <string name="pdf_pen_color_palette_item_lavender">Lavender</string>
+    <string name="pdf_pen_color_palette_item_light_blue">Light blue</string>
+    <string name="pdf_pen_color_palette_item_light_gray">Light gray</string>
+    <string name="pdf_pen_color_palette_item_lime_green">Lime green</string>
+    <string name="pdf_pen_color_palette_item_mint_green">Mint green</string>
+    <string name="pdf_pen_color_palette_item_olive_green">Olive green</string>
+    <string name="pdf_pen_color_palette_item_orange">Orange</string>
+    <string name="pdf_pen_color_palette_item_pale_green">Pale green</string>
+    <string name="pdf_pen_color_palette_item_pale_lime">Pale lime</string>
+    <string name="pdf_pen_color_palette_item_pale_pink">Pale pink</string>
+    <string name="pdf_pen_color_palette_item_peach">Peach</string>
+    <string name="pdf_pen_color_palette_item_pink">Pink</string>
+    <string name="pdf_pen_color_palette_item_purple">Purple</string>
+    <string name="pdf_pen_color_palette_item_red">Red</string>
+    <string name="pdf_pen_color_palette_item_salmon">Salmon</string>
+    <string name="pdf_pen_color_palette_item_steel_blue">Steel blue</string>
+    <string name="pdf_pen_color_palette_item_tan">Tan</string>
+    <string name="pdf_pen_color_palette_item_white">White</string>
+    <string name="pdf_pen_color_palette_item_yellow">Yellow</string>
+    <string name="previous_button_description">Previous</string>
+    <string name="retry_button_text">Retry</string>
+    <string name="scrollbar_description">Scrollbar</string>
+    <string name="title_dialog_password">This file is protected</string>
+    <declare-styleable name="FastScrollView">
+        <attr format="dimension" name="scrollbarMarginTop"/>
+        <attr format="dimension" name="scrollbarMarginBottom"/>
+    </declare-styleable>
+    <declare-styleable name="FindInFile">
+        <attr format="color" name="customColor"/>
+    </declare-styleable>
+    <declare-styleable name="PdfView">
+        <attr format="reference" name="fastScrollVerticalThumbDrawable"/>
+        <attr format="reference" name="fastScrollPageIndicatorBackgroundDrawable"/>
+        <attr format="boolean" name="showFastScrollPageIndicator"/>
+        
+        <attr format="dimension" name="fastScrollPageIndicatorMarginEnd"/>
+        
+        <attr format="dimension" name="fastScrollVerticalThumbMarginEnd"/>
+        
+        <attr format="dimension" name="pdfHorizontalPageSpacing"/>
+        
+        <attr format="boolean" name="isFormFillingEnabled"/>
+        
+        <attr format="boolean" name="isImageSelectionEnabled"/>
+        
+        <attr format="float" name="minZoom"/>
+        
+        <attr format="float" name="maxZoom"/>
+        
+        <attr format="integer" name="pdfPagesPerRow"/>
+        
+        <attr format="integer" name="verticalAlignment"/>
+        
+        <attr format="dimension" name="pdfVerticalPageSpacing"/>
+    </declare-styleable>
+    <declare-styleable name="SelectionModeDrawables">
+        <attr name="actionModeSelectAllDrawable"/>
+        <attr name="actionModeCutDrawable"/>
+        <attr name="actionModeCopyDrawable"/>
+        <attr name="actionModePasteDrawable"/>
+    </declare-styleable>
+    <declare-styleable name="ZoomView">
+        <attr format="float" name="minimumZoom"/>
+        <attr format="float" name="maximumZoom"/>
+        <attr format="boolean" name="saveState"/>
+    </declare-styleable>
+</resources>

@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    <string msgid="5882082700509010966" name="action_edit">"파일 수정"</string>
+    <string msgid="3857939523964276535" name="annotation_color_palette_button_content_desc">"색상 팔레트"</string>
+    <string msgid="7095965950282529732" name="annotation_eraser_button_content_desc">"지우개"</string>
+    <string msgid="4145607409953592495" name="annotation_highlighter_button_content_desc">"형광펜"</string>
+    <string msgid="3429267369324256891" name="annotation_pen_button_content_desc">"펜"</string>
+    <string msgid="6173017390316607430" name="annotation_redo_button_content_desc">"재실행"</string>
+    <string msgid="7576992521535921829" name="annotation_toggle_annotation_button_content_desc">"주석 전환"</string>
+    <string msgid="8677860607653139057" name="annotation_undo_button_content_desc">"실행취소"</string>
+    <string msgid="5855794576957267334" name="button_cancel">"취소"</string>
+    <string msgid="5445014062438566842" name="button_open">"열기"</string>
+    <string msgid="7677598370087228978" name="cannot_edit_pdf">"이 PDF는 수정할 수 없습니다."</string>
+    <string msgid="8943155331324944981" name="clipboard_label">"PDF에서 복사된 콘텐츠"</string>
+    <string msgid="7379823906921067675" name="close_button_description">"닫기"</string>
+    <string msgid="8730230629127076731" name="combobox_custom_option">"맞춤"</string>
+    <string msgid="7020926320719465164" name="confirm_selection">"확인"</string>
+    <string msgid="385275789223074637" name="desc_copy">"선택한 콘텐츠를 클립보드에 복사"</string>
+    <string msgid="4764327179483836535" name="desc_copy_link">"클립보드에 링크 복사"</string>
+    <string msgid="7027325672358507448" name="desc_email_link">"이메일: <xliff:g id="EMAIL_ADDRESS">%1$s</xliff:g>"</string>
+    <string msgid="5041794048330057239" name="desc_empty_page">"빈 페이지"</string>
+    <string msgid="1333698934111921601" name="desc_goto">"이동"</string>
+    <string msgid="2461368384824849714" name="desc_goto_link">"<xliff:g id="PAGE_NUMBER">%1$d</xliff:g> 페이지로 이동"</string>
+    <string msgid="7700601988820586333" name="desc_image_alt_text">"이미지: <xliff:g id="ALT_TEXT">%1$s</xliff:g>"</string>
+    <string msgid="9085362382536609454" name="desc_jump_to">"PDF의 섹션 또는 페이지로 이동"</string>
+    <string msgid="6702471448987833953" name="desc_page">"<xliff:g id="PAGE">%1$d</xliff:g>페이지"</string>
+    <string msgid="5286496438609641577" name="desc_page_range">"<xliff:g id="TOTAL">%3$d</xliff:g>페이지 중 <xliff:g id="FIRST">%1$d</xliff:g>~<xliff:g id="LAST">%2$d</xliff:g>페이지"</string>
+    <string msgid="8459583146661044094" name="desc_page_single">"<xliff:g id="TOTAL">%2$d</xliff:g>페이지 중 <xliff:g id="PAGE">%1$d</xliff:g>페이지"</string>
+    <string msgid="2564017005407577604" name="desc_page_with_text">"<xliff:g id="PAGE_NUMBER">%1$d</xliff:g>페이지: <xliff:g id="PAGE_TEXT">%2$s</xliff:g>"</string>
+    <string msgid="6636473611443746739" name="desc_password">"비밀번호 입력란"</string>
+    <string msgid="4718823067483963845" name="desc_password_incorrect">"비밀번호가 잘못됨"</string>
+    <string msgid="4676206571020946870" name="desc_password_incorrect_message">"잘못된 비밀번호입니다. 다시 시도하세요."</string>
+    <string msgid="4353979540148077296" name="desc_pdf_view">"PDF 보기"</string>
+    <string msgid="4986414958429253135" name="desc_phone_link">"전화번호: <xliff:g id="PHONE_NUMBER">%1$s</xliff:g>"</string>
+    <string msgid="428248654717550270" name="desc_select_all">"PDF의 모든 텍스트 선택"</string>
+    <string msgid="3249210022376857070" name="desc_selection_start">"선택 영역 시작"</string>
+    <string msgid="2690168835536726898" name="desc_selection_stop">"선택 영역 끝"</string>
+    <string msgid="2776023299237058419" name="desc_web_link">"링크: <xliff:g id="DESTINATION">%1$s</xliff:g>"</string>
+    <string msgid="3323639528531061592" name="desc_web_link_shortened_to_domain">"링크: <xliff:g id="DESTINATION_DOMAIN">%1$s</xliff:g>의 웹페이지"</string>
+    <string msgid="7318480946145947242" name="desc_zoom">"<xliff:g id="FIRST">%1$d</xliff:g>%% 확대/축소"</string>
+    <string msgid="345675813790884187" name="discard_button">"삭제"</string>
+    <string msgid="6052519273995024254" name="discard_changes_dialog_message">"변경사항이 저장되지 않습니다."</string>
+    <string msgid="8471151263363129054" name="discard_changes_dialog_title">"변경사항을 삭제하시겠습니까?"</string>
+    <string msgid="3400883576932438749" name="error_cannot_open_password_protected_pdf">"비밀번호로 보호된 PDF는 지원되지 않습니다."</string>
+    <string msgid="2361919778558145071" name="error_cannot_open_pdf">"PDF 파일을 열 수 없음"</string>
+    <string msgid="7567006188638831878" name="error_file_format_pdf">"<xliff:g id="TITLE">%1$s</xliff:g>의 형식이 잘못되어 PDF를 표시할 수 없음"</string>
+    <string msgid="1592475819957182385" name="error_on_page">"파일 오류로 <xliff:g id="PAGE">%1$d</xliff:g> 페이지를 표시할 수 없음"</string>
+    <string msgid="1491143649111222713" name="fast_scroller_thumb">"스크롤바"</string>
+    <string msgid="4003885928556884091" name="file_error">"파일을 열 수 없습니다. 권한 문제가 있을 수 있나요?"</string>
+    <string msgid="2305283577544618880" name="form_click_enters_text_edit_mode_instruction">"클릭하면 텍스트 수정 모드로 전환됩니다."</string>
+    <string msgid="5648228168212004143" name="form_click_opens_choices_menu_instruction">"클릭하면 선택 메뉴가 열립니다."</string>
+    <string msgid="7171111300244445911" name="form_click_toggle_instruction">"클릭하면 값이 전환됩니다."</string>
+    <string msgid="3883820498421821863" name="form_current_value">"현재 값: <xliff:g id="WIDGET_VALUE">%1$s</xliff:g>"</string>
+    <string msgid="6137116306327174299" name="form_multiselect_type">"유형: 다중 선택 <xliff:g id="WIDGET_TYPE_NAME">%1$s</xliff:g>."</string>
+    <string msgid="4928929192592391646" name="form_read_only">"위젯은 읽기 전용이며 변경할 수 없습니다."</string>
+    <string msgid="2718582322716402117" name="form_title">"제목: <xliff:g id="WIDGET_ACCESSIBILITY_TITLE">%1$s</xliff:g>"</string>
+    <string msgid="1302137779809645840" name="form_type">"유형: <xliff:g id="WIDGET_TYPE_NAME">%1$s</xliff:g>"</string>
+    <string msgid="6371515914365431330" name="form_unknown">"알 수 없음"</string>
+    <string msgid="960532222685914495" name="form_value">"값: <xliff:g id="WIDGET_VALUE">%1$s</xliff:g>"</string>
+    <string msgid="5841730047544552656" name="form_widget">"양식 위젯"</string>
+    <string msgid="2905625606101301245" name="form_widget_type_checkbox">"체크박스"</string>
+    <string msgid="3912742706795495520" name="form_widget_type_combo_box">"콤보 상자"</string>
+    <string msgid="431828611710070971" name="form_widget_type_list_box">"목록 상자"</string>
+    <string msgid="7978535904272874920" name="form_widget_type_push_button">"누름 버튼"</string>
+    <string msgid="4798553968129281550" name="form_widget_type_radio_button">"라디오 버튼"</string>
+    <string msgid="3811511096215331673" name="form_widget_type_signature">"서명"</string>
+    <string msgid="4443782242324937941" name="form_widget_type_text_field">"텍스트 입력란"</string>
+    <string msgid="5385388836603550565" name="hint_find">"파일에서 찾기"</string>
+    <string msgid="7573006208701305988" name="keep_editing_button">"계속 수정"</string>
+    <string msgid="869104793055534158" name="label_copy_link">"링크 복사"</string>
+    <string msgid="462543500326296329" name="label_jump_to">"바로 이동"</string>
+    <string msgid="8290964180158460076" name="label_page_range">"<xliff:g id="FIRST">%1$d</xliff:g>~<xliff:g id="LAST">%2$d</xliff:g>/<xliff:g id="TOTAL">%3$d</xliff:g>"</string>
+    <string msgid="456123685879261101" name="label_page_single">"<xliff:g id="PAGE">%1$d</xliff:g>/<xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="4456258714097111908" name="label_password_first">"비밀번호"</string>
+    <string msgid="5291118378657145978" name="label_password_incorrect">"잘못된 비밀번호입니다. 다시 시도하세요."</string>
+    <string msgid="4996847358326345288" name="match_status_description">"<xliff:g id="POSITION">%1$d</xliff:g>/<xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="6288242289981639727" name="message_match_status">"<xliff:g id="POSITION">%1$d</xliff:g>/<xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="5929387004361286433" name="message_no_match_status">"일치하는 결과 없음"</string>
+    <string msgid="3520133467908240802" name="needs_more_data">"PDF 문서 처리를 위한 데이터가 부족합니다."</string>
+    <string msgid="4702699322249103693" name="next_button_description">"다음"</string>
+    <string msgid="2968770793669433462" name="page_broken">"PDF 문서의 페이지가 손상되었습니다."</string>
+    <string msgid="8875370870743585303" name="password_not_entered">"잠금 해제하려면 비밀번호 입력"</string>
+    <string msgid="7693112422816705779" name="pdf_brush_slider_content_description">"선 두께"</string>
+    <string msgid="3287950599604474450" name="pdf_error">"PDF 문서를 처리할 수 없습니다."</string>
+    <string msgid="465951735046038490" name="pdf_highlighter_color_palette_item_beige">"베이지색"</string>
+    <string msgid="8165260767569639713" name="pdf_highlighter_color_palette_item_bright_yellow">"밝은 노란색"</string>
+    <string msgid="449068479718102588" name="pdf_highlighter_color_palette_item_coral_red">"코럴 레드"</string>
+    <string msgid="129747852317213657" name="pdf_highlighter_color_palette_item_dark_gray">"진한 회색"</string>
+    <string msgid="6204969508698655017" name="pdf_highlighter_color_palette_item_dusty_rose">"더스티 로즈"</string>
+    <string msgid="7650371560127252297" name="pdf_highlighter_color_palette_item_light_blue">"연한 파란색"</string>
+    <string msgid="8359141260355077279" name="pdf_highlighter_color_palette_item_lilac">"라일락"</string>
+    <string msgid="702328612689542595" name="pdf_highlighter_color_palette_item_lime_green">"라임 그린"</string>
+    <string msgid="197052696316136021" name="pdf_highlighter_color_palette_item_medium_green">"중간 녹색"</string>
+    <string msgid="7817217551335552373" name="pdf_highlighter_color_palette_item_medium_purple">"중간 보라색"</string>
+    <string msgid="5477535957920899892" name="pdf_highlighter_color_palette_item_olive_green">"올리브그린"</string>
+    <string msgid="9039462823926560002" name="pdf_highlighter_color_palette_item_orange">"주황색"</string>
+    <string msgid="6661538285172874930" name="pdf_highlighter_color_palette_item_pale_green">"연한 녹색"</string>
+    <string msgid="5090029667187265117" name="pdf_highlighter_color_palette_item_pale_pink">"연한 분홍색"</string>
+    <string msgid="677800720719433260" name="pdf_highlighter_color_palette_item_peach">"복숭아색"</string>
+    <string msgid="5855323132087647114" name="pdf_highlighter_color_palette_item_periwinkle_blue">"페리윙클 블루"</string>
+    <string msgid="1021474840088432691" name="pdf_highlighter_color_palette_item_rose_pink">"로즈핑크"</string>
+    <string msgid="3055450785882188986" name="pdf_highlighter_color_palette_item_sage_green">"세이지 그린"</string>
+    <string msgid="652842313614405631" name="pdf_highlighter_color_palette_item_steel_blue">"스틸 블루"</string>
+    <string msgid="2772905536293009655" name="pdf_highlighter_color_palette_item_white">"흰색"</string>
+    <string msgid="8722349618048494139" name="pdf_highlighter_color_palette_item_yellow">"노란색"</string>
+    <string msgid="2349482864795708538" name="pdf_pen_color_palette_item_black">"검은색"</string>
+    <string msgid="6624561290795093542" name="pdf_pen_color_palette_item_blue">"파란색"</string>
+    <string msgid="9133647461570342884" name="pdf_pen_color_palette_item_brown">"갈색"</string>
+    <string msgid="3472790346783163237" name="pdf_pen_color_palette_item_coral_red">"코럴 레드"</string>
+    <string msgid="8227114459819696973" name="pdf_pen_color_palette_item_dark_blue">"진한 파란색"</string>
+    <string msgid="1624337798517256053" name="pdf_pen_color_palette_item_deep_red">"진한 빨간색"</string>
+    <string msgid="3591366007431445814" name="pdf_pen_color_palette_item_gold">"골드"</string>
+    <string msgid="758196389357724982" name="pdf_pen_color_palette_item_gray">"회색"</string>
+    <string msgid="4048949964965941329" name="pdf_pen_color_palette_item_green">"녹색"</string>
+    <string msgid="2201920941939797490" name="pdf_pen_color_palette_item_lavender">"라벤더"</string>
+    <string msgid="1221502826981830146" name="pdf_pen_color_palette_item_light_blue">"연한 파란색"</string>
+    <string msgid="71510397000580323" name="pdf_pen_color_palette_item_light_gray">"연한 회색"</string>
+    <string msgid="2925975266430165024" name="pdf_pen_color_palette_item_lime_green">"라임 그린"</string>
+    <string msgid="3385312517845353964" name="pdf_pen_color_palette_item_mint_green">"민트 그린"</string>
+    <string msgid="1872421165852966098" name="pdf_pen_color_palette_item_olive_green">"올리브그린"</string>
+    <string msgid="4364496006674819380" name="pdf_pen_color_palette_item_orange">"주황색"</string>
+    <string msgid="7640276023460122441" name="pdf_pen_color_palette_item_pale_green">"연한 녹색"</string>
+    <string msgid="6222272594988730012" name="pdf_pen_color_palette_item_pale_lime">"연한 라임"</string>
+    <string msgid="6793633656166022181" name="pdf_pen_color_palette_item_pale_pink">"연한 분홍색"</string>
+    <string msgid="4574864310357012821" name="pdf_pen_color_palette_item_peach">"복숭아색"</string>
+    <string msgid="5726500338191639795" name="pdf_pen_color_palette_item_pink">"분홍색"</string>
+    <string msgid="7007410838826542299" name="pdf_pen_color_palette_item_purple">"보라색"</string>
+    <string msgid="6367852274869305090" name="pdf_pen_color_palette_item_red">"빨간색"</string>
+    <string msgid="5729612885142439660" name="pdf_pen_color_palette_item_salmon">"연어색"</string>
+    <string msgid="3391398601008659651" name="pdf_pen_color_palette_item_steel_blue">"스틸 블루"</string>
+    <string msgid="4446741184644224946" name="pdf_pen_color_palette_item_tan">"황갈색"</string>
+    <string msgid="8520258422897015917" name="pdf_pen_color_palette_item_white">"흰색"</string>
+    <string msgid="3408908880225489347" name="pdf_pen_color_palette_item_yellow">"노란색"</string>
+    <string msgid="1169511027880317546" name="previous_button_description">"이전"</string>
+    <string msgid="3443862378337999137" name="retry_button_text">"재시도"</string>
+    <string msgid="5720892205323882483" name="scrollbar_description">"스크롤바"</string>
+    <string msgid="2018068413709926925" name="title_dialog_password">"보호된 파일임"</string>
+</resources>

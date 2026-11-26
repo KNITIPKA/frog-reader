@@ -1,0 +1,25 @@
+<resources>
+    <string name="pdf_error_title">Couldn’t open PDF</string>
+    <string name="pdf_metadata_hint">PDF details and covers are saved in your FrogReader library and backups. Exporting the PDF keeps its original document bytes; it does not embed your library metadata or saved passages.</string>
+    <string name="pdf_opening_slow">This PDF is taking longer to render. The file may be very large or damaged. You can retry or return to the library.</string>
+    <string name="pdf_error_message">The file may be damaged, unsupported, or unavailable. Your saved passages and reading history are safe. Try opening it again or attach another copy from the library.</string>
+    <string name="pdf_text_unavailable">Text search is unavailable for this document.</string>
+    <string name="pdf_selection_error">Couldn’t select this passage. Try a smaller selection or reopen the document.</string>
+    <string name="pdf_search_error">Search failed. Try again.</string>
+    <string name="pdf_page_render_error">Couldn’t render this page. Try again or reopen the book.</string>
+    <string name="pdf_searching">Searching… %1$d matches</string>
+    <string name="pdf_search_empty">No matches</string>
+    <string name="pdf_search_count">%1$d of %2$d</string>
+    <string name="pdf_previous_result">Previous result</string>
+    <string name="pdf_next_result">Next result</string>
+    <string name="pdf_navigation">Pages and saved passages</string>
+    <string name="pdf_show_controls">Show reading controls</string>
+    <string name="pdf_settings">Reading settings</string>
+    <string name="pdf_finish_reading">Finish reading</string>
+    <string name="pdf_password_title">Protected PDF</string>
+    <string name="pdf_password_message">Enter the document password. If it still cannot open, its encryption may be unsupported. Passwords are never saved.</string>
+    <string name="pdf_password_unsupported">This device’s PDF engine cannot unlock encrypted documents. Open an unencrypted copy or update the system PDF support.</string>
+    <string name="pdf_password_label">Password</string>
+    <string name="pdf_unlock">Unlock</string>
+    <string name="pdf_leave_unsaved">Leave without saving</string>
+</resources>

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="selection_handle_color">?attr/colorPrimaryFixedDim</color>
+</resources>

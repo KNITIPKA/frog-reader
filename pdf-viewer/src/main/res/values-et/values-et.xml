@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    <string msgid="5882082700509010966" name="action_edit">"Faili muutmine"</string>
+    <string msgid="3857939523964276535" name="annotation_color_palette_button_content_desc">"Värvipalett"</string>
+    <string msgid="7095965950282529732" name="annotation_eraser_button_content_desc">"Kustutuskumm"</string>
+    <string msgid="4145607409953592495" name="annotation_highlighter_button_content_desc">"Esiletõstja"</string>
+    <string msgid="3429267369324256891" name="annotation_pen_button_content_desc">"Pliiats"</string>
+    <string msgid="6173017390316607430" name="annotation_redo_button_content_desc">"Tee uuesti"</string>
+    <string msgid="7576992521535921829" name="annotation_toggle_annotation_button_content_desc">"Märkuste sisse-/väljalülitamine"</string>
+    <string msgid="8677860607653139057" name="annotation_undo_button_content_desc">"Võta tagasi"</string>
+    <string msgid="5855794576957267334" name="button_cancel">"Tühista"</string>
+    <string msgid="5445014062438566842" name="button_open">"Ava"</string>
+    <string msgid="7677598370087228978" name="cannot_edit_pdf">"Seda PDF-i ei saa muuta"</string>
+    <string msgid="8943155331324944981" name="clipboard_label">"Sisu kopeeritud PDF-ist"</string>
+    <string msgid="7379823906921067675" name="close_button_description">"Sule"</string>
+    <string msgid="8730230629127076731" name="combobox_custom_option">"Kohandatud"</string>
+    <string msgid="7020926320719465164" name="confirm_selection">"Kinnita"</string>
+    <string msgid="385275789223074637" name="desc_copy">"Kopeerib valitud sisu lõikelauale"</string>
+    <string msgid="4764327179483836535" name="desc_copy_link">"Kopeerib lingi lõikelauale"</string>
+    <string msgid="7027325672358507448" name="desc_email_link">"E-posti aadress: <xliff:g id="EMAIL_ADDRESS">%1$s</xliff:g>"</string>
+    <string msgid="5041794048330057239" name="desc_empty_page">"Tühi leht"</string>
+    <string msgid="1333698934111921601" name="desc_goto">"Avamine"</string>
+    <string msgid="2461368384824849714" name="desc_goto_link">"Mine lehele <xliff:g id="PAGE_NUMBER">%1$d</xliff:g>"</string>
+    <string msgid="7700601988820586333" name="desc_image_alt_text">"Pilt: <xliff:g id="ALT_TEXT">%1$s</xliff:g>"</string>
+    <string msgid="9085362382536609454" name="desc_jump_to">"Jätkab PDF-faili jaotisel või lehel"</string>
+    <string msgid="6702471448987833953" name="desc_page">"Leht <xliff:g id="PAGE">%1$d</xliff:g>"</string>
+    <string msgid="5286496438609641577" name="desc_page_range">"lk <xliff:g id="FIRST">%1$d</xliff:g>–<xliff:g id="LAST">%2$d</xliff:g>/<xliff:g id="TOTAL">%3$d</xliff:g>-st"</string>
+    <string msgid="8459583146661044094" name="desc_page_single">"lk <xliff:g id="PAGE">%1$d</xliff:g>/<xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="2564017005407577604" name="desc_page_with_text">"<xliff:g id="PAGE_NUMBER">%1$d</xliff:g>. leht: <xliff:g id="PAGE_TEXT">%2$s</xliff:g>"</string>
+    <string msgid="6636473611443746739" name="desc_password">"parooliväli"</string>
+    <string msgid="4718823067483963845" name="desc_password_incorrect">"parool on vale"</string>
+    <string msgid="4676206571020946870" name="desc_password_incorrect_message">"Vale parool. Proovige uuesti."</string>
+    <string msgid="4353979540148077296" name="desc_pdf_view">"PDF-vaade"</string>
+    <string msgid="4986414958429253135" name="desc_phone_link">"Telefon: <xliff:g id="PHONE_NUMBER">%1$s</xliff:g>"</string>
+    <string msgid="428248654717550270" name="desc_select_all">"Valib kogu PDF-faili teksti"</string>
+    <string msgid="3249210022376857070" name="desc_selection_start">"valiku algus"</string>
+    <string msgid="2690168835536726898" name="desc_selection_stop">"valiku lõpp"</string>
+    <string msgid="2776023299237058419" name="desc_web_link">"Link: <xliff:g id="DESTINATION">%1$s</xliff:g>"</string>
+    <string msgid="3323639528531061592" name="desc_web_link_shortened_to_domain">"Link: veebileht aadressil <xliff:g id="DESTINATION_DOMAIN">%1$s</xliff:g>"</string>
+    <string msgid="7318480946145947242" name="desc_zoom">"suum <xliff:g id="FIRST">%1$d</xliff:g> protsenti"</string>
+    <string msgid="345675813790884187" name="discard_button">"Loobu"</string>
+    <string msgid="6052519273995024254" name="discard_changes_dialog_message">"Teie muudatusi ei salvestata."</string>
+    <string msgid="8471151263363129054" name="discard_changes_dialog_title">"Kas loobuda muudatustest?"</string>
+    <string msgid="3400883576932438749" name="error_cannot_open_password_protected_pdf">"Parooliga kaitstud PDF-e ei toetata."</string>
+    <string msgid="2361919778558145071" name="error_cannot_open_pdf">"PDF-faili ei saa avada"</string>
+    <string msgid="7567006188638831878" name="error_file_format_pdf">"PDF-i ei saa kuvada (<xliff:g id="TITLE">%1$s</xliff:g> on vales vormingus)"</string>
+    <string msgid="1592475819957182385" name="error_on_page">"Lehekülge <xliff:g id="PAGE">%1$d</xliff:g> ei saa kuvada (viga failis)"</string>
+    <string msgid="1491143649111222713" name="fast_scroller_thumb">"Kerimisriba"</string>
+    <string msgid="4003885928556884091" name="file_error">"Faili avamine nurjus. Probleem võib olla seotud lubadega."</string>
+    <string msgid="2305283577544618880" name="form_click_enters_text_edit_mode_instruction">"Klõpsamisel sisenete tekstiredaktorisse."</string>
+    <string msgid="5648228168212004143" name="form_click_opens_choices_menu_instruction">"Klõpsamine avab valikumenüü."</string>
+    <string msgid="7171111300244445911" name="form_click_toggle_instruction">"Klõpsamine vahetab väärtust."</string>
+    <string msgid="3883820498421821863" name="form_current_value">"Praegune väärtus: <xliff:g id="WIDGET_VALUE">%1$s</xliff:g>"</string>
+    <string msgid="6137116306327174299" name="form_multiselect_type">"Tüüp: mitme valikuga <xliff:g id="WIDGET_TYPE_NAME">%1$s</xliff:g>."</string>
+    <string msgid="4928929192592391646" name="form_read_only">"Vidin on kirjutuskaitstud ja seda ei saa muuta."</string>
+    <string msgid="2718582322716402117" name="form_title">"Pealkiri: <xliff:g id="WIDGET_ACCESSIBILITY_TITLE">%1$s</xliff:g>."</string>
+    <string msgid="1302137779809645840" name="form_type">"Tüüp: <xliff:g id="WIDGET_TYPE_NAME">%1$s</xliff:g>."</string>
+    <string msgid="6371515914365431330" name="form_unknown">"Teadmata"</string>
+    <string msgid="960532222685914495" name="form_value">"Väärtus: <xliff:g id="WIDGET_VALUE">%1$s</xliff:g>."</string>
+    <string msgid="5841730047544552656" name="form_widget">"Kujundage vidin"</string>
+    <string msgid="2905625606101301245" name="form_widget_type_checkbox">"Märkeruut"</string>
+    <string msgid="3912742706795495520" name="form_widget_type_combo_box">"Liitboks"</string>
+    <string msgid="431828611710070971" name="form_widget_type_list_box">"Loendiboks"</string>
+    <string msgid="7978535904272874920" name="form_widget_type_push_button">"Vajutusnupp"</string>
+    <string msgid="4798553968129281550" name="form_widget_type_radio_button">"Raadionupp"</string>
+    <string msgid="3811511096215331673" name="form_widget_type_signature">"Allkiri"</string>
+    <string msgid="4443782242324937941" name="form_widget_type_text_field">"Tekstiväli"</string>
+    <string msgid="5385388836603550565" name="hint_find">"Otsige failist"</string>
+    <string msgid="7573006208701305988" name="keep_editing_button">"Jätka muutmist"</string>
+    <string msgid="869104793055534158" name="label_copy_link">"Kopeerige link"</string>
+    <string msgid="462543500326296329" name="label_jump_to">"Jätkake"</string>
+    <string msgid="8290964180158460076" name="label_page_range">"<xliff:g id="FIRST">%1$d</xliff:g>–<xliff:g id="LAST">%2$d</xliff:g>/<xliff:g id="TOTAL">%3$d</xliff:g>"</string>
+    <string msgid="456123685879261101" name="label_page_single">"<xliff:g id="PAGE">%1$d</xliff:g>/<xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="4456258714097111908" name="label_password_first">"Parool"</string>
+    <string msgid="5291118378657145978" name="label_password_incorrect">"Vale parool. Proovige uuesti."</string>
+    <string msgid="4996847358326345288" name="match_status_description">"<xliff:g id="POSITION">%1$d</xliff:g>/<xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="6288242289981639727" name="message_match_status">"<xliff:g id="POSITION">%1$d</xliff:g>/<xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="5929387004361286433" name="message_no_match_status">"Päringule vastavaid tulemusi pole"</string>
+    <string msgid="3520133467908240802" name="needs_more_data">"PDF-dokumendi töötlemiseks pole piisavalt andmeid"</string>
+    <string msgid="4702699322249103693" name="next_button_description">"Järgmine"</string>
+    <string msgid="2968770793669433462" name="page_broken">"Rikutud leht PDF-dokumendis"</string>
+    <string msgid="8875370870743585303" name="password_not_entered">"Avamiseks sisestage parool"</string>
+    <string msgid="7693112422816705779" name="pdf_brush_slider_content_description">"Joone paksus"</string>
+    <string msgid="3287950599604474450" name="pdf_error">"PDF-dokumendi töötlemine nurjus!"</string>
+    <string msgid="465951735046038490" name="pdf_highlighter_color_palette_item_beige">"Beež"</string>
+    <string msgid="8165260767569639713" name="pdf_highlighter_color_palette_item_bright_yellow">"Erkkollane"</string>
+    <string msgid="449068479718102588" name="pdf_highlighter_color_palette_item_coral_red">"Korallpunane"</string>
+    <string msgid="129747852317213657" name="pdf_highlighter_color_palette_item_dark_gray">"Tumehall"</string>
+    <string msgid="6204969508698655017" name="pdf_highlighter_color_palette_item_dusty_rose">"Tuhmroosa"</string>
+    <string msgid="7650371560127252297" name="pdf_highlighter_color_palette_item_light_blue">"Helesinine"</string>
+    <string msgid="8359141260355077279" name="pdf_highlighter_color_palette_item_lilac">"Sirelililla"</string>
+    <string msgid="702328612689542595" name="pdf_highlighter_color_palette_item_lime_green">"Laimiroheline"</string>
+    <string msgid="197052696316136021" name="pdf_highlighter_color_palette_item_medium_green">"Keskmine roheline"</string>
+    <string msgid="7817217551335552373" name="pdf_highlighter_color_palette_item_medium_purple">"Keskmine lilla"</string>
+    <string msgid="5477535957920899892" name="pdf_highlighter_color_palette_item_olive_green">"Oliiviroheline"</string>
+    <string msgid="9039462823926560002" name="pdf_highlighter_color_palette_item_orange">"Oranž"</string>
+    <string msgid="6661538285172874930" name="pdf_highlighter_color_palette_item_pale_green">"Kahvaturoheline"</string>
+    <string msgid="5090029667187265117" name="pdf_highlighter_color_palette_item_pale_pink">"Kahvaturoosa"</string>
+    <string msgid="677800720719433260" name="pdf_highlighter_color_palette_item_peach">"Virsikuroosa"</string>
+    <string msgid="5855323132087647114" name="pdf_highlighter_color_palette_item_periwinkle_blue">"Sinakaslilla"</string>
+    <string msgid="1021474840088432691" name="pdf_highlighter_color_palette_item_rose_pink">"Roosiroosa"</string>
+    <string msgid="3055450785882188986" name="pdf_highlighter_color_palette_item_sage_green">"Salveiroheline"</string>
+    <string msgid="652842313614405631" name="pdf_highlighter_color_palette_item_steel_blue">"Terassinine"</string>
+    <string msgid="2772905536293009655" name="pdf_highlighter_color_palette_item_white">"Valge"</string>
+    <string msgid="8722349618048494139" name="pdf_highlighter_color_palette_item_yellow">"Kollane"</string>
+    <string msgid="2349482864795708538" name="pdf_pen_color_palette_item_black">"Must"</string>
+    <string msgid="6624561290795093542" name="pdf_pen_color_palette_item_blue">"Sinine"</string>
+    <string msgid="9133647461570342884" name="pdf_pen_color_palette_item_brown">"Pruun"</string>
+    <string msgid="3472790346783163237" name="pdf_pen_color_palette_item_coral_red">"Korallpunane"</string>
+    <string msgid="8227114459819696973" name="pdf_pen_color_palette_item_dark_blue">"Tumesinine"</string>
+    <string msgid="1624337798517256053" name="pdf_pen_color_palette_item_deep_red">"Sügavpunane"</string>
+    <string msgid="3591366007431445814" name="pdf_pen_color_palette_item_gold">"Kuldne"</string>
+    <string msgid="758196389357724982" name="pdf_pen_color_palette_item_gray">"Hall"</string>
+    <string msgid="4048949964965941329" name="pdf_pen_color_palette_item_green">"Roheline"</string>
+    <string msgid="2201920941939797490" name="pdf_pen_color_palette_item_lavender">"Lavendlililla"</string>
+    <string msgid="1221502826981830146" name="pdf_pen_color_palette_item_light_blue">"Helesinine"</string>
+    <string msgid="71510397000580323" name="pdf_pen_color_palette_item_light_gray">"Helehall"</string>
+    <string msgid="2925975266430165024" name="pdf_pen_color_palette_item_lime_green">"Laimiroheline"</string>
+    <string msgid="3385312517845353964" name="pdf_pen_color_palette_item_mint_green">"Mündiroheline"</string>
+    <string msgid="1872421165852966098" name="pdf_pen_color_palette_item_olive_green">"Oliiviroheline"</string>
+    <string msgid="4364496006674819380" name="pdf_pen_color_palette_item_orange">"Oranž"</string>
+    <string msgid="7640276023460122441" name="pdf_pen_color_palette_item_pale_green">"Kahvaturoheline"</string>
+    <string msgid="6222272594988730012" name="pdf_pen_color_palette_item_pale_lime">"Kahvatu laimiroheline"</string>
+    <string msgid="6793633656166022181" name="pdf_pen_color_palette_item_pale_pink">"Kahvaturoosa"</string>
+    <string msgid="4574864310357012821" name="pdf_pen_color_palette_item_peach">"Virsikuroosa"</string>
+    <string msgid="5726500338191639795" name="pdf_pen_color_palette_item_pink">"Roosa"</string>
+    <string msgid="7007410838826542299" name="pdf_pen_color_palette_item_purple">"Lilla"</string>
+    <string msgid="6367852274869305090" name="pdf_pen_color_palette_item_red">"Punane"</string>
+    <string msgid="5729612885142439660" name="pdf_pen_color_palette_item_salmon">"Lõheroosa"</string>
+    <string msgid="3391398601008659651" name="pdf_pen_color_palette_item_steel_blue">"Terassinine"</string>
+    <string msgid="4446741184644224946" name="pdf_pen_color_palette_item_tan">"Pruunikasbeež"</string>
+    <string msgid="8520258422897015917" name="pdf_pen_color_palette_item_white">"Valge"</string>
+    <string msgid="3408908880225489347" name="pdf_pen_color_palette_item_yellow">"Kollane"</string>
+    <string msgid="1169511027880317546" name="previous_button_description">"Eelmine"</string>
+    <string msgid="3443862378337999137" name="retry_button_text">"Proovi uuesti"</string>
+    <string msgid="5720892205323882483" name="scrollbar_description">"Kerimisriba"</string>
+    <string msgid="2018068413709926925" name="title_dialog_password">"Fail on kaitstud"</string>
+</resources>

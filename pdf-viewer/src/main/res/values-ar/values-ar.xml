@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    <string msgid="5882082700509010966" name="action_edit">"تعديل الملف"</string>
+    <string msgid="3857939523964276535" name="annotation_color_palette_button_content_desc">"لوحة الألوان"</string>
+    <string msgid="7095965950282529732" name="annotation_eraser_button_content_desc">"ممحاة"</string>
+    <string msgid="4145607409953592495" name="annotation_highlighter_button_content_desc">"قلم تمييز"</string>
+    <string msgid="3429267369324256891" name="annotation_pen_button_content_desc">"قلم"</string>
+    <string msgid="6173017390316607430" name="annotation_redo_button_content_desc">"إعادة"</string>
+    <string msgid="7576992521535921829" name="annotation_toggle_annotation_button_content_desc">"تفعيل أو إيقاف التعليق التوضيحي"</string>
+    <string msgid="8677860607653139057" name="annotation_undo_button_content_desc">"تراجع"</string>
+    <string msgid="5855794576957267334" name="button_cancel">"إلغاء"</string>
+    <string msgid="5445014062438566842" name="button_open">"فتح"</string>
+    <string msgid="7677598370087228978" name="cannot_edit_pdf">"‏يتعذّر تعديل ملف PDF هذا."</string>
+    <string msgid="8943155331324944981" name="clipboard_label">"‏تم نسخ المحتوى من ملف PDF"</string>
+    <string msgid="7379823906921067675" name="close_button_description">"إغلاق"</string>
+    <string msgid="8730230629127076731" name="combobox_custom_option">"مخصص"</string>
+    <string msgid="7020926320719465164" name="confirm_selection">"تأكيد"</string>
+    <string msgid="385275789223074637" name="desc_copy">"يتم نسخ المحتوى المحدّد إلى الحافظة"</string>
+    <string msgid="4764327179483836535" name="desc_copy_link">"يتم نسخ الرابط إلى الحافظة"</string>
+    <string msgid="7027325672358507448" name="desc_email_link">"البريد الإلكتروني: <xliff:g id="EMAIL_ADDRESS">%1$s</xliff:g>"</string>
+    <string msgid="5041794048330057239" name="desc_empty_page">"صفحة فارغة"</string>
+    <string msgid="1333698934111921601" name="desc_goto">"الانتقال إلى"</string>
+    <string msgid="2461368384824849714" name="desc_goto_link">"الانتقال إلى الصفحة <xliff:g id="PAGE_NUMBER">%1$d</xliff:g>"</string>
+    <string msgid="7700601988820586333" name="desc_image_alt_text">"صورة: <xliff:g id="ALT_TEXT">%1$s</xliff:g>"</string>
+    <string msgid="9085362382536609454" name="desc_jump_to">"‏يتم الانتقال إلى القسم أو الصفحة في ملف PDF"</string>
+    <string msgid="6702471448987833953" name="desc_page">"الصفحة <xliff:g id="PAGE">%1$d</xliff:g>"</string>
+    <string msgid="5286496438609641577" name="desc_page_range">"الصفحات من <xliff:g id="FIRST">%1$d</xliff:g> إلى <xliff:g id="LAST">%2$d</xliff:g> من إجمالي <xliff:g id="TOTAL">%3$d</xliff:g>"</string>
+    <string msgid="8459583146661044094" name="desc_page_single">"الصفحة <xliff:g id="PAGE">%1$d</xliff:g> من إجمالي <xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="2564017005407577604" name="desc_page_with_text">"الصفحة <xliff:g id="PAGE_NUMBER">%1$d</xliff:g>: <xliff:g id="PAGE_TEXT">%2$s</xliff:g>"</string>
+    <string msgid="6636473611443746739" name="desc_password">"حقل كلمة المرور"</string>
+    <string msgid="4718823067483963845" name="desc_password_incorrect">"كلمة المرور غير صحيحة"</string>
+    <string msgid="4676206571020946870" name="desc_password_incorrect_message">"لقد أدخلت كلمة مرور خاطئة. يُرجى إعادة المحاولة."</string>
+    <string msgid="4353979540148077296" name="desc_pdf_view">"‏عرض ملفات PDF"</string>
+    <string msgid="4986414958429253135" name="desc_phone_link">"‏رقم الهاتف: ‎<xliff:g id="PHONE_NUMBER">%1$s</xliff:g>"</string>
+    <string msgid="428248654717550270" name="desc_select_all">"‏يتم اختيار كل النص في ملف PDF"</string>
+    <string msgid="3249210022376857070" name="desc_selection_start">"بداية الاختيار"</string>
+    <string msgid="2690168835536726898" name="desc_selection_stop">"نهاية الاختيار"</string>
+    <string msgid="2776023299237058419" name="desc_web_link">"الرابط: <xliff:g id="DESTINATION">%1$s</xliff:g>"</string>
+    <string msgid="3323639528531061592" name="desc_web_link_shortened_to_domain">"الرابط: صفحة ويب في <xliff:g id="DESTINATION_DOMAIN">%1$s</xliff:g>"</string>
+    <string msgid="7318480946145947242" name="desc_zoom">"التكبير أو التصغير بنسبة <xliff:g id="FIRST">%1$d</xliff:g> في المئة"</string>
+    <string msgid="345675813790884187" name="discard_button">"تجاهل"</string>
+    <string msgid="6052519273995024254" name="discard_changes_dialog_message">"لم يتم حفظ التغييرات التي أجريتها."</string>
+    <string msgid="8471151263363129054" name="discard_changes_dialog_title">"هل المطلوب تجاهل التغييرات؟"</string>
+    <string msgid="3400883576932438749" name="error_cannot_open_password_protected_pdf">"‏ملفات PDF المحمية بكلمة مرور غير متوافقة."</string>
+    <string msgid="2361919778558145071" name="error_cannot_open_pdf">"‏يتعذّر فتح ملف PDF"</string>
+    <string msgid="7567006188638831878" name="error_file_format_pdf">"‏يتعذَّر عرض ملف PDF (تنسيق الملف \"<xliff:g id="TITLE">%1$s</xliff:g>\" غير صالح)"</string>
+    <string msgid="1592475819957182385" name="error_on_page">"يتعذَّر عرض الصفحة <xliff:g id="PAGE">%1$d</xliff:g> (خطأ في الملف)"</string>
+    <string msgid="1491143649111222713" name="fast_scroller_thumb">"شريط التمرير"</string>
+    <string msgid="4003885928556884091" name="file_error">"تعذّر فتح الملف. هل توجد مشكلة محتملة في الأذونات؟"</string>
+    <string msgid="2305283577544618880" name="form_click_enters_text_edit_mode_instruction">"سيؤدي النقر إلى تفعيل \"وضع تعديل النص\"."</string>
+    <string msgid="5648228168212004143" name="form_click_opens_choices_menu_instruction">"سيؤدي النقر إلى فتح قائمة الخيارات."</string>
+    <string msgid="7171111300244445911" name="form_click_toggle_instruction">"سيؤدي النقر إلى تبديل القيمة."</string>
+    <string msgid="3883820498421821863" name="form_current_value">"القيمة الحالية: <xliff:g id="WIDGET_VALUE">%1$s</xliff:g>"</string>
+    <string msgid="6137116306327174299" name="form_multiselect_type">"النوع: \"<xliff:g id="WIDGET_TYPE_NAME">%1$s</xliff:g>\" للاختيارات المتعدّدة"</string>
+    <string msgid="4928929192592391646" name="form_read_only">"التطبيق المصغَّر متاح للقراءة فقط ولا يمكن تغييره."</string>
+    <string msgid="2718582322716402117" name="form_title">"العنوان: <xliff:g id="WIDGET_ACCESSIBILITY_TITLE">%1$s</xliff:g>"</string>
+    <string msgid="1302137779809645840" name="form_type">"النوع: <xliff:g id="WIDGET_TYPE_NAME">%1$s</xliff:g>"</string>
+    <string msgid="6371515914365431330" name="form_unknown">"غير معروف"</string>
+    <string msgid="960532222685914495" name="form_value">"القيمة: <xliff:g id="WIDGET_VALUE">%1$s</xliff:g>"</string>
+    <string msgid="5841730047544552656" name="form_widget">"التطبيق المصغَّر للنموذج"</string>
+    <string msgid="2905625606101301245" name="form_widget_type_checkbox">"مربع اختيار"</string>
+    <string msgid="3912742706795495520" name="form_widget_type_combo_box">"مربع تحرير وسرد"</string>
+    <string msgid="431828611710070971" name="form_widget_type_list_box">"مربّع قائمة"</string>
+    <string msgid="7978535904272874920" name="form_widget_type_push_button">"زر يعمل بالضغط"</string>
+    <string msgid="4798553968129281550" name="form_widget_type_radio_button">"زر اختيار"</string>
+    <string msgid="3811511096215331673" name="form_widget_type_signature">"توقيع"</string>
+    <string msgid="4443782242324937941" name="form_widget_type_text_field">"حقل نص"</string>
+    <string msgid="5385388836603550565" name="hint_find">"البحث في الملف"</string>
+    <string msgid="7573006208701305988" name="keep_editing_button">"مواصلة التعديل"</string>
+    <string msgid="869104793055534158" name="label_copy_link">"نسخ الرابط"</string>
+    <string msgid="462543500326296329" name="label_jump_to">"الانتقال إلى"</string>
+    <string msgid="8290964180158460076" name="label_page_range">"<xliff:g id="TOTAL">%3$d</xliff:g> / <xliff:g id="LAST">%2$d</xliff:g>-<xliff:g id="FIRST">%1$d</xliff:g>"</string>
+    <string msgid="456123685879261101" name="label_page_single">"<xliff:g id="TOTAL">%2$d</xliff:g> / <xliff:g id="PAGE">%1$d</xliff:g>"</string>
+    <string msgid="4456258714097111908" name="label_password_first">"كلمة المرور"</string>
+    <string msgid="5291118378657145978" name="label_password_incorrect">"كلمة المرور خاطئة. يُرجى إعادة المحاولة."</string>
+    <string msgid="4996847358326345288" name="match_status_description">"‫<xliff:g id="POSITION">%1$d</xliff:g> من إجمالي <xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="6288242289981639727" name="message_match_status">"‫<xliff:g id="POSITION">%1$d</xliff:g> من أصل <xliff:g id="TOTAL">%2$d</xliff:g>"</string>
+    <string msgid="5929387004361286433" name="message_no_match_status">"ما مِن نتائج مطابقة"</string>
+    <string msgid="3520133467908240802" name="needs_more_data">"‏البيانات غير كافية لمعالجة مستند PDF"</string>
+    <string msgid="4702699322249103693" name="next_button_description">"التالي"</string>
+    <string msgid="2968770793669433462" name="page_broken">"‏تعذّر تحميل صفحة من مستند PDF"</string>
+    <string msgid="8875370870743585303" name="password_not_entered">"يجب إدخال كلمة المرور لفتح القفل"</string>
+    <string msgid="7693112422816705779" name="pdf_brush_slider_content_description">"عرض الخط"</string>
+    <string msgid="3287950599604474450" name="pdf_error">"‏تعذّرت معالجة مستند PDF."</string>
+    <string msgid="465951735046038490" name="pdf_highlighter_color_palette_item_beige">"بيج"</string>
+    <string msgid="8165260767569639713" name="pdf_highlighter_color_palette_item_bright_yellow">"أصفر فاتح"</string>
+    <string msgid="449068479718102588" name="pdf_highlighter_color_palette_item_coral_red">"أحمر مرجاني"</string>
+    <string msgid="129747852317213657" name="pdf_highlighter_color_palette_item_dark_gray">"رمادي داكن"</string>
+    <string msgid="6204969508698655017" name="pdf_highlighter_color_palette_item_dusty_rose">"وردي مطفي"</string>
+    <string msgid="7650371560127252297" name="pdf_highlighter_color_palette_item_light_blue">"أزرق فاتح"</string>
+    <string msgid="8359141260355077279" name="pdf_highlighter_color_palette_item_lilac">"أرجواني فاتح"</string>
+    <string msgid="702328612689542595" name="pdf_highlighter_color_palette_item_lime_green">"أخضر ليموني"</string>
+    <string msgid="197052696316136021" name="pdf_highlighter_color_palette_item_medium_green">"أخضر متوسط"</string>
+    <string msgid="7817217551335552373" name="pdf_highlighter_color_palette_item_medium_purple">"أرجواني متوسط"</string>
+    <string msgid="5477535957920899892" name="pdf_highlighter_color_palette_item_olive_green">"أخضر زيتوني"</string>
+    <string msgid="9039462823926560002" name="pdf_highlighter_color_palette_item_orange">"برتقالي"</string>
+    <string msgid="6661538285172874930" name="pdf_highlighter_color_palette_item_pale_green">"أخضر باهت"</string>
+    <string msgid="5090029667187265117" name="pdf_highlighter_color_palette_item_pale_pink">"وردي باهت"</string>
+    <string msgid="677800720719433260" name="pdf_highlighter_color_palette_item_peach">"خوخي"</string>
+    <string msgid="5855323132087647114" name="pdf_highlighter_color_palette_item_periwinkle_blue">"أزرق خزامي"</string>
+    <string msgid="1021474840088432691" name="pdf_highlighter_color_palette_item_rose_pink">"وردي فاتح"</string>
+    <string msgid="3055450785882188986" name="pdf_highlighter_color_palette_item_sage_green">"أخضر غامق"</string>
+    <string msgid="652842313614405631" name="pdf_highlighter_color_palette_item_steel_blue">"أزرق فولاذي"</string>
+    <string msgid="2772905536293009655" name="pdf_highlighter_color_palette_item_white">"أبيض"</string>
+    <string msgid="8722349618048494139" name="pdf_highlighter_color_palette_item_yellow">"أصفر"</string>
+    <string msgid="2349482864795708538" name="pdf_pen_color_palette_item_black">"أسود"</string>
+    <string msgid="6624561290795093542" name="pdf_pen_color_palette_item_blue">"أزرق"</string>
+    <string msgid="9133647461570342884" name="pdf_pen_color_palette_item_brown">"بني"</string>
+    <string msgid="3472790346783163237" name="pdf_pen_color_palette_item_coral_red">"أحمر مرجاني"</string>
+    <string msgid="8227114459819696973" name="pdf_pen_color_palette_item_dark_blue">"أزرق داكن"</string>
+    <string msgid="1624337798517256053" name="pdf_pen_color_palette_item_deep_red">"أحمر داكن"</string>
+    <string msgid="3591366007431445814" name="pdf_pen_color_palette_item_gold">"ذهبي"</string>
+    <string msgid="758196389357724982" name="pdf_pen_color_palette_item_gray">"رمادي"</string>
+    <string msgid="4048949964965941329" name="pdf_pen_color_palette_item_green">"أخضر"</string>
+    <string msgid="2201920941939797490" name="pdf_pen_color_palette_item_lavender">"خزامى"</string>
+    <string msgid="1221502826981830146" name="pdf_pen_color_palette_item_light_blue">"أزرق فاتح"</string>
+    <string msgid="71510397000580323" name="pdf_pen_color_palette_item_light_gray">"رمادي فاتح"</string>
+    <string msgid="2925975266430165024" name="pdf_pen_color_palette_item_lime_green">"أخضر ليموني"</string>
+    <string msgid="3385312517845353964" name="pdf_pen_color_palette_item_mint_green">"أخضر نعناعي"</string>
+    <string msgid="1872421165852966098" name="pdf_pen_color_palette_item_olive_green">"أخضر زيتوني"</string>
+    <string msgid="4364496006674819380" name="pdf_pen_color_palette_item_orange">"برتقالي"</string>
+    <string msgid="7640276023460122441" name="pdf_pen_color_palette_item_pale_green">"أخضر باهت"</string>
+    <string msgid="6222272594988730012" name="pdf_pen_color_palette_item_pale_lime">"أخضر ليموني باهت"</string>
+    <string msgid="6793633656166022181" name="pdf_pen_color_palette_item_pale_pink">"وردي باهت"</string>
+    <string msgid="4574864310357012821" name="pdf_pen_color_palette_item_peach">"خوخي"</string>
+    <string msgid="5726500338191639795" name="pdf_pen_color_palette_item_pink">"وردي"</string>
+    <string msgid="7007410838826542299" name="pdf_pen_color_palette_item_purple">"أرجواني"</string>
+    <string msgid="6367852274869305090" name="pdf_pen_color_palette_item_red">"أحمر"</string>
+    <string msgid="5729612885142439660" name="pdf_pen_color_palette_item_salmon">"برتقالي وردي"</string>
+    <string msgid="3391398601008659651" name="pdf_pen_color_palette_item_steel_blue">"أزرق فولاذي"</string>
+    <string msgid="4446741184644224946" name="pdf_pen_color_palette_item_tan">"بنّي فاتح"</string>
+    <string msgid="8520258422897015917" name="pdf_pen_color_palette_item_white">"أبيض"</string>
+    <string msgid="3408908880225489347" name="pdf_pen_color_palette_item_yellow">"أصفر"</string>
+    <string msgid="1169511027880317546" name="previous_button_description">"السابق"</string>
+    <string msgid="3443862378337999137" name="retry_button_text">"إعادة المحاولة"</string>
+    <string msgid="5720892205323882483" name="scrollbar_description">"شريط التمرير"</string>
+    <string msgid="2018068413709926925" name="title_dialog_password">"هذا الملف محمي"</string>
+</resources>

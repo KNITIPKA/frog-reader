@@ -1,0 +1,8 @@
+<resources>
+    <string name="pdf_selection_highlight">Highlight</string>
+    <string name="pdf_selection_add_note">Add note</string>
+    <plurals name="pdf_selection_delete_highlights">
+        <item quantity="one">Delete highlight</item>
+        <item quantity="other">Delete %d highlights</item>
+    </plurals>
+</resources>

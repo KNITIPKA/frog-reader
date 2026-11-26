@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pdf_metadata_show">Show embedded metadata</string>
+    <string name="pdf_metadata_hide">Hide embedded metadata</string>
+</resources>

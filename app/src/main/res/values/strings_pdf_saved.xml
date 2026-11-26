@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pdf_saved_highlights">Highlights</string>
+    <string name="pdf_saved_notes">Notes</string>
+    <string name="pdf_saved_highlights_empty">Select text in the PDF and tap Highlight to save it here.</string>
+    <string name="pdf_saved_notes_empty">Select text in the PDF and tap Add note to save your thoughts here.</string>
+    <string name="pdf_saved_add_note">Add note</string>
+    <string name="pdf_saved_edit_note">Edit note</string>
+    <string name="pdf_saved_note_label">Note</string>
+</resources>
