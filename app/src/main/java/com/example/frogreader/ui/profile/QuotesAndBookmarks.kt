@@ -3,6 +3,7 @@ package com.example.frogreader.ui.profile
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.Bookmark
 import com.example.frogreader.data.model.BOOKMARK_PREVIEW_CHARS
+import com.example.frogreader.data.model.DocumentLocation
 import com.example.frogreader.data.model.Quote
 
 internal data class SavedBookmark(val book: Book, val bookmark: Bookmark)
@@ -60,9 +61,25 @@ internal fun bookQuotesAndBookmarks(books: List<Book>, bookId: String?, search: 
 
 internal fun sortedQuotes(quotes: List<Quote>, newestFirst: Boolean): List<Quote> =
     if (newestFirst) quotes.sortedWith(compareByDescending<Quote> { it.createdAtMillis }.thenBy { it.id })
-    else quotes.sortedWith(compareBy<Quote> { it.chapterIndex }
-        .thenBy { if (it.startItem >= 0) it.startItem else Int.MAX_VALUE }
-        .thenBy { it.startChar }.thenBy { it.createdAtMillis }.thenBy { it.id })
+    else quotes.sortedWith(compareBy<Quote> {
+        when (val location = it.documentLocation) {
+            is DocumentLocation.Pdf -> location.pageIndex
+            is DocumentLocation.Reflowable -> location.chapterIndex
+            null -> it.chapterIndex
+        }.takeIf { index -> index >= 0 } ?: Int.MAX_VALUE
+    }.thenBy {
+        when (val location = it.documentLocation) {
+            is DocumentLocation.Pdf -> location.y.toDouble().takeIf { value -> value.isFinite() } ?: Double.MAX_VALUE
+            is DocumentLocation.Reflowable -> location.elementIndex.toDouble().takeIf { index -> index >= 0 } ?: Double.MAX_VALUE
+            null -> it.startItem.toDouble().takeIf { index -> index >= 0 } ?: Double.MAX_VALUE
+        }
+    }.thenBy {
+        when (val location = it.documentLocation) {
+            is DocumentLocation.Pdf -> location.x.toDouble().takeIf { value -> value.isFinite() } ?: Double.MAX_VALUE
+            is DocumentLocation.Reflowable -> location.charOffset.toDouble()
+            null -> it.startChar.toDouble()
+        }
+    }.thenBy { it.createdAtMillis }.thenBy { it.id })
 
 internal fun formatQuoteForCopy(quoteText: String, bookTitle: String, bookAuthor: String?): String {
     val cleanQuote = quoteText.trimEnd()

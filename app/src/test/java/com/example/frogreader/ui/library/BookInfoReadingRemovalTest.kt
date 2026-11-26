@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.viewModelScope
 import com.example.frogreader.FrogReaderApp
 import com.example.frogreader.data.BookRepository
+import com.example.frogreader.data.StoreFixture
 import com.example.frogreader.data.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -125,8 +126,7 @@ class BookInfoReadingRemovalTest {
         repo.saveReadingLogEntry(ReadingLogEntry("paper", "Paper", review = "Irreplaceable review"))
         val original = repo.readingLog.value.single()
         val model = model(repo, "paper")
-        val blockedTemp = File(temp.root, "userdata.json.tmp").apply { mkdirs() }
-        File(blockedTemp, "block-write").writeText("block")
+        StoreFixture.blockWrites(temp.root)
         try {
             model.removeReading()
             val failed = withTimeout(5000) { model.state.first { it.readingRemovalError && !it.removingReading } }
@@ -134,7 +134,7 @@ class BookInfoReadingRemovalTest {
             assertNull(failed.removedReading)
             assertEquals(original, failed.readingLogEntry)
             assertEquals(listOf(original), repository().readingLog.value)
-        } finally { blockedTemp.deleteRecursively() }
+        } finally { StoreFixture.unblockWrites(temp.root) }
         model.removeReading()
         val completed = removed(model)
         assertFalse(completed.readingRemovalError)

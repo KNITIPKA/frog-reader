@@ -103,6 +103,7 @@ import com.example.frogreader.ui.theme.LocalFrogColors
 fun ProfileScreen(
     contentPadding: PaddingValues = PaddingValues(),
     onOpenSettings: () -> Unit = {},
+    onOpenSearch: () -> Unit = {},
     onOpenStats: () -> Unit = {},
     onOpenAchievements: (() -> Unit)? = null,
     onOpenQuotesAndBookmarks: () -> Unit = {},
@@ -146,7 +147,9 @@ fun ProfileScreen(
             readingLogCount = readingLog.size,
             contentPadding = contentPadding,
             isActive = isActive,
-            onOpenSettings = onOpenSettings, onOpenStats = onOpenStats,
+            onOpenSettings = onOpenSettings,
+            onOpenSearch = onOpenSearch,
+            onOpenStats = onOpenStats,
             onOpenAchievements = onOpenAchievements,
             onOpenQuotesAndBookmarks = onOpenQuotesAndBookmarks, onOpenReadingQueue = onOpenReadingQueue, onOpenReadingLog = onOpenReadingLog,
             onPickAvatar = onPickAvatar, onSaveGoal = viewModel::saveDailyGoal,
@@ -175,6 +178,7 @@ internal fun ProfileDashboard(
     readingLogCount: Int? = null,
     contentPadding: PaddingValues = PaddingValues(),
     onOpenSettings: () -> Unit = {},
+    onOpenSearch: () -> Unit = {},
     onOpenStats: () -> Unit = {},
     onOpenAchievements: (() -> Unit)? = null,
     onOpenQuotesAndBookmarks: () -> Unit = {},
@@ -220,6 +224,7 @@ internal fun ProfileDashboard(
                 onQueryChange = {},
                 searchHint = stringResource(R.string.profile_search_hint),
                 searchEnabled = false,
+                onSearchClick = onOpenSearch,
                 onOpenSettings = onOpenSettings,
             ) {
                 ProfileCard(

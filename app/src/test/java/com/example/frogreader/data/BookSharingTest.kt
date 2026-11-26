@@ -65,6 +65,7 @@ class BookSharingTest {
 
     @Test fun `transfer names preserve native format extensions and valid Unicode within filesystem limits`() {
         val formats = listOf(
+            Triple(BookFormat.PDF, "PDF", "pdf"),
             Triple(BookFormat.TXT, "TXT", "txt"), Triple(BookFormat.MD, "MD", "md"),
             Triple(BookFormat.EPUB, "EPUB", "epub"), Triple(BookFormat.FB2, "FB2", "fb2"),
             Triple(BookFormat.MOBI, "MOBI", "mobi"), Triple(BookFormat.MOBI, "MOBI + KF8", "mobi"),

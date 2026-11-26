@@ -3,6 +3,7 @@ package com.example.frogreader.ui.profile
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.Bookmark
+import com.example.frogreader.data.model.DocumentLocation
 import com.example.frogreader.data.model.Quote
 import org.junit.Assert.*
 import org.junit.Test
@@ -34,6 +35,25 @@ class QuotesAndBookmarksTest {
         )
         assertEquals(listOf("firstChapter", "early", "later", "unlinked"), sortedQuotes(quotes, false).map { it.id })
         assertEquals(listOf("unlinked", "early", "later", "firstChapter"), sortedQuotes(quotes, true).map { it.id })
+    }
+
+    @Test fun `pdf quote order follows real page and coordinates independently of epub fields`() {
+        val quotes = listOf(
+            Quote("page5", "later page", -1, 1, documentLocation = DocumentLocation.Pdf(4, y = 5f)),
+            Quote("right", "same line", 9, 2, startItem = 1, documentLocation = DocumentLocation.Pdf(1, x = 30f, y = 20f)),
+            Quote("bottom", "lower on page", 0, 3, documentLocation = DocumentLocation.Pdf(1, y = 90f)),
+            Quote("left", "same line", 10, 4, startItem = 100, documentLocation = DocumentLocation.Pdf(1, x = 10f, y = 20f)),
+        )
+        assertEquals(listOf("left", "right", "bottom", "page5"), sortedQuotes(quotes, false).map { it.id })
+        assertEquals(listOf("left", "bottom", "right", "page5"), sortedQuotes(quotes, true).map { it.id })
+    }
+
+    @Test fun `typed reflowable quote order overrides obsolete legacy indices`() {
+        val quotes = listOf(
+            Quote("later", "later", 0, 1, startItem = 0, documentLocation = DocumentLocation.Reflowable(2, 100, 5)),
+            Quote("earlier", "earlier", 9, 2, startItem = 200, documentLocation = DocumentLocation.Reflowable(1, 50, 10)),
+        )
+        assertEquals(listOf("earlier", "later"), sortedQuotes(quotes, false).map { it.id })
     }
 
     @Test fun `bookmarks stay in selected book and are newest first including orphaned positions`() {

@@ -196,19 +196,19 @@ class Tier1FeatureCoverageTest {
             BookFormat.EPUB -> "primaryContainer"
             BookFormat.FB2 -> "secondaryContainer"
             BookFormat.MOBI -> "tertiaryContainer"
-            BookFormat.TXT, BookFormat.MD -> "surfaceContainer"
+            BookFormat.TXT, BookFormat.MD, BookFormat.PDF -> "surfaceContainer"
         }
         val badgeTypeFb2 = when (formatFb2) {
             BookFormat.EPUB -> "primaryContainer"
             BookFormat.FB2 -> "secondaryContainer"
             BookFormat.MOBI -> "tertiaryContainer"
-            BookFormat.TXT, BookFormat.MD -> "surfaceContainer"
+            BookFormat.TXT, BookFormat.MD, BookFormat.PDF -> "surfaceContainer"
         }
         val badgeTypeMobi = when (formatMobi) {
             BookFormat.EPUB -> "primaryContainer"
             BookFormat.FB2 -> "secondaryContainer"
             BookFormat.MOBI -> "tertiaryContainer"
-            BookFormat.TXT, BookFormat.MD -> "surfaceContainer"
+            BookFormat.TXT, BookFormat.MD, BookFormat.PDF -> "surfaceContainer"
         }
 
         assertEquals("primaryContainer", badgeTypeEpub)
@@ -356,7 +356,7 @@ class Tier1FeatureCoverageTest {
             BookFormat.EPUB -> "primaryContainer"
             BookFormat.FB2 -> "secondaryContainer"
             BookFormat.MOBI -> "tertiaryContainer"
-            BookFormat.TXT, BookFormat.MD -> "surfaceContainer"
+            BookFormat.TXT, BookFormat.MD, BookFormat.PDF -> "surfaceContainer"
         }
 
         assertEquals("primaryContainer", badgeColor(BookFormat.EPUB))

@@ -41,8 +41,8 @@ class BookMetadataRepositoryTest {
         repository.addBookForRestore(book(file))
         val before = repository.books.value.single()
         val content = repository.loadContent(before)
-        val userBytes = File(temp.root, "userdata.json").readBytes()
-        val progressBytes = File(temp.root, "progress.json").readBytes()
+        val quoteStampBefore = StoreFixture.quotesOnDisk(temp.root, before.id).single().updatedAtMillis
+        val progressStampBefore = StoreFixture.progressEntityOnDisk(temp.root, before.id)?.updatedAtMillis
         val draft = repository.editableMetadata(before.id).second.copy(title = "Edited title", description = "new-search-word", language = "uk")
         val saved = repository.saveBookMetadata(before.id, before.fileName, draft)
         assertNotEquals(before.fileName, saved.fileName)
@@ -61,8 +61,8 @@ class BookMetadataRepositoryTest {
         assertEquals(listOf(saved), searchBooks(repository.books.value, "new-search-word"))
         assertTrue(searchBooks(repository.books.value, "old-search-word").isEmpty())
         assertEquals(saved, BookRepository(ctx).books.value.single())
-        assertArrayEquals(userBytes, File(temp.root, "userdata.json").readBytes())
-        assertArrayEquals(progressBytes, File(temp.root, "progress.json").readBytes())
+        assertEquals(quoteStampBefore, StoreFixture.quotesOnDisk(temp.root, before.id).single().updatedAtMillis)
+        assertEquals(progressStampBefore, StoreFixture.progressEntityOnDisk(temp.root, before.id)?.updatedAtMillis)
         assertEquals(before.quotes, saved.quotes)
         assertEquals(before.bookmarks, saved.bookmarks)
         assertEquals(before.progress, saved.progress)
@@ -78,15 +78,18 @@ class BookMetadataRepositoryTest {
         val source = source()
         repository.addBookForRestore(book(source))
         val before = repository.books.value.single()
-        val index = File(temp.root, "library.json").readBytes()
-        File(temp.root, "library.json.tmp").mkdirs()
-        File(temp.root, "library.json.tmp/block").writeText("force a write failure")
-        val result = runCatching {
-            repository.saveBookMetadata(before.id, before.fileName, repository.editableMetadata(before.id).second.copy(title = "Must not appear"))
+        val diskBefore = StoreFixture.booksOnDisk(temp.root)
+        StoreFixture.blockWrites(temp.root)
+        val result = try {
+            runCatching {
+                repository.saveBookMetadata(before.id, before.fileName, repository.editableMetadata(before.id).second.copy(title = "Must not appear"))
+            }
+        } finally {
+            StoreFixture.unblockWrites(temp.root)
         }
         assertTrue(result.isFailure)
         assertEquals(before, repository.books.value.single())
-        assertArrayEquals(index, File(temp.root, "library.json").readBytes())
+        assertEquals(diskBefore, StoreFixture.booksOnDisk(temp.root))
         assertEquals(listOf("original.fb2"), File(temp.root, "books").list()!!.toList())
         assertEquals("Original", BookParsers.parseMetadata(source, BookFormat.FB2).title)
     }

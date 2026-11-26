@@ -94,8 +94,8 @@ components must not inherit default purple fixed roles.
    `onProfile`; action cards use `action` / `onAction`; their captions use
    `actionSecondary`; icon tiles use `actionIconBackground` / `actionIcon`.
    Foregrounds must remain readable over every dune layer. Profile search and
-   settings use the same shared glass controls as the library. The profile search
-   placeholder remains disabled until profile-wide search is available.
+   settings use the same shared glass controls as the library; tapping the profile
+   search bar opens Profile Global Search with semantic ivory-backed category cards.
 8. Reading paper remains `#F3E7D2`, independently of redesigns to app chrome or
    Material You. Book illustrations, covers, publisher colors and image exports
    are content, not app palette. Cover captions retain their white-text/dark-scrim

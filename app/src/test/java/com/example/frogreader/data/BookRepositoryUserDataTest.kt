@@ -1,5 +1,6 @@
 package com.example.frogreader.data
 
+import com.example.frogreader.data.db.DatabaseManager
 import com.example.frogreader.data.model.Book
 import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.Bookmark
@@ -20,10 +21,8 @@ import java.io.File
 import java.io.IOException
 
 /**
- * The reading queues, ratings and reviews, plus the two things that only a
- * future sync will read: per-record timestamps and tombstones. Those are tested
- * now precisely because nothing consumes them yet — a stamp that silently stops
- * being written would otherwise go unnoticed until the first merge.
+ * Verifies user-owned reading state, ratings, reviews, passages, per-row timestamps,
+ * and SQLite foreign-key cascade + FTS5 cleanup invariants.
  */
 class BookRepositoryUserDataTest {
 
@@ -37,15 +36,28 @@ class BookRepositoryUserDataTest {
         addedAtMillis = 1_000L,
     )
 
+    @Before
+    fun setUp() {
+        testDir.mkdirs()
+        StoreFixture.clear(testDir)
+    }
+
+    @After
+    fun tearDown() = StoreFixture.clear(testDir)
+
     @Test
     fun `overlapping quotes keep their own colors and notes across restart and deletion undo`() = runTest {
         StoreFixture.seed(testDir, listOf(book("a")))
         val repository = BookRepository(context = null)
-        val original = Quote("q1", "the entire paragraph", 0, 1_000L,
-            startItem = 1, startChar = 0, endItem = 1, endChar = 100, note = "original")
-        val nested = Quote("q2", "part of the paragraph", 0, 2_000L,
+        val original = Quote(
+            "q1", "the entire paragraph", 0, 1_000L,
+            startItem = 1, startChar = 0, endItem = 1, endChar = 100, note = "original",
+        )
+        val nested = Quote(
+            "q2", "part of the paragraph", 0, 2_000L,
             startItem = 1, startChar = 10, endItem = 1, endChar = 30,
-            note = "another thought", color = QuoteColor.BLUE)
+            note = "another thought", color = QuoteColor.BLUE,
+        )
         repository.addQuote("a", original)
         repository.addQuote("a", nested)
         val reopened = BookRepository(context = null)
@@ -58,17 +70,6 @@ class BookRepositoryUserDataTest {
         assertEquals(QuoteColor.BLUE, restored.single { it.id == nested.id }.color)
         assertEquals("another thought", restored.single { it.id == nested.id }.note)
     }
-
-    @Before
-    fun setUp() {
-        testDir.mkdirs()
-        StoreFixture.clear(testDir)
-    }
-
-    @After
-    fun tearDown() = StoreFixture.clear(testDir)
-
-    // ------------------------------------------------------------- the lists
 
     @Test
     fun `opening a book moves it off the want-to-read list`() = runTest {
@@ -134,8 +135,10 @@ class BookRepositoryUserDataTest {
     fun `undo quote deletion restores thoughts and anchors without reverting later book changes`() = runTest {
         StoreFixture.seed(testDir, listOf(book("a")))
         val repository = BookRepository(context = null)
-        val quote = Quote("q1", "the line", 2, 1000, startItem = 12, startChar = 5,
-            endItem = 13, endChar = 10, note = "Мої думки", bookId = "a")
+        val quote = Quote(
+            "q1", "the line", 2, 1000, startItem = 12, startChar = 5,
+            endItem = 13, endChar = 10, note = "Мої думки", bookId = "a",
+        )
         repository.addQuote("a", quote)
         repository.removeQuote("a", quote.id)
         repository.setRating("a", 4)
@@ -144,7 +147,6 @@ class BookRepositoryUserDataTest {
         val reopened = BookRepository(context = null).bookById("a")!!
         assertEquals(4, reopened.rating)
         assertEquals(quote, reopened.quotes.single().copy(updatedAtMillis = 0))
-        assertTrue(!StoreFixture.tombstonesOnDisk(testDir).containsKey(quote.id))
     }
 
     @Test
@@ -157,7 +159,6 @@ class BookRepositoryUserDataTest {
         repository.restoreBookmark("a", bookmark)
         repository.restoreBookmark("a", bookmark)
         assertEquals(listOf("b1"), BookRepository(context = null).bookById("a")!!.bookmarks.map { it.id })
-        assertTrue(!StoreFixture.tombstonesOnDisk(testDir).containsKey("b1"))
         repository.removeBookmark("a", "b1")
         repository.toggleBookmark("a", bookmark.copy(id = "b2"))
         repository.restoreBookmark("a", bookmark)
@@ -177,8 +178,6 @@ class BookRepositoryUserDataTest {
         assertEquals(5, restored.startChar)
         assertEquals("the line", restored.text)
     }
-
-    // -------------------------------------------------------- books with no file
 
     @Test
     fun `a wanted book can exist with no file at all`() = runTest {
@@ -217,40 +216,41 @@ class BookRepositoryUserDataTest {
         }
     }
 
-    // ------------------------------------------------ substrate for syncing
-
     @Test
-    fun `deleting a book leaves a tombstone that survives a restart`() = runTest {
-        StoreFixture.seed(testDir, listOf(book("a"), book("b")))
+    fun `deleting a book cascades quotes bookmarks progress and FTS rows cleanly`() = runTest {
+        StoreFixture.seed(testDir, listOf(book("a", "UniqueTitleAlpha"), book("b", "UniqueTitleBeta")))
         val repository = BookRepository(context = null)
-        repository.addQuote("a", Quote("q1", "the line", 0, 1_000L))
+        repository.addQuote("a", Quote("q1", "uniquequotealpha", 0, 1_000L))
+        repository.toggleBookmark("a", Bookmark("m1", 5, 0, "uniquebookmarkalpha", 1_000L))
+        repository.saveProgress("a", ReadingProgress(chapterIndex = 3, fraction = 0.5f))
 
         repository.deleteBook("a")
 
-        val tombstones = StoreFixture.tombstonesOnDisk(testDir)
-        assertTrue("the book is buried", tombstones.containsKey("a"))
-        assertTrue("so is its quote", tombstones.containsKey("q1"))
-        assertTrue("the surviving book is not", !tombstones.containsKey("b"))
-        assertTrue("and the stamp is a real time", tombstones.getValue("a") > 0L)
+        assertNull(StoreFixture.bookEntityOnDisk(testDir, "a"))
+        assertNull(StoreFixture.progressEntityOnDisk(testDir, "a"))
+        assertTrue(StoreFixture.quotesOnDisk(testDir, "a").isEmpty())
+        assertTrue(StoreFixture.bookmarksOnDisk(testDir, "a").isEmpty())
 
-        assertTrue(BookRepository(context = null).let {
-            StoreFixture.tombstonesOnDisk(testDir).containsKey("a")
-        })
+        val db = DatabaseManager.getDatabase(testDir)
+        assertTrue(db.searchDao().findBooksByNormalizedSubstring("uniquetitlealpha").isEmpty())
+        assertTrue(db.searchDao().findQuotesByNormalizedSubstring("uniquequotealpha").isEmpty())
+        assertTrue(db.searchDao().findBookmarksByNormalizedSubstring("uniquebookmarkalpha").isEmpty())
+        assertEquals(listOf("b"), BookRepository(context = null).books.value.map { it.id })
     }
 
     @Test
-    fun `removing a single quote buries only that quote`() = runTest {
+    fun `removing a single quote deletes only that quote and its FTS row`() = runTest {
         StoreFixture.seed(testDir, listOf(book("a")))
         val repository = BookRepository(context = null)
-        repository.addQuote("a", Quote("q1", "one", 0, 1_000L))
-        repository.addQuote("a", Quote("q2", "two", 0, 2_000L))
+        repository.addQuote("a", Quote("q1", "alphaquote", 0, 1_000L))
+        repository.addQuote("a", Quote("q2", "betaquote", 0, 2_000L))
 
         repository.removeQuote("a", "q1")
 
-        val tombstones = StoreFixture.tombstonesOnDisk(testDir)
-        assertTrue(tombstones.containsKey("q1"))
-        assertTrue(!tombstones.containsKey("q2"))
-        assertEquals(1, StoreFixture.quotesOnDisk(testDir, "a").size)
+        assertEquals(listOf("q2"), StoreFixture.quotesOnDisk(testDir, "a").map { it.id })
+        val db = DatabaseManager.getDatabase(testDir)
+        assertTrue(db.searchDao().findQuotesByNormalizedSubstring("alphaquote").isEmpty())
+        assertEquals(listOf("q2"), db.searchDao().findQuotesByNormalizedSubstring("betaquote"))
     }
 
     @Test
@@ -262,14 +262,15 @@ class BookRepositoryUserDataTest {
         val original = book("a").copy(
             quotes = listOf(first, second, kept),
             rating = 4,
+            ratingHalfStars = 8,
             review = "Keep this review",
             progress = ReadingProgress(fraction = 0.4f),
             bookmarks = listOf(Bookmark("m1", 10, 0, "preview", 1_000L)),
         )
         StoreFixture.seed(testDir, listOf(original, book("b").copy(quotes = listOf(other))))
         val repository = BookRepository(context = null)
-        val libraryBefore = File(testDir, "library.json").readText()
-        val progressBefore = File(testDir, "progress.json").readText()
+        val bookStampBefore = StoreFixture.bookEntityOnDisk(testDir, "a")?.updatedAtMillis
+        val progressStampBefore = StoreFixture.progressEntityOnDisk(testDir, "a")?.updatedAtMillis
 
         repository.removeQuotes("a", setOf("q1", "q2", "missing", "q4"))
 
@@ -282,38 +283,20 @@ class BookRepositoryUserDataTest {
         assertEquals(original.progress, result.progress)
         assertEquals(listOf("m1"), result.bookmarks.map { it.id })
         assertEquals(listOf("q4"), reopened.bookById("b")?.quotes?.map { it.id })
-        assertEquals(setOf("q1", "q2"), StoreFixture.tombstonesOnDisk(testDir).keys)
-        assertEquals(libraryBefore, File(testDir, "library.json").readText())
-        assertEquals(progressBefore, File(testDir, "progress.json").readText())
+        assertEquals("books row was not rewritten", bookStampBefore, StoreFixture.bookEntityOnDisk(testDir, "a")?.updatedAtMillis)
+        assertEquals("progress row was not rewritten", progressStampBefore, StoreFixture.progressEntityOnDisk(testDir, "a")?.updatedAtMillis)
     }
 
     @Test
-    fun `removing a bookmark buries it too`() = runTest {
-        StoreFixture.seed(testDir, listOf(book("a")))
-        val repository = BookRepository(context = null)
-        repository.toggleBookmark("a", Bookmark("m1", 10, 0, "preview", 1_000L))
-
-        repository.removeBookmark("a", "m1")
-
-        assertTrue(StoreFixture.tombstonesOnDisk(testDir).containsKey("m1"))
-    }
-
-    @Test
-    fun `an id that comes back is no longer buried`() = runTest {
+    fun `an id that comes back via restore is cleanly re-inserted`() = runTest {
         StoreFixture.seed(testDir, listOf(book("a"), book("b")))
         val repository = BookRepository(context = null)
         repository.deleteBook("a")
-        assertTrue(StoreFixture.tombstonesOnDisk(testDir).containsKey("a"))
+        assertNull(StoreFixture.bookEntityOnDisk(testDir, "a"))
 
-        // Restoring a backup brings the same id back. Leaving the tombstone in
-        // place would let a later merge delete the book all over again.
         repository.addBookForRestore(book("a"))
-
-        assertTrue(
-            "a resurrected id must not stay in the graveyard",
-            !StoreFixture.tombstonesOnDisk(testDir).containsKey("a"),
-        )
         assertNotNull(repository.bookById("a"))
+        assertNotNull(StoreFixture.bookEntityOnDisk(testDir, "a"))
     }
 
     @Test
@@ -322,14 +305,13 @@ class BookRepositoryUserDataTest {
         val repository = BookRepository(context = null)
 
         repository.setRating("a", 4)
-        val stampA = StoreFixture.userDataOnDisk(testDir, "a")?.updatedAtMillis
+        val stampA = StoreFixture.bookEntityOnDisk(testDir, "a")?.updatedAtMillis
         assertNotNull(stampA)
         assertTrue("a changed record carries a real time", stampA!! > 0L)
 
-        // Touching a different book must not restamp this one.
         Thread.sleep(2)
         repository.setRating("b", 2)
-        assertEquals(stampA, StoreFixture.userDataOnDisk(testDir, "a")?.updatedAtMillis)
+        assertEquals(stampA, StoreFixture.bookEntityOnDisk(testDir, "a")?.updatedAtMillis)
     }
 
     @Test
@@ -342,7 +324,7 @@ class BookRepositoryUserDataTest {
         Thread.sleep(2)
         repository.saveProgress("a", ReadingProgress(chapterIndex = 2))
 
-        assertTrue((StoreFixture.progressOnDisk(testDir, "a")?.updatedAtMillis ?: 0L) > 0L)
+        assertTrue((StoreFixture.progressEntityOnDisk(testDir, "a")?.updatedAtMillis ?: 0L) > 0L)
         assertEquals(
             "the quote was not touched",
             quoteStamp,

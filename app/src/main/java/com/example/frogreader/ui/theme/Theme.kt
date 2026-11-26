@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import com.example.frogreader.data.AppTheme
+import com.example.frogreader.data.model.ProfileSearchCategory
 import com.example.frogreader.data.model.QuoteColor
 
 /**
@@ -177,6 +178,45 @@ data class ProfileLandscapeColors(
     val actionSecondary: Color = onAction,
 )
 
+/** Semantic palette for a single category section in Profile Global Search. */
+@Immutable
+data class ProfileSearchCategoryPalette(
+    val headerInk: Color,
+    val cardContainer: Color,
+    val cardBorder: Color,
+    val cardDivider: Color,
+    val iconBadgeContainer: Color,
+    val iconInk: Color,
+    val titleInk: Color,
+    val subtitleInk: Color,
+    val accentInk: Color,
+    val highlightFill: Color,
+    val highlightInk: Color,
+)
+
+/** Chrome + 5 distinct semantic category palettes for Profile Global Search. */
+@Immutable
+data class ProfileSearchColors(
+    val searchBarContainer: Color,
+    val searchBarBorder: Color,
+    val categoryOrderContainer: Color,
+    val categoryOrderBorder: Color,
+    val dragHandleContainer: Color,
+    val quotes: ProfileSearchCategoryPalette,
+    val bookmarks: ProfileSearchCategoryPalette,
+    val readingQueue: ProfileSearchCategoryPalette,
+    val readingLog: ProfileSearchCategoryPalette,
+    val achievements: ProfileSearchCategoryPalette,
+) {
+    fun paletteFor(category: ProfileSearchCategory): ProfileSearchCategoryPalette = when (category) {
+        ProfileSearchCategory.QUOTES -> quotes
+        ProfileSearchCategory.BOOKMARKS -> bookmarks
+        ProfileSearchCategory.READING_QUEUE -> readingQueue
+        ProfileSearchCategory.READING_LOG -> readingLog
+        ProfileSearchCategory.ACHIEVEMENTS -> achievements
+    }
+}
+
 /**
  * App-specific surfaces and decoration. Controls derive from the Material
  * roles; only scoped artwork and the header gradient need separate colors.
@@ -214,6 +254,8 @@ data class FrogExtraColors(
     val profileBottom: Color,
     val onProfile: Color,
     val profileLandscape: ProfileLandscapeColors,
+    /** Scoped chrome and 5-category semantic palettes for Profile Global Search. */
+    val profileSearch: ProfileSearchColors,
 )
 
 // Completion is a semantic gold accent, including with Material You enabled.
@@ -221,6 +263,231 @@ private val LightCompletionFill = Color(0xFFF3E5BE)
 private val LightCompletionInk = Color(0xFF805B10)
 private val DarkCompletionFill = Color(0xFF342B16)
 private val DarkCompletionInk = Color(0xFFE8C568)
+
+private val LightProfileSearchColors by lazy {
+    val scheme = LightColorScheme
+    ProfileSearchColors(
+        searchBarContainer = scheme.surfaceContainerLowest,
+        searchBarBorder = scheme.outlineVariant,
+        categoryOrderContainer = scheme.surfaceContainerLowest,
+        categoryOrderBorder = scheme.outlineVariant,
+        dragHandleContainer = scheme.surfaceContainerHigh,
+        quotes = ProfileSearchCategoryPalette(
+            headerInk = Color(0xFF78510A),
+            cardContainer = Color(0xFFFCF8EE),
+            cardBorder = Color(0xFFEBE1CA),
+            cardDivider = Color(0xFFEBE1CA),
+            iconBadgeContainer = Color(0xFFF3E7C9),
+            iconInk = Color(0xFF78510A),
+            titleInk = Color(0xFF241E12),
+            subtitleInk = Color(0xFF5E533E),
+            accentInk = Color(0xFF78510A),
+            highlightFill = Color(0xFFF2DFB1),
+            highlightInk = Color(0xFF382400),
+        ),
+        bookmarks = ProfileSearchCategoryPalette(
+            headerInk = Color(0xFF1D5685),
+            cardContainer = Color(0xFFF2F7FC),
+            cardBorder = Color(0xFFD6E4F0),
+            cardDivider = Color(0xFFD6E4F0),
+            iconBadgeContainer = Color(0xFFDCEBF8),
+            iconInk = Color(0xFF1D5685),
+            titleInk = Color(0xFF16222C),
+            subtitleInk = Color(0xFF465868),
+            accentInk = Color(0xFF1D5685),
+            highlightFill = Color(0xFFCDE2F6),
+            highlightInk = Color(0xFF0B2A44),
+        ),
+        readingQueue = ProfileSearchCategoryPalette(
+            headerInk = Color(0xFF1E6349),
+            cardContainer = Color(0xFFF1F9F4),
+            cardBorder = Color(0xFFD2E8DC),
+            cardDivider = Color(0xFFD2E8DC),
+            iconBadgeContainer = Color(0xFFD8EFE2),
+            iconInk = Color(0xFF1E6349),
+            titleInk = Color(0xFF16261F),
+            subtitleInk = Color(0xFF445D52),
+            accentInk = Color(0xFF1E6349),
+            highlightFill = Color(0xFFC4E7D3),
+            highlightInk = Color(0xFF0B2E20),
+        ),
+        readingLog = ProfileSearchCategoryPalette(
+            headerInk = Color(0xFF5D3D8C),
+            cardContainer = Color(0xFFF7F3FC),
+            cardBorder = Color(0xFFE1D6F0),
+            cardDivider = Color(0xFFE1D6F0),
+            iconBadgeContainer = Color(0xFFE8DDF7),
+            iconInk = Color(0xFF5D3D8C),
+            titleInk = Color(0xFF221A2E),
+            subtitleInk = Color(0xFF574A6B),
+            accentInk = Color(0xFF5D3D8C),
+            highlightFill = Color(0xFFDCCBF5),
+            highlightInk = Color(0xFF2A144A),
+        ),
+        achievements = ProfileSearchCategoryPalette(
+            headerInk = Color(0xFF844324),
+            cardContainer = Color(0xFFFCF4F0),
+            cardBorder = Color(0xFFEED9CF),
+            cardDivider = Color(0xFFEED9CF),
+            iconBadgeContainer = Color(0xFFF6DFD4),
+            iconInk = Color(0xFF844324),
+            titleInk = Color(0xFF2A1B15),
+            subtitleInk = Color(0xFF664D43),
+            accentInk = Color(0xFF844324),
+            highlightFill = Color(0xFFF2CEBD),
+            highlightInk = Color(0xFF3E1908),
+        ),
+    )
+}
+
+private val BeigeProfileSearchColors by lazy {
+    val scheme = BeigeColorScheme
+    ProfileSearchColors(
+        searchBarContainer = scheme.surfaceContainerLowest,
+        searchBarBorder = scheme.outlineVariant,
+        categoryOrderContainer = scheme.surfaceContainerLowest,
+        categoryOrderBorder = scheme.outlineVariant,
+        dragHandleContainer = scheme.surfaceContainerHigh,
+        quotes = ProfileSearchCategoryPalette(
+            headerInk = Color(0xFF6E4908),
+            cardContainer = Color(0xFFFFF9EC),
+            cardBorder = Color(0xFFE6D7BD),
+            cardDivider = Color(0xFFE6D7BD),
+            iconBadgeContainer = Color(0xFFF2E3C4),
+            iconInk = Color(0xFF6E4908),
+            titleInk = Color(0xFF2E2416),
+            subtitleInk = Color(0xFF61513B),
+            accentInk = Color(0xFF6E4908),
+            highlightFill = Color(0xFFEED8AD),
+            highlightInk = Color(0xFF362100),
+        ),
+        bookmarks = ProfileSearchCategoryPalette(
+            headerInk = Color(0xFF245073),
+            cardContainer = Color(0xFFF6F7F7),
+            cardBorder = Color(0xFFD5DCE0),
+            cardDivider = Color(0xFFD5DCE0),
+            iconBadgeContainer = Color(0xFFDDE7EE),
+            iconInk = Color(0xFF245073),
+            titleInk = Color(0xFF222A30),
+            subtitleInk = Color(0xFF4C5963),
+            accentInk = Color(0xFF245073),
+            highlightFill = Color(0xFFCBDCE9),
+            highlightInk = Color(0xFF102A40),
+        ),
+        readingQueue = ProfileSearchCategoryPalette(
+            headerInk = Color(0xFF265A42),
+            cardContainer = Color(0xFFF6FAF5),
+            cardBorder = Color(0xFFD4E1D3),
+            cardDivider = Color(0xFFD4E1D3),
+            iconBadgeContainer = Color(0xFFDCEAD9),
+            iconInk = Color(0xFF265A42),
+            titleInk = Color(0xFF212B24),
+            subtitleInk = Color(0xFF4B5C50),
+            accentInk = Color(0xFF265A42),
+            highlightFill = Color(0xFFC8E0C8),
+            highlightInk = Color(0xFF102E1E),
+        ),
+        readingLog = ProfileSearchCategoryPalette(
+            headerInk = Color(0xFF613E78),
+            cardContainer = Color(0xFFFAF6F9),
+            cardBorder = Color(0xFFE2D5E0),
+            cardDivider = Color(0xFFE2D5E0),
+            iconBadgeContainer = Color(0xFFEADCE8),
+            iconInk = Color(0xFF613E78),
+            titleInk = Color(0xFF2B2130),
+            subtitleInk = Color(0xFF5D4C64),
+            accentInk = Color(0xFF613E78),
+            highlightFill = Color(0xFFDEC8DC),
+            highlightInk = Color(0xFF2D143B),
+        ),
+        achievements = ProfileSearchCategoryPalette(
+            headerInk = Color(0xFF744227),
+            cardContainer = Color(0xFFFFF7F2),
+            cardBorder = Color(0xFFE7D4C7),
+            cardDivider = Color(0xFFE7D4C7),
+            iconBadgeContainer = Color(0xFFF3DDD0),
+            iconInk = Color(0xFF744227),
+            titleInk = Color(0xFF2E211A),
+            subtitleInk = Color(0xFF634D41),
+            accentInk = Color(0xFF744227),
+            highlightFill = Color(0xFFEECAB6),
+            highlightInk = Color(0xFF381909),
+        ),
+    )
+}
+
+private val MidnightProfileSearchColors = ProfileSearchColors(
+    searchBarContainer = Color(0xFF131D16),
+    searchBarBorder = Color(0xFF233227),
+    categoryOrderContainer = Color(0xFF121A14),
+    categoryOrderBorder = Color(0xFF223026),
+    dragHandleContainer = Color(0xFF202A22),
+    quotes = ProfileSearchCategoryPalette(
+        headerInk = Color(0xFFE0B86B),
+        cardContainer = Color(0xFF231F14),
+        cardBorder = Color(0xFF332D1D),
+        cardDivider = Color(0xFF3A3322),
+        iconBadgeContainer = Color(0xFF332D1D),
+        iconInk = Color(0xFFE0B86B),
+        titleInk = Color(0xFFF3EFE6),
+        subtitleInk = Color(0xFFB5AC99),
+        accentInk = Color(0xFFE0B86B),
+        highlightFill = Color(0xFF473F29),
+        highlightInk = Color(0xFFFFF8E8),
+    ),
+    bookmarks = ProfileSearchCategoryPalette(
+        headerInk = Color(0xFF87BCE8),
+        cardContainer = Color(0xFF13202B),
+        cardBorder = Color(0xFF1E3142),
+        cardDivider = Color(0xFF233646),
+        iconBadgeContainer = Color(0xFF1E3142),
+        iconInk = Color(0xFF87BCE8),
+        titleInk = Color(0xFFEAF2F8),
+        subtitleInk = Color(0xFF9BB0C1),
+        accentInk = Color(0xFF87BCE8),
+        highlightFill = Color(0xFF2B445A),
+        highlightInk = Color(0xFFF2F8FF),
+    ),
+    readingQueue = ProfileSearchCategoryPalette(
+        headerInk = Color(0xFF7BD69B),
+        cardContainer = Color(0xFF13241B),
+        cardBorder = Color(0xFF1E3629),
+        cardDivider = Color(0xFF223B2D),
+        iconBadgeContainer = Color(0xFF1E3629),
+        iconInk = Color(0xFF7BD69B),
+        titleInk = Color(0xFFE9F4EC),
+        subtitleInk = Color(0xFF9DB6A5),
+        accentInk = Color(0xFF7BD69B),
+        highlightFill = Color(0xFF294B38),
+        highlightInk = Color(0xFFF0FFF5),
+    ),
+    readingLog = ProfileSearchCategoryPalette(
+        headerInk = Color(0xFFC5A8EB),
+        cardContainer = Color(0xFF20182B),
+        cardBorder = Color(0xFF2F2340),
+        cardDivider = Color(0xFF352846),
+        iconBadgeContainer = Color(0xFF2F2340),
+        iconInk = Color(0xFFC5A8EB),
+        titleInk = Color(0xFFF1ECF8),
+        subtitleInk = Color(0xFFB1A3C4),
+        accentInk = Color(0xFFC5A8EB),
+        highlightFill = Color(0xFF43335A),
+        highlightInk = Color(0xFFF9F4FF),
+    ),
+    achievements = ProfileSearchCategoryPalette(
+        headerInk = Color(0xFFE5A985),
+        cardContainer = Color(0xFF261A16),
+        cardBorder = Color(0xFF382620),
+        cardDivider = Color(0xFF3D2A24),
+        iconBadgeContainer = Color(0xFF382620),
+        iconInk = Color(0xFFE5A985),
+        titleInk = Color(0xFFF6ECE8),
+        subtitleInk = Color(0xFFBDA69D),
+        accentInk = Color(0xFFE5A985),
+        highlightFill = Color(0xFF4F372E),
+        highlightInk = Color(0xFFFFF4EF),
+    ),
+)
 
 // Lazy because the shared Material palette is declared below these extra roles.
 private val LightExtraColors by lazy {
@@ -256,6 +523,7 @@ private val LightExtraColors by lazy {
             actionIconBackground = scheme.surfaceContainer,
             actionSecondary = scheme.onSurfaceVariant,
         ),
+        profileSearch = LightProfileSearchColors,
     )
 }
 
@@ -292,6 +560,7 @@ private val BeigeExtraColors by lazy {
             actionIconBackground = scheme.surfaceContainer,
             actionSecondary = scheme.onSurfaceVariant,
         ),
+        profileSearch = BeigeProfileSearchColors,
     )
 }
 
@@ -323,6 +592,7 @@ private val MidnightExtraColors = FrogExtraColors(
         onAction = Color(0xFFF0F3F3),
         actionBorder = Color(0xFF62686C).copy(alpha = 0.36f),
     ),
+    profileSearch = MidnightProfileSearchColors,
 )
 
 val LocalFrogColors = staticCompositionLocalOf { LightExtraColors }
@@ -390,6 +660,16 @@ internal fun dynamicFrogColors(scheme: ColorScheme, dark: Boolean): FrogExtraCol
             actionIconBackground = if (dark) scheme.onSurface.copy(alpha = .12f) else scheme.surfaceContainer,
             actionSecondary = if (dark) scheme.onSurface else scheme.onSurfaceVariant,
         ),
+        profileSearch = run {
+            val base = if (dark) MidnightProfileSearchColors else LightProfileSearchColors
+            base.copy(
+                searchBarContainer = if (dark) scheme.surfaceContainerHigh else scheme.surfaceContainerLowest,
+                searchBarBorder = scheme.outlineVariant,
+                categoryOrderContainer = if (dark) scheme.surfaceContainerLow else scheme.surfaceContainerLowest,
+                categoryOrderBorder = scheme.outlineVariant,
+                dragHandleContainer = scheme.surfaceContainerHigh,
+            )
+        },
     )
 }
 

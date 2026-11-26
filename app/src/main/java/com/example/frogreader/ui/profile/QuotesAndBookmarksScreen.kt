@@ -50,9 +50,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.frogreader.R
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.model.Bookmark
+import com.example.frogreader.data.model.DocumentLocation
 import com.example.frogreader.data.model.Quote
 import com.example.frogreader.ui.library.BookCover
+import com.example.frogreader.ui.reader.bookmarkDocumentLocation
+import com.example.frogreader.ui.reader.quoteDocumentLocation
 import com.example.frogreader.ui.theme.floatingSurface
 import com.example.frogreader.ui.theme.quoteInk
 import java.io.File
@@ -456,6 +460,7 @@ private fun QuoteCard(
     var showMenu by remember { mutableStateOf(false) }
     var shareFailed by remember { mutableStateOf(false) }
     val canToggleExpand = hasOverflow || expanded
+    val location = quoteDocumentLocation(book, quote)
     val attributedText = remember(quote.text, book.title, book.author) {
         formatQuoteForCopy(quote.text, book.title, book.author)
     }
@@ -476,7 +481,7 @@ private fun QuoteCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Rounded.FormatQuote, null, Modifier.size(18.dp), tint = colors.quoteInk(quote.color))
                     Text(
-                        stringResource(R.string.reader_chapter_n, quote.chapterIndex + 1),
+                        savedPassageLocationLabel(book, location, quote.chapterIndex),
                         style = MaterialTheme.typography.labelMedium,
                         color = colors.onSurfaceVariant,
                         modifier = Modifier.weight(1f).padding(start = 6.dp),
@@ -522,7 +527,7 @@ private fun QuoteCard(
                                 })
                             DropdownMenuItem(text = { Text(stringResource(R.string.quotes_bookmarks_open_in_book)) },
                                 leadingIcon = { Icon(Icons.AutoMirrored.Rounded.MenuBook, null) },
-                                enabled = book.fileName != null && quote.startItem >= 0 && quote.startChar >= 0 && !busy,
+                                enabled = book.fileName != null && location != null && !busy,
                                 onClick = { showMenu = false; onOpen() })
                             DropdownMenuItem(text = { Text(stringResource(R.string.reader_font_delete), color = colors.error) },
                                 leadingIcon = { Icon(Icons.Rounded.DeleteOutline, null, tint = colors.error) }, enabled = !busy,
@@ -564,7 +569,7 @@ private fun QuoteCard(
                     }
                 }
             }
-            if (quote.startItem < 0 || quote.startChar < 0) {
+            if (location == null) {
                 Text(stringResource(R.string.quotes_bookmarks_unlinked_quote), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
             }
             if (shareFailed) Text(stringResource(R.string.quotes_bookmarks_share_error), color = colors.error, style = MaterialTheme.typography.bodySmall)
@@ -635,7 +640,8 @@ private fun BookmarkCard(
     val (book, bookmark) = entry
     val colors = MaterialTheme.colorScheme
     var showMenu by remember { mutableStateOf(false) }
-    val canOpen = book.fileName != null && !bookmark.orphaned && bookmark.flatIndex >= 0
+    val location = bookmarkDocumentLocation(book, bookmark)
+    val canOpen = book.fileName != null && location != null
     Card(onClick = { if (canOpen) onOpen() else onBookInfo() }, shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colors.surfaceContainerLowest)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -643,7 +649,7 @@ private fun BookmarkCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Rounded.Bookmark, null, Modifier.size(16.dp), tint = colors.primary)
                     Text(
-                        stringResource(R.string.reader_chapter_n, bookmark.chapterIndex + 1),
+                        savedPassageLocationLabel(book, location, bookmark.chapterIndex),
                         style = MaterialTheme.typography.labelMedium,
                         color = colors.onSurfaceVariant,
                         modifier = Modifier.weight(1f).padding(start = 6.dp),
@@ -667,6 +673,16 @@ private fun BookmarkCard(
         }
     }
 }
+
+@Composable
+private fun savedPassageLocationLabel(book: Book, location: DocumentLocation?, legacyChapterIndex: Int): String =
+    when (location) {
+        is DocumentLocation.Pdf -> stringResource(R.string.saved_passage_pdf_page, location.pageIndex + 1)
+        is DocumentLocation.Reflowable -> stringResource(R.string.reader_chapter_n, location.chapterIndex + 1)
+        null -> if (book.format != BookFormat.PDF && legacyChapterIndex >= 0) {
+            stringResource(R.string.reader_chapter_n, legacyChapterIndex + 1)
+        } else stringResource(R.string.saved_passage_location_unavailable)
+    }
 
 @Composable
 private fun MissingBookHint(onBookInfo: () -> Unit) {

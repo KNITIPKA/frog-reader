@@ -119,20 +119,22 @@ class ReadingQueueStateTest {
         val directory = File("build/tmp/test_files")
         directory.mkdirs()
         StoreFixture.clear(directory)
-        val temp = File(directory, "userdata.json.tmp")
         try {
             val vm = ReadingQueueViewModel(BookRepository(), SavedStateHandle())
             vm.ready.first { it }
             vm.edit()
             vm.change(title = "Keep this draft", note = "Unsaved note")
-            temp.mkdirs()
-            File(temp, "block").writeText("prevent replacement")
-            vm.save()
-            vm.busy.first { !it }
-            assertTrue(vm.editor.value!!.failed)
-            assertEquals("Unsaved note", vm.editor.value!!.note)
-            assertNull(vm.addedEntryId.value)
-        } finally { temp.deleteRecursively(); StoreFixture.clear(directory) }
+            StoreFixture.blockWrites(directory)
+            try {
+                vm.save()
+                vm.busy.first { !it }
+                assertTrue(vm.editor.value!!.failed)
+                assertEquals("Unsaved note", vm.editor.value!!.note)
+                assertNull(vm.addedEntryId.value)
+            } finally {
+                StoreFixture.unblockWrites(directory)
+            }
+        } finally { StoreFixture.clear(directory) }
     }
 
     @Test fun `old note is valid unchanged and shorter new note is valid`() {

@@ -1,0 +1,1398 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "0a4b3734ef2bb83fffb7e42e6577459d",
+    "entities": [
+      {
+        "tableName": "shelves",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `created_at_millis` INTEGER NOT NULL, `sort_key` INTEGER NOT NULL, `updated_at_millis` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "created_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sortKey",
+            "columnName": "sort_key",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updated_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_shelves_sort_key",
+            "unique": false,
+            "columnNames": [
+              "sort_key"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_shelves_sort_key` ON `${TABLE_NAME}` (`sort_key`)"
+          }
+        ]
+      },
+      {
+        "tableName": "books",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`doc_id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `id` TEXT NOT NULL, `title` TEXT NOT NULL, `author` TEXT, `format` TEXT NOT NULL, `file_name` TEXT, `cover_file_name` TEXT, `added_at_millis` INTEGER NOT NULL, `content_hash` TEXT, `size_bytes` INTEGER NOT NULL, `last_opened_at_millis` INTEGER, `started_at_millis` INTEGER, `finished_at_millis` INTEGER, `reading_seconds` INTEGER NOT NULL, `status` TEXT NOT NULL, `rating` INTEGER, `rating_half_stars` INTEGER, `active_reading_log_id` TEXT, `suppress_reading_log` INTEGER NOT NULL, `review` TEXT, `review_updated_at_millis` INTEGER, `reading_queue_note` TEXT, `reader_settings_json` TEXT, `genres_json` TEXT NOT NULL, `series` TEXT, `series_number` REAL, `publisher` TEXT, `year` TEXT, `isbn` TEXT, `translators_json` TEXT NOT NULL, `description` TEXT, `language` TEXT, `generate_pdf_cover` INTEGER NOT NULL, `additional_metadata_json` TEXT NOT NULL, `pdf_annotation_fingerprint` TEXT, `shelf_id` TEXT, `shelf_position` INTEGER NOT NULL, `updated_at_millis` INTEGER NOT NULL, FOREIGN KEY(`shelf_id`) REFERENCES `shelves`(`id`) ON UPDATE CASCADE ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "docId",
+            "columnName": "doc_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "author",
+            "columnName": "author",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "format",
+            "columnName": "format",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileName",
+            "columnName": "file_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "coverFileName",
+            "columnName": "cover_file_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "addedAtMillis",
+            "columnName": "added_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentHash",
+            "columnName": "content_hash",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastOpenedAtMillis",
+            "columnName": "last_opened_at_millis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "startedAtMillis",
+            "columnName": "started_at_millis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishedAtMillis",
+            "columnName": "finished_at_millis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "readingSeconds",
+            "columnName": "reading_seconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rating",
+            "columnName": "rating",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "ratingHalfStars",
+            "columnName": "rating_half_stars",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "activeReadingLogId",
+            "columnName": "active_reading_log_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "suppressReadingLog",
+            "columnName": "suppress_reading_log",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "review",
+            "columnName": "review",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "reviewUpdatedAtMillis",
+            "columnName": "review_updated_at_millis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "readingQueueNote",
+            "columnName": "reading_queue_note",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "readerSettingsJson",
+            "columnName": "reader_settings_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "genresJson",
+            "columnName": "genres_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "series",
+            "columnName": "series",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "seriesNumber",
+            "columnName": "series_number",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "publisher",
+            "columnName": "publisher",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "year",
+            "columnName": "year",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isbn",
+            "columnName": "isbn",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "translatorsJson",
+            "columnName": "translators_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "language",
+            "columnName": "language",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "generatePdfCover",
+            "columnName": "generate_pdf_cover",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "additionalMetadataJson",
+            "columnName": "additional_metadata_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pdfAnnotationFingerprint",
+            "columnName": "pdf_annotation_fingerprint",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "shelfId",
+            "columnName": "shelf_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "shelfPosition",
+            "columnName": "shelf_position",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updated_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "doc_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_books_id",
+            "unique": true,
+            "columnNames": [
+              "id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_books_id` ON `${TABLE_NAME}` (`id`)"
+          },
+          {
+            "name": "index_books_shelf_id_shelf_position",
+            "unique": false,
+            "columnNames": [
+              "shelf_id",
+              "shelf_position"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_books_shelf_id_shelf_position` ON `${TABLE_NAME}` (`shelf_id`, `shelf_position`)"
+          },
+          {
+            "name": "index_books_content_hash",
+            "unique": false,
+            "columnNames": [
+              "content_hash"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_books_content_hash` ON `${TABLE_NAME}` (`content_hash`)"
+          },
+          {
+            "name": "index_books_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_books_status` ON `${TABLE_NAME}` (`status`)"
+          },
+          {
+            "name": "index_books_last_opened_at_millis",
+            "unique": false,
+            "columnNames": [
+              "last_opened_at_millis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_books_last_opened_at_millis` ON `${TABLE_NAME}` (`last_opened_at_millis`)"
+          },
+          {
+            "name": "index_books_added_at_millis",
+            "unique": false,
+            "columnNames": [
+              "added_at_millis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_books_added_at_millis` ON `${TABLE_NAME}` (`added_at_millis`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "shelves",
+            "onDelete": "SET NULL",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "shelf_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "book_progress",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`book_id` TEXT NOT NULL, `chapter_index` INTEGER NOT NULL, `element_index` INTEGER NOT NULL, `scroll_offset` INTEGER NOT NULL, `fraction` REAL NOT NULL, `pages_left_in_chapter` INTEGER NOT NULL, `total_pages` INTEGER NOT NULL, `document_location_json` TEXT, `updated_at_millis` INTEGER NOT NULL, PRIMARY KEY(`book_id`), FOREIGN KEY(`book_id`) REFERENCES `books`(`id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "bookId",
+            "columnName": "book_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chapterIndex",
+            "columnName": "chapter_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "elementIndex",
+            "columnName": "element_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scrollOffset",
+            "columnName": "scroll_offset",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fraction",
+            "columnName": "fraction",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pagesLeftInChapter",
+            "columnName": "pages_left_in_chapter",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalPages",
+            "columnName": "total_pages",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "documentLocationJson",
+            "columnName": "document_location_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updated_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "book_id"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "books",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "book_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "quotes",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`doc_id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `id` TEXT NOT NULL, `book_id` TEXT NOT NULL, `text` TEXT NOT NULL, `note` TEXT, `chapter_index` INTEGER NOT NULL, `start_item` INTEGER NOT NULL, `start_char` INTEGER NOT NULL, `end_item` INTEGER NOT NULL, `end_char` INTEGER NOT NULL, `color` TEXT NOT NULL, `document_location_json` TEXT, `pdf_selection_json` TEXT NOT NULL, `created_at_millis` INTEGER NOT NULL, `updated_at_millis` INTEGER NOT NULL, FOREIGN KEY(`book_id`) REFERENCES `books`(`id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "docId",
+            "columnName": "doc_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookId",
+            "columnName": "book_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "text",
+            "columnName": "text",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "chapterIndex",
+            "columnName": "chapter_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startItem",
+            "columnName": "start_item",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startChar",
+            "columnName": "start_char",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endItem",
+            "columnName": "end_item",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endChar",
+            "columnName": "end_char",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "color",
+            "columnName": "color",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "documentLocationJson",
+            "columnName": "document_location_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pdfSelectionJson",
+            "columnName": "pdf_selection_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "created_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updated_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "doc_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_quotes_id",
+            "unique": true,
+            "columnNames": [
+              "id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_quotes_id` ON `${TABLE_NAME}` (`id`)"
+          },
+          {
+            "name": "index_quotes_book_id_created_at_millis",
+            "unique": false,
+            "columnNames": [
+              "book_id",
+              "created_at_millis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_quotes_book_id_created_at_millis` ON `${TABLE_NAME}` (`book_id`, `created_at_millis`)"
+          },
+          {
+            "name": "index_quotes_created_at_millis",
+            "unique": false,
+            "columnNames": [
+              "created_at_millis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_quotes_created_at_millis` ON `${TABLE_NAME}` (`created_at_millis`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "books",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "book_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "bookmarks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`doc_id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `id` TEXT NOT NULL, `book_id` TEXT NOT NULL, `flat_index` INTEGER NOT NULL, `chapter_index` INTEGER NOT NULL, `preview` TEXT NOT NULL, `orphaned` INTEGER NOT NULL, `document_location_json` TEXT, `created_at_millis` INTEGER NOT NULL, `updated_at_millis` INTEGER NOT NULL, FOREIGN KEY(`book_id`) REFERENCES `books`(`id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "docId",
+            "columnName": "doc_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookId",
+            "columnName": "book_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "flatIndex",
+            "columnName": "flat_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chapterIndex",
+            "columnName": "chapter_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "preview",
+            "columnName": "preview",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "orphaned",
+            "columnName": "orphaned",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "documentLocationJson",
+            "columnName": "document_location_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "created_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updated_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "doc_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_bookmarks_id",
+            "unique": true,
+            "columnNames": [
+              "id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_bookmarks_id` ON `${TABLE_NAME}` (`id`)"
+          },
+          {
+            "name": "index_bookmarks_book_id_created_at_millis",
+            "unique": false,
+            "columnNames": [
+              "book_id",
+              "created_at_millis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_bookmarks_book_id_created_at_millis` ON `${TABLE_NAME}` (`book_id`, `created_at_millis`)"
+          },
+          {
+            "name": "index_bookmarks_created_at_millis",
+            "unique": false,
+            "columnNames": [
+              "created_at_millis"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_bookmarks_created_at_millis` ON `${TABLE_NAME}` (`created_at_millis`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "books",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "book_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "reading_queue",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`doc_id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `id` TEXT NOT NULL, `title` TEXT NOT NULL, `author` TEXT NOT NULL, `note` TEXT NOT NULL, `priority_order` INTEGER NOT NULL, `linked_book_id` TEXT, `private_attachment_json` TEXT, `created_at_millis` INTEGER NOT NULL, `updated_at_millis` INTEGER NOT NULL, FOREIGN KEY(`linked_book_id`) REFERENCES `books`(`id`) ON UPDATE CASCADE ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "docId",
+            "columnName": "doc_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "author",
+            "columnName": "author",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "priorityOrder",
+            "columnName": "priority_order",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "linkedBookId",
+            "columnName": "linked_book_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "privateAttachmentJson",
+            "columnName": "private_attachment_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "created_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updated_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "doc_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_reading_queue_id",
+            "unique": true,
+            "columnNames": [
+              "id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_reading_queue_id` ON `${TABLE_NAME}` (`id`)"
+          },
+          {
+            "name": "index_reading_queue_priority_order",
+            "unique": false,
+            "columnNames": [
+              "priority_order"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reading_queue_priority_order` ON `${TABLE_NAME}` (`priority_order`)"
+          },
+          {
+            "name": "index_reading_queue_linked_book_id",
+            "unique": false,
+            "columnNames": [
+              "linked_book_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reading_queue_linked_book_id` ON `${TABLE_NAME}` (`linked_book_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "books",
+            "onDelete": "SET NULL",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "linked_book_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "reading_log",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`doc_id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `id` TEXT NOT NULL, `manual_order` INTEGER NOT NULL, `title` TEXT NOT NULL, `author` TEXT NOT NULL, `series` TEXT NOT NULL, `source` TEXT NOT NULL, `status` TEXT NOT NULL, `started_year` INTEGER, `started_month` INTEGER, `started_day` INTEGER, `finished_year` INTEGER, `finished_month` INTEGER, `finished_day` INTEGER, `linked_book_id` TEXT, `cover_file_name` TEXT, `reading_seconds` INTEGER NOT NULL, `last_opened_at_millis` INTEGER, `rating_half_stars` INTEGER, `review` TEXT NOT NULL, `created_at_millis` INTEGER NOT NULL, `updated_at_millis` INTEGER NOT NULL, `finished_at_millis` INTEGER, `book_format` TEXT, `started_order_year` INTEGER, `started_order_month` INTEGER, `started_order_day` INTEGER, `started_order_rank` INTEGER, `finished_order_year` INTEGER, `finished_order_month` INTEGER, `finished_order_day` INTEGER, `finished_order_rank` INTEGER, `progress_fraction` REAL)",
+        "fields": [
+          {
+            "fieldPath": "docId",
+            "columnName": "doc_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "manualOrder",
+            "columnName": "manual_order",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "author",
+            "columnName": "author",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "series",
+            "columnName": "series",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedYear",
+            "columnName": "started_year",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "startedMonth",
+            "columnName": "started_month",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "startedDay",
+            "columnName": "started_day",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishedYear",
+            "columnName": "finished_year",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishedMonth",
+            "columnName": "finished_month",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishedDay",
+            "columnName": "finished_day",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "linkedBookId",
+            "columnName": "linked_book_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "coverFileName",
+            "columnName": "cover_file_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "readingSeconds",
+            "columnName": "reading_seconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastOpenedAtMillis",
+            "columnName": "last_opened_at_millis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "ratingHalfStars",
+            "columnName": "rating_half_stars",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "review",
+            "columnName": "review",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtMillis",
+            "columnName": "created_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtMillis",
+            "columnName": "updated_at_millis",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finishedAtMillis",
+            "columnName": "finished_at_millis",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bookFormat",
+            "columnName": "book_format",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "startedOrderYear",
+            "columnName": "started_order_year",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "startedOrderMonth",
+            "columnName": "started_order_month",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "startedOrderDay",
+            "columnName": "started_order_day",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "startedOrderRank",
+            "columnName": "started_order_rank",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishedOrderYear",
+            "columnName": "finished_order_year",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishedOrderMonth",
+            "columnName": "finished_order_month",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishedOrderDay",
+            "columnName": "finished_order_day",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishedOrderRank",
+            "columnName": "finished_order_rank",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "progressFraction",
+            "columnName": "progress_fraction",
+            "affinity": "REAL"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "doc_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_reading_log_id",
+            "unique": true,
+            "columnNames": [
+              "id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_reading_log_id` ON `${TABLE_NAME}` (`id`)"
+          },
+          {
+            "name": "index_reading_log_manual_order",
+            "unique": false,
+            "columnNames": [
+              "manual_order"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reading_log_manual_order` ON `${TABLE_NAME}` (`manual_order`)"
+          },
+          {
+            "name": "index_reading_log_linked_book_id",
+            "unique": false,
+            "columnNames": [
+              "linked_book_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reading_log_linked_book_id` ON `${TABLE_NAME}` (`linked_book_id`)"
+          },
+          {
+            "name": "index_reading_log_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_reading_log_status` ON `${TABLE_NAME}` (`status`)"
+          }
+        ]
+      },
+      {
+        "tableName": "daily_reading_stats",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`iso_date` TEXT NOT NULL, `seconds` INTEGER NOT NULL, PRIMARY KEY(`iso_date`))",
+        "fields": [
+          {
+            "fieldPath": "isoDate",
+            "columnName": "iso_date",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seconds",
+            "columnName": "seconds",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "iso_date"
+          ]
+        }
+      },
+      {
+        "tableName": "reading_stats_meta",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`singleton_id` INTEGER NOT NULL, `last_read_at_millis` INTEGER, PRIMARY KEY(`singleton_id`))",
+        "fields": [
+          {
+            "fieldPath": "singletonId",
+            "columnName": "singleton_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastReadAtMillis",
+            "columnName": "last_read_at_millis",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "singleton_id"
+          ]
+        }
+      },
+      {
+        "tableName": "achievement_progress",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`achievement_id` TEXT NOT NULL, `current_value` INTEGER NOT NULL, `unlocked` INTEGER NOT NULL, `unlocked_at_millis` INTEGER, PRIMARY KEY(`achievement_id`))",
+        "fields": [
+          {
+            "fieldPath": "achievementId",
+            "columnName": "achievement_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentValue",
+            "columnName": "current_value",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unlocked",
+            "columnName": "unlocked",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unlockedAtMillis",
+            "columnName": "unlocked_at_millis",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "achievement_id"
+          ]
+        }
+      },
+      {
+        "tableName": "books_fts",
+        "createSql": "CREATE VIRTUAL TABLE IF NOT EXISTS `${TABLE_NAME}` USING FTS5(`entity_id` UNINDEXED, `title`, `author`, `series`, `description`, tokenize=`unicode61 remove_diacritics 0`, prefix=`2 3`)",
+        "fields": [
+          {
+            "fieldPath": "entityId",
+            "columnName": "entity_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "author",
+            "columnName": "author",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "series",
+            "columnName": "series",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "rowid"
+          ]
+        },
+        "ftsVersion": "FTS5",
+        "ftsOptions": {
+          "tokenizer": "unicode61",
+          "tokenizerArgs": [
+            "remove_diacritics",
+            "0"
+          ],
+          "contentTable": "",
+          "languageIdColumnName": "",
+          "matchInfo": "FTS4",
+          "notIndexedColumns": [
+            "entity_id"
+          ],
+          "prefixSizes": [
+            2,
+            3
+          ],
+          "preferredOrder": "ASC",
+          "contentRowId": "",
+          "columnSize": true,
+          "detail": "FULL"
+        },
+        "contentSyncTriggers": []
+      },
+      {
+        "tableName": "quotes_fts",
+        "createSql": "CREATE VIRTUAL TABLE IF NOT EXISTS `${TABLE_NAME}` USING FTS5(`entity_id` UNINDEXED, `text`, `note`, tokenize=`unicode61 remove_diacritics 0`, prefix=`2 3`)",
+        "fields": [
+          {
+            "fieldPath": "entityId",
+            "columnName": "entity_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "text",
+            "columnName": "text",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "rowid"
+          ]
+        },
+        "ftsVersion": "FTS5",
+        "ftsOptions": {
+          "tokenizer": "unicode61",
+          "tokenizerArgs": [
+            "remove_diacritics",
+            "0"
+          ],
+          "contentTable": "",
+          "languageIdColumnName": "",
+          "matchInfo": "FTS4",
+          "notIndexedColumns": [
+            "entity_id"
+          ],
+          "prefixSizes": [
+            2,
+            3
+          ],
+          "preferredOrder": "ASC",
+          "contentRowId": "",
+          "columnSize": true,
+          "detail": "FULL"
+        },
+        "contentSyncTriggers": []
+      },
+      {
+        "tableName": "bookmarks_fts",
+        "createSql": "CREATE VIRTUAL TABLE IF NOT EXISTS `${TABLE_NAME}` USING FTS5(`entity_id` UNINDEXED, `preview`, tokenize=`unicode61 remove_diacritics 0`, prefix=`2 3`)",
+        "fields": [
+          {
+            "fieldPath": "entityId",
+            "columnName": "entity_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "preview",
+            "columnName": "preview",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "rowid"
+          ]
+        },
+        "ftsVersion": "FTS5",
+        "ftsOptions": {
+          "tokenizer": "unicode61",
+          "tokenizerArgs": [
+            "remove_diacritics",
+            "0"
+          ],
+          "contentTable": "",
+          "languageIdColumnName": "",
+          "matchInfo": "FTS4",
+          "notIndexedColumns": [
+            "entity_id"
+          ],
+          "prefixSizes": [
+            2,
+            3
+          ],
+          "preferredOrder": "ASC",
+          "contentRowId": "",
+          "columnSize": true,
+          "detail": "FULL"
+        },
+        "contentSyncTriggers": []
+      },
+      {
+        "tableName": "reading_queue_fts",
+        "createSql": "CREATE VIRTUAL TABLE IF NOT EXISTS `${TABLE_NAME}` USING FTS5(`entity_id` UNINDEXED, `title`, `author`, `note`, tokenize=`unicode61 remove_diacritics 0`, prefix=`2 3`)",
+        "fields": [
+          {
+            "fieldPath": "entityId",
+            "columnName": "entity_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "author",
+            "columnName": "author",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "rowid"
+          ]
+        },
+        "ftsVersion": "FTS5",
+        "ftsOptions": {
+          "tokenizer": "unicode61",
+          "tokenizerArgs": [
+            "remove_diacritics",
+            "0"
+          ],
+          "contentTable": "",
+          "languageIdColumnName": "",
+          "matchInfo": "FTS4",
+          "notIndexedColumns": [
+            "entity_id"
+          ],
+          "prefixSizes": [
+            2,
+            3
+          ],
+          "preferredOrder": "ASC",
+          "contentRowId": "",
+          "columnSize": true,
+          "detail": "FULL"
+        },
+        "contentSyncTriggers": []
+      },
+      {
+        "tableName": "reading_log_fts",
+        "createSql": "CREATE VIRTUAL TABLE IF NOT EXISTS `${TABLE_NAME}` USING FTS5(`entity_id` UNINDEXED, `title`, `author`, `series`, `review`, tokenize=`unicode61 remove_diacritics 0`, prefix=`2 3`)",
+        "fields": [
+          {
+            "fieldPath": "entityId",
+            "columnName": "entity_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "author",
+            "columnName": "author",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "series",
+            "columnName": "series",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "review",
+            "columnName": "review",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "rowid"
+          ]
+        },
+        "ftsVersion": "FTS5",
+        "ftsOptions": {
+          "tokenizer": "unicode61",
+          "tokenizerArgs": [
+            "remove_diacritics",
+            "0"
+          ],
+          "contentTable": "",
+          "languageIdColumnName": "",
+          "matchInfo": "FTS4",
+          "notIndexedColumns": [
+            "entity_id"
+          ],
+          "prefixSizes": [
+            2,
+            3
+          ],
+          "preferredOrder": "ASC",
+          "contentRowId": "",
+          "columnSize": true,
+          "detail": "FULL"
+        },
+        "contentSyncTriggers": []
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '0a4b3734ef2bb83fffb7e42e6577459d')"
+    ]
+  }
+}

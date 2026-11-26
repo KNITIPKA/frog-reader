@@ -12,6 +12,7 @@ import com.example.frogreader.FrogReaderApp
 import com.example.frogreader.R
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.data.model.PrivateQueueAttachment
 import com.example.frogreader.data.model.ReadingQueueEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -250,7 +251,7 @@ internal class ReadingQueueViewModel(
     private fun restoreEditor(): ReadingQueueEditor? {
         if (savedState.get<Boolean>("readingListEditing") != true) return null
         fun book(key: String): Book? = savedState.get<String>(key)?.let {
-            runCatching { Json.decodeFromString<Book>(it) }.getOrNull()
+            runCatching { Json.decodeFromString(PrivateQueueAttachment.serializer(), it).toBook() }.getOrNull()
         }
         return ReadingQueueEditor(id = savedState["readingListId"], title = savedState["readingListTitle"] ?: "",
             author = savedState["readingListAuthor"] ?: "", note = savedState["readingListNote"] ?: "",
@@ -270,10 +271,14 @@ internal class ReadingQueueViewModel(
         savedState["readingListOriginalAuthor"] = value?.originalAuthor
         savedState["readingListOriginalNote"] = value?.originalNote
         if (value?.attachment != _editor.value?.attachment) {
-            savedState["readingListAttachment"] = value?.attachment?.let { Json.encodeToString(Book.serializer(), it) }
+            savedState["readingListAttachment"] = value?.attachment?.let {
+                Json.encodeToString(PrivateQueueAttachment.serializer(), PrivateQueueAttachment.fromBook(it))
+            }
         }
         if (value?.originalAttachment != _editor.value?.originalAttachment) {
-            savedState["readingListOriginalAttachment"] = value?.originalAttachment?.let { Json.encodeToString(Book.serializer(), it) }
+            savedState["readingListOriginalAttachment"] = value?.originalAttachment?.let {
+                Json.encodeToString(PrivateQueueAttachment.serializer(), PrivateQueueAttachment.fromBook(it))
+            }
         }
         _editor.value = value
     }

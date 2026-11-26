@@ -117,7 +117,7 @@ fun BookInfoScreen(
             else if (currentReviewBusy) false
             else if (currentReviewDirty) { discardReview = true; false } else true
         }) }
-    val canEditBook = state.readingLogEntry == null && state.fileAvailable && state.book?.format?.supportsMetadataEditing == true
+    val canEditBook = state.readingLogEntry == null && state.fileAvailable && state.book?.format?.supportsLibraryMetadataEditing == true
     val editReview = {
         val book = state.book
         val reading = state.readingLogEntry
@@ -250,7 +250,7 @@ internal fun BookInfoContent(
                 if (editing) TextButton(onClick = editActions.cancel, enabled = editor.busy != true) {
                     Text(stringResource(R.string.library_delete_cancel))
                 } else FilledTonalButton(onClick = onEdit,
-                    enabled = enabled && !state.sharing && (state.readingLogEntry != null || state.fileAvailable && state.book?.format?.supportsMetadataEditing == true),
+                    enabled = enabled && !state.sharing && (state.readingLogEntry != null || state.fileAvailable && state.book?.format?.supportsLibraryMetadataEditing == true),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                     Icon(Icons.Rounded.Edit, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp))
                     Text(stringResource(R.string.library_menu_edit))
@@ -324,6 +324,7 @@ internal fun BookInfoContent(
                             editor?.review ?: book.review, onReview, editing = editable, enabled = enabled,
                             onChange = editActions.changeReview)
                         if (!titleOnly && state.readingLogEntry == null) BookPublicationSection(draft, change, enabled)
+                        if (state.readingLogEntry == null) EmbeddedMetadataSection(book.additionalMetadata)
                         book.readingQueueNote?.takeIf { it.isNotBlank() && state.readingLogEntry == null }?.let { note ->
                             BookDetailSection(stringResource(R.string.reading_queue_saved_note)) { BookDetailField(note) }
                         }
@@ -352,7 +353,7 @@ internal fun BookInfoContent(
     if (aboutSaving) AlertDialog(onDismissRequest = { aboutSaving = false }, containerColor = colors.floatingSurface,
         title = { Text(stringResource(R.string.metadata_about_saving)) }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(stringResource(R.string.metadata_file_hint))
+                Text(stringResource(if (state.book?.format == BookFormat.PDF) R.string.pdf_metadata_hint else R.string.metadata_file_hint))
                 if (editor?.fileInfo?.titleOnly == true) Text(stringResource(R.string.metadata_palmdoc_hint))
                 else {
                     editor?.fileInfo?.charset?.takeIf { it != "UTF-8" }?.let { Text(stringResource(R.string.metadata_charset_hint, it)) }

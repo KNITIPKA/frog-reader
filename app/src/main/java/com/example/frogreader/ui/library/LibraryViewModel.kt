@@ -13,18 +13,25 @@ import com.example.frogreader.data.DuplicateMatch
 import com.example.frogreader.data.FolderScanner
 import com.example.frogreader.data.ImportMode
 import com.example.frogreader.data.model.Book
+import com.example.frogreader.data.model.BookFormat
 import com.example.frogreader.data.parser.mobi.MobiDrmException
+import com.example.frogreader.data.search.LibrarySearchRepository
+import com.example.frogreader.data.search.RankedLibraryBook
+import com.example.frogreader.data.search.SearchTextNormalizer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -45,6 +52,27 @@ sealed interface LibraryMessage {
     data class ReadingQueueAdded(val title: String, val alreadyQueued: Boolean) : LibraryMessage
     data class ReadingQueueRemoved(val title: String) : LibraryMessage
     data object ReadingQueueFailed : LibraryMessage
+}
+
+/** A failed search may use the Kotlin path; a superseded search must stop immediately. */
+internal suspend fun searchLibraryWithFallback(
+    engine: LibrarySearchRepository?,
+    query: String,
+    currentBooks: List<Book>,
+): List<RankedLibraryBook> = engine?.let {
+    try {
+        it.searchBooks(query, currentBooks)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+} ?: withContext(Dispatchers.IO) {
+    val tokens = SearchTextNormalizer.tokenize(query)
+    currentBooks.mapNotNull { book ->
+        currentCoroutineContext().ensureActive()
+        LibrarySearchRepository.rankBook(book, tokens)
+    }
 }
 
 class LibraryViewModel(
@@ -72,6 +100,30 @@ class LibraryViewModel(
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
 
+    private val librarySearch: LibrarySearchRepository? =
+        runCatching { repository.filesRoot }.getOrNull()?.let(::LibrarySearchRepository)
+
+    /**
+     * Native SQLite FTS5 (`books_fts`) word-prefix library search results
+     * paired with the exact query string they correspond to, or `null` when [query] is blank.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val searchedBooks: StateFlow<Pair<String, List<RankedLibraryBook>>?> =
+        combine(_query, repository.books) { q, currentBooks -> q to currentBooks }
+            .mapLatest { (q, currentBooks) ->
+                if (q.isBlank()) {
+                    null
+                } else {
+                    val hits = searchLibraryWithFallback(librarySearch, q, currentBooks)
+                    q to hits
+                }
+            }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = null,
+            )
+
     fun setQuery(value: String) {
         _query.value = value
     }
@@ -83,7 +135,7 @@ class LibraryViewModel(
         if (_viewMode.value == mode) return
         _viewMode.value = mode
         settingsRepository?.let { settings ->
-            viewModelScope.launch(Dispatchers.IO) {
+            viewModelScope.launch {
                 runCatching { settings.setLibraryViewMode(mode) }
             }
         }
@@ -103,7 +155,6 @@ class LibraryViewModel(
                 runCatching { FolderScanner.releaseLegacyGrants(app) }
             }
         }
-        preloadContinueReading()
         if (settingsRepository != null) {
             viewModelScope.launch {
                 runCatching {
@@ -112,24 +163,6 @@ class LibraryViewModel(
                     }
                 }
             }
-        }
-    }
-
-    /**
-     * Parses the book behind the "continue reading" card in the background, so
-     * the most likely next tap opens instantly instead of spending a second or
-     * two on the same work.
-     *
-     * After a beat on purpose: the library's own first frame comes first, and
-     * this competes for the same cores. Tapping the book before the delay is
-     * up costs nothing — the repository hands both callers the same parse.
-     */
-    private fun preloadContinueReading() {
-        viewModelScope.launch(Dispatchers.IO) {
-            delay(PRELOAD_DELAY_MILLIS)
-            val next = repository.books.value.firstOrNull { it.lastOpenedAtMillis != null }
-                ?: return@launch
-            runCatching { repository.loadContent(next) }
         }
     }
 
@@ -416,7 +449,6 @@ class LibraryViewModel(
 
     companion object {
         /** Long enough for the library to have drawn itself first. */
-        private const val PRELOAD_DELAY_MILLIS = 1_200L
 
         val Factory = viewModelFactory {
             initializer {

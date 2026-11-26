@@ -1,16 +1,13 @@
 package com.example.frogreader.data.backup
 
 import android.content.Context
-import com.example.frogreader.data.backup.BackupArchive.resolveDocument
 import com.example.frogreader.data.BookRepository
 import com.example.frogreader.data.SettingsRepository
 import com.example.frogreader.data.StatsRepository
 import com.example.frogreader.data.model.BackupManifest
 import com.example.frogreader.data.model.BackupMode
-import com.example.frogreader.data.model.BackupSettings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -20,12 +17,8 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Backing the library up and putting it back.
- *
- * Wires [BackupArchive] (which knows the format) to the repositories (which
- * know the data) and to a [BackupTarget] (which knows where the file goes).
- * None of the three knows about the other two, which is why a Google Drive
- * target could be added later without touching the format or the screens.
+ * Backing the library up (`VACUUM INTO` SQLite snapshot + settings + fonts + covers/books)
+ * and restoring it safely via staging, integrity checks, and `.pre_restore_bak` rollback.
  */
 class BackupRepository(
     private val context: Context,
@@ -49,8 +42,10 @@ class BackupRepository(
         val manifest: BackupManifest,
     )
 
-    private val booksDir get() = File(context.filesDir, "books")
-    private val coversDir get() = File(context.filesDir, "covers")
+    private val filesRoot get() = books.filesRoot
+    private val booksDir get() = File(filesRoot, "books")
+    private val coversDir get() = File(filesRoot, "covers")
+    private val fontsDir get() = File(filesRoot, "fonts")
     private val operationMutex = Mutex()
 
     fun suggestedFileName(now: Long = System.currentTimeMillis()): String {
@@ -60,9 +55,7 @@ class BackupRepository(
 
     /**
      * A collision-resistant name for a backup the user explicitly writes into
-     * the retained snapshots folder. Scheduled work deliberately keeps the
-     * date-only stem above; a provider may suffix a same-day retry, and the
-     * validated retention pass safely removes excess completed snapshots.
+     * the retained snapshots folder.
      */
     fun suggestedManualSnapshotFileName(now: Long = System.currentTimeMillis()): String {
         val stamp = SimpleDateFormat("yyyy-MM-dd-HHmmss-SSS", Locale.US).format(Date(now))
@@ -80,11 +73,6 @@ class BackupRepository(
 
     /**
      * Writes and rotates one folder snapshot as a single repository operation.
-     *
-     * The repository belongs to the application, so this lock also serializes
-     * a foreground backup with [ScheduledBackupWorker]. Rotation is best-effort:
-     * once [BackupTarget.write] succeeds, a housekeeping failure cannot turn a
-     * safely written archive into a reported backup failure.
      */
     suspend fun exportToFolder(
         target: BackupTarget,
@@ -99,8 +87,7 @@ class BackupRepository(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            // The requested archive is already complete. Retention can recover
-            // on the next run without lying about this run's result.
+            // The requested archive is already complete. Retention can recover on the next run.
         }
         written
     }
@@ -119,27 +106,24 @@ class BackupRepository(
         fileName: String,
         onProgress: (done: Int, total: Int) -> Unit,
     ): BackupRef = withContext(Dispatchers.IO) {
-        val document = books.backupDocument()
-        val backupSettings = BackupSettings(
-            reader = settings.settings.first(),
-            app = settings.appSettings.first(),
-        )
-        val currentStats = stats.stats.value
+        if (mode == BackupMode.FULL) books.flushPdfAnnotations()
+        books.withBackupLock {
+            val backupSettings = settings.snapshotForBackup()
 
-        target.write(fileName) { out ->
-            BackupArchive.write(
-                out = out,
-                document = document,
-                stats = currentStats,
-                settings = backupSettings,
-                mode = mode,
-                appVersion = appVersion(),
-                createdAtMillis = System.currentTimeMillis(),
-                bookFile = { books.bookFileFor(it) },
-                coverFile = { books.coverFileFor(it) },
-                logCoverFile = { books.coverFileFor(it) },
-                onProgress = onProgress,
-            )
+            target.write(fileName) { out ->
+                BackupArchive.write(
+                    out = out,
+                    filesRoot = filesRoot,
+                    settings = backupSettings,
+                    mode = mode,
+                    appVersion = appVersion(),
+                    createdAtMillis = System.currentTimeMillis(),
+                    booksDir = booksDir,
+                    coversDir = coversDir,
+                    fontsDir = fontsDir,
+                    onProgress = onProgress,
+                )
+            }
         }
     }
 
@@ -155,17 +139,8 @@ class BackupRepository(
         }
 
     /**
-     * Replaces the library with the contents of a backup.
-     *
-     * Replacement, not merge: the user is saying "make it be this". Merging by
-     * id would be kinder to a device that already has books, and the manifest
-     * carries a format version so it can be added later without invalidating
-     * anything already written — but guessing which of two versions of a quote
-     * is the right one is a decision this has no basis to make yet.
-     *
-     * Books whose file is not in the archive — every book in a DATA backup —
-     * come back as records with no file. Everything written about them is
-     * intact, and attaching a file later restores them completely.
+     * Replaces the library, stats, custom fonts, and settings with the contents of a validated
+     * SQLite backup archive.
      */
     suspend fun restore(
         target: BackupTarget,
@@ -180,30 +155,45 @@ class BackupRepository(
         ref: BackupRef,
         onProgress: (done: Int, total: Int) -> Unit,
     ): RestoreSummary = withContext(Dispatchers.IO) {
-        val contents = target.open(ref).use { input ->
-            BackupArchive.read(
-                input = input,
-                booksDir = booksDir,
-                coversDir = coversDir,
-                onProgress = onProgress,
-            )
-        }
-
-        val resolved = contents.resolveDocument(booksDir, coversDir)
-        val restored = resolved.books
-        books.replaceAll(restored, resolved.shelves, resolved.readingQueue, resolved.readingLog)
-        contents.stats?.let { stats.replaceAll(it) }
-        contents.settings?.let { fromBackup ->
-            settings.update { fromBackup.reader }
-            settings.updateApp { fromBackup.app }
+        val restored = books.withRestoreLock {
+            stats.withRestoreLock {
+                settings.prepareRestoreSettings()
+                try {
+                    val result = target.open(ref).use { input ->
+                        BackupArchive.restore(
+                            input = input,
+                            targetFilesRoot = filesRoot,
+                            booksDir = booksDir,
+                            coversDir = coversDir,
+                            fontsDir = fontsDir,
+                            reconcileFiles = true,
+                            onProgress = onProgress,
+                            beforeCommit = { fromBackup ->
+                                fromBackup?.let { settings.applyBackupSettings(it) }
+                            },
+                        )
+                    }
+                    settings.finishRestoreSettings()
+                    result
+                } catch (failure: Throwable) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                        try {
+                            settings.rollbackRestoreSettings()
+                        } catch (settingsFailure: Throwable) {
+                            failure.addSuppressed(settingsFailure)
+                        }
+                    }
+                    throw failure
+                }
+            }
         }
 
         RestoreSummary(
-            books = restored.size,
-            quotes = restored.sumOf { it.quotes.size },
-            booksWithoutFile = restored.count { it.fileName == null },
-            readingQueueCount = contents.document.readingQueue.size,
-            readingLogCount = contents.document.readingLog.size,
+            books = restored.counts.books,
+            quotes = restored.counts.quotes,
+            booksWithoutFile = restored.counts.booksWithoutFile,
+            readingQueueCount = restored.counts.readingQueueCount,
+            readingLogCount = restored.counts.readingLogCount,
         )
     }
 
@@ -223,8 +213,6 @@ class BackupRepository(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                // A similarly named or damaged ZIP is not safe to restore and
-                // is not ours to delete automatically.
                 continue
             }
             result += StoredBackup(ref, manifest)
@@ -242,8 +230,7 @@ class BackupRepository(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
-                    // One provider failure must not prevent trying the remaining
-                    // old, validated FrogReader snapshots.
+                    // Best-effort rotation.
                 }
             }
     }

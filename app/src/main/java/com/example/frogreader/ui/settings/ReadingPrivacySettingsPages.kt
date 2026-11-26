@@ -199,6 +199,16 @@ internal fun ReadingSettingsPage(
                     onUpdate { it.copy(keepScreenOn = checked) }
                 },
             )
+            SettingsDivider()
+            SettingsSwitchRow(
+                icon = Icons.Rounded.Timer,
+                title = stringResource(R.string.settings_reader_load_hud),
+                subtitle = stringResource(R.string.settings_reader_load_hud_subtitle),
+                checked = settings.showReaderLoadHud,
+                onCheckedChange = { checked ->
+                    onUpdate { it.copy(showReaderLoadHud = checked) }
+                },
+            )
         }
         SettingsHelper(stringResource(R.string.settings_reading_helper))
     }

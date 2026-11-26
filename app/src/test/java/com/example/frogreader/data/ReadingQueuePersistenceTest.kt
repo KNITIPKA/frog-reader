@@ -1,6 +1,7 @@
 package com.example.frogreader.data
 
 import com.example.frogreader.data.backup.BackupArchive
+import com.example.frogreader.data.db.DatabaseManager
 import com.example.frogreader.data.model.*
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -32,8 +33,7 @@ class ReadingQueuePersistenceTest {
         assertEquals("Порада друга\nНа осінь", a.note)
         assertTrue(reopened.books.value.isEmpty())
         assertTrue(reopened.readingQueue.value.all { it.updatedAtMillis > 0 })
-        assertFalse(File(directory, "library.json").exists())
-        assertFalse(File(directory, "progress.json").exists())
+        assertTrue(StoreFixture.booksOnDisk(directory).isEmpty())
     }
 
     @Test fun `other library mutations preserve reading intentions and their order`() = runTest {
@@ -56,7 +56,7 @@ class ReadingQueuePersistenceTest {
         repo.saveReadingQueueEntry(null, "D", "", "")
         repo.reorderReadingQueue(listOf(c.id, b.id, c.id, a.id, "missing"))
         assertEquals(listOf("C", "A", "D"), BookRepository().readingQueue.value.map { it.title })
-        assertTrue(StoreFixture.tombstonesOnDisk(directory).containsKey(b.id))
+        assertNull(DatabaseManager.getDatabase(directory).readingListsDao().getQueueEntryById(b.id))
         try {
             repo.saveReadingQueueEntry(b.id, "Revive", "", "")
             fail("Editing a missing entry must fail")
@@ -99,9 +99,7 @@ class ReadingQueuePersistenceTest {
         repo.saveReadingQueueEntry(null, "A", "", "")
         repo.saveReadingQueueEntry(null, "B", "", "")
         val before = repo.readingQueue.value
-        val temp = File(directory, "userdata.json.tmp")
-        temp.mkdirs()
-        File(temp, "block").writeText("prevent replacement")
+        StoreFixture.blockWrites(directory)
         try {
             try { repo.reorderReadingQueue(before.reversed().map { it.id }); fail("Must fail") }
             catch (_: IOException) { }
@@ -110,17 +108,19 @@ class ReadingQueuePersistenceTest {
             catch (_: IOException) { }
             assertEquals(before, repo.readingQueue.value)
             assertEquals(before, BookRepository().readingQueue.value)
-        } finally { temp.deleteRecursively() }
+        } finally { StoreFixture.unblockWrites(directory) }
     }
 
-    @Test fun `corrupt userdata cannot be overwritten by reading queue or exported as empty`() = runTest {
-        File(directory, "userdata.json").writeText("broken")
+    @Test fun `corrupt database cannot be overwritten by reading queue or exported as empty`() = runTest {
+        StoreFixture.corruptDatabase(directory, ">>> CORRUPTED SQLITE <<<")
         val repo = BookRepository()
         try { repo.saveReadingQueueEntry(null, "A", "", ""); fail("Must protect corrupt data") }
         catch (_: LibraryIndexCorruptedException) { }
-        try { repo.backupDocument(); fail("Must not export empty data") }
-        catch (_: LibraryIndexCorruptedException) { }
-        assertEquals("broken", File(directory, "userdata.json").readText())
+        try {
+            BackupArchive.write(ByteArrayOutputStream(), directory, BackupSettings(), BackupMode.DATA, "test", 1)
+            fail("Must not export empty data")
+        } catch (_: LibraryIndexCorruptedException) { }
+        assertEquals(">>> CORRUPTED SQLITE <<<", StoreFixture.databaseFile(directory).readText())
     }
 
     @Test fun `data and full archives restore every field and priority through repository`() = runTest {
@@ -130,37 +130,24 @@ class ReadingQueuePersistenceTest {
         repo.restoreReadingQueueEntry(ReadingQueueEntry("legacy", "Read first", note = "x".repeat(500)), 1)
         repo.reorderReadingQueue(repo.readingQueue.value.reversed().map { it.id })
         val expected = repo.readingQueue.value
-        val document = repo.backupDocument()
         for (mode in BackupMode.entries) {
             val out = ByteArrayOutputStream()
-            BackupArchive.write(out, document, ReadingStats(), BackupSettings(), mode, "test", 1)
-            val contents = BackupArchive.read(out.toByteArray().inputStream(), null, null)
-            assertEquals(expected, contents.document.readingQueue)
-            assertEquals(expected.size, contents.manifest.readingQueueCount)
+            BackupArchive.write(out, directory, BackupSettings(), mode, "test", 1)
             repo.deleteReadingQueueEntry(expected.first().id)
-            repo.replaceAll(contents.document.books, contents.document.shelves, contents.document.readingQueue)
+            val restored = BackupArchive.restore(out.toByteArray().inputStream(), directory, null, null, null)
+            assertEquals(expected.size, restored.manifest.readingQueueCount)
+            repo.reloadAndSweepAfterRestore()
             assertEquals(expected.map { it.copy(updatedAtMillis = 0) },
                 BookRepository().readingQueue.value.map { it.copy(updatedAtMillis = 0) })
         }
     }
 
-    @Test fun `old backups and userdata without reading queue remain compatible`() = runTest {
-        File(directory, "userdata.json").writeText("""{"userData":{},"quotes":{},"bookmarks":{}}""")
+    @Test fun `empty database starts with empty reading queue and replaceAll clears queue`() = runTest {
         val repo = BookRepository()
         assertTrue(repo.readingQueue.value.isEmpty())
         repo.saveReadingQueueEntry(null, "Current intention", "", "")
-        val out = ByteArrayOutputStream()
-        ZipOutputStream(out).use { zip ->
-            zip.putNextEntry(ZipEntry("manifest.json"))
-            zip.write("""{"formatVersion":2,"bookCount":0}""".toByteArray())
-            zip.closeEntry()
-            zip.putNextEntry(ZipEntry("library.json"))
-            zip.write("""{"books":[],"shelves":[]}""".toByteArray())
-            zip.closeEntry()
-        }
-        val contents = BackupArchive.read(out.toByteArray().inputStream(), null, null)
-        assertTrue(contents.document.readingQueue.isEmpty())
-        repo.replaceAll(contents.document.books, contents.document.shelves, contents.document.readingQueue)
+        assertEquals(1, repo.readingQueue.value.size)
+        repo.replaceAll(emptyList(), emptyList(), emptyList(), emptyList())
         assertTrue(BookRepository().readingQueue.value.isEmpty())
     }
 }

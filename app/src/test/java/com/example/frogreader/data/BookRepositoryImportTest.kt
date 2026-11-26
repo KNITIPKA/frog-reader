@@ -115,7 +115,7 @@ class BookRepositoryImportTest {
         assertNull(staged.duplicateOf)
 
         assertTrue("nothing was added to the library", repository.books.value.isEmpty())
-        assertFalse("library.json was never written", File(testDir, "library.json").exists())
+        assertTrue("no book rows exist in SQLite", StoreFixture.booksOnDisk(testDir).isEmpty())
     }
 
     @Test

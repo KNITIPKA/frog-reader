@@ -6,10 +6,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.lerp
 import com.example.frogreader.data.AppTheme
+import com.example.frogreader.data.model.ProfileSearchCategory
 import com.example.frogreader.data.model.QuoteColor
 import com.example.frogreader.ui.reader.readerColors
 import com.example.frogreader.ui.reader.selectionToolbarPalette
 import com.example.frogreader.ui.reader.contentsRowBackground
+import com.example.frogreader.ui.reader.pdf.PdfToolbarColors
+import com.example.frogreader.data.model.PdfToolbarAppearance
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -92,6 +95,40 @@ class ThemePaletteTest {
             val colors = readerColors(theme)
             assertEquals(1f, colors.pageCounterText.alpha)
             assertContrast("$theme page counter", colors.pageCounterText, colors.background)
+        }
+    }
+
+    @Test
+    fun `PDF toolbar colors protect labels and the page counter across appearances`() {
+        val palettes = AppTheme.entries.map { readerColors(it) } + listOf(
+            readerColors(AppTheme.WHITE, systemBlueScheme), readerColors(AppTheme.OLED, systemDarkBlueScheme),
+        )
+        palettes.forEach { colors ->
+            val toolbarColors = PdfToolbarAppearance.entries.associateWith { PdfToolbarColors(colors, it) }
+            val solid = toolbarColors.getValue(PdfToolbarAppearance.SOLID)
+            val glass = toolbarColors.getValue(PdfToolbarAppearance.GLASS)
+            val clear = toolbarColors.getValue(PdfToolbarAppearance.CLEAR)
+            assertEquals(1f, solid.tint.alpha)
+            for ((mode, toolbar) in listOf(PdfToolbarAppearance.GLASS to glass, PdfToolbarAppearance.CLEAR to clear)) {
+                assertTrue(toolbar.tint.alpha < 1f)
+                val limit = (if (mode == PdfToolbarAppearance.GLASS) toolbar.minimumContrastLuminance
+                    else toolbar.clearLuminanceLimit) + 0.05f
+                val foreground = toolbar.ink.luminance() + 0.05f
+                assertTrue("Adaptive $mode protects the minimum contrast",
+                    maxOf(limit, foreground) / minOf(limit, foreground) >= 4.5f)
+            }
+            toolbarColors.forEach { (mode, toolbar) ->
+                assertEquals(1f, toolbar.ink.alpha)
+                assertEquals(1f, toolbar.selectedInk.alpha)
+                assertEquals(1f, toolbar.counterInk.alpha)
+                for (paper in listOf(Color.White, Color.Black)) {
+                    val fill = toolbar.tint.compositeOver(paper)
+                    assertContrast("$mode label", toolbar.ink, fill)
+                    assertContrast("$mode selected label", toolbar.selectedInk, fill)
+                    assertContrast("$mode panel metadata", toolbar.panelColors.onChromeVariant, fill)
+                    assertContrast("$mode page counter", toolbar.counterInk, toolbar.counterTint.compositeOver(fill))
+                }
+            }
         }
     }
 
@@ -470,6 +507,53 @@ class ThemePaletteTest {
             assertEquals("$name tile must be opaque", 1f, toolbar.tile.alpha)
             assertContrast("$name toolbar label on tile", toolbar.label, toolbar.tile)
             assertContrast("$name toolbar icon on tile", toolbar.icon, toolbar.tile, minimum = 3f)
+        }
+    }
+
+    @Test
+    fun `profile search categories and chrome preserve WCAG contrast across all themes and Material You`() {
+        val configs = listOf(
+            Triple("WHITE", colorSchemeFor(AppTheme.WHITE), frogColorsFor(AppTheme.WHITE, colorSchemeFor(AppTheme.WHITE), dynamicColor = false)),
+            Triple("SEPIA", colorSchemeFor(AppTheme.SEPIA), frogColorsFor(AppTheme.SEPIA, colorSchemeFor(AppTheme.SEPIA), dynamicColor = false)),
+            Triple("OLED", colorSchemeFor(AppTheme.OLED), frogColorsFor(AppTheme.OLED, colorSchemeFor(AppTheme.OLED), dynamicColor = false)),
+            Triple("dynamic light", systemBlueScheme, dynamicFrogColors(systemBlueScheme, dark = false)),
+            Triple("dynamic dark", systemDarkBlueScheme, dynamicFrogColors(systemDarkBlueScheme, dark = true)),
+        )
+
+        configs.forEach { (name, scheme, frog) ->
+            val search = frog.profileSearch
+            assertEquals("$name search bar opaque", 1f, search.searchBarContainer.alpha)
+            assertEquals("$name category order card opaque", 1f, search.categoryOrderContainer.alpha)
+            assertEquals("$name drag handle opaque", 1f, search.dragHandleContainer.alpha)
+
+            assertContrast("$name search bar text", scheme.onSurface, search.searchBarContainer)
+            assertContrast("$name search bar placeholder", scheme.onSurfaceVariant, search.searchBarContainer)
+            assertContrast("$name category order title", scheme.onSurface, search.categoryOrderContainer)
+            assertContrast("$name category order subtitle", scheme.onSurfaceVariant, search.categoryOrderContainer)
+            assertContrast("$name category order eye active", scheme.primary, search.categoryOrderContainer, minimum = 3f)
+            assertContrast("$name category order drag icon", scheme.onSurfaceVariant, search.dragHandleContainer, minimum = 3f)
+            assertContrast("$name category order Done button", scheme.onPrimary, scheme.primary)
+
+            val seenHeaderInks = HashSet<Color>()
+            val seenContainers = HashSet<Color>()
+            ProfileSearchCategory.entries.forEach { category ->
+                val p = search.paletteFor(category)
+                seenHeaderInks += p.headerInk
+                seenContainers += p.cardContainer
+
+                assertEquals("$name $category card opaque", 1f, p.cardContainer.alpha)
+                assertEquals("$name $category subtitle opaque", 1f, p.subtitleInk.alpha)
+                assertEquals("$name $category highlight opaque", 1f, p.highlightFill.alpha)
+
+                assertContrast("$name $category header on canvas", p.headerInk, scheme.surface)
+                assertContrast("$name $category title on card", p.titleInk, p.cardContainer)
+                assertContrast("$name $category subtitle on card", p.subtitleInk, p.cardContainer)
+                assertContrast("$name $category accent on card", p.accentInk, p.cardContainer)
+                assertContrast("$name $category highlight ink on fill", p.highlightInk, p.highlightFill)
+                assertContrast("$name $category icon on badge", p.iconInk, p.iconBadgeContainer, minimum = 3f)
+            }
+            assertEquals("$name must keep 5 distinct category header inks", 5, seenHeaderInks.size)
+            assertEquals("$name must keep 5 distinct category card containers", 5, seenContainers.size)
         }
     }
 }

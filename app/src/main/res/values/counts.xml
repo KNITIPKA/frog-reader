@@ -84,4 +84,48 @@
         <item quantity="one">%1$d log entry</item>
         <item quantity="other">%1$d log entries</item>
     </plurals>
+    <plurals name="profile_search_results_count">
+        <item quantity="one">%1$d result</item>
+        <item quantity="other">%1$d results</item>
+    </plurals>
+    <plurals name="profile_search_more_quotes">
+        <item quantity="one">Show %1$d more quote</item>
+        <item quantity="other">Show %1$d more quotes</item>
+    </plurals>
+    <plurals name="profile_search_more_bookmarks">
+        <item quantity="one">Show %1$d more bookmark</item>
+        <item quantity="other">Show %1$d more bookmarks</item>
+    </plurals>
+    <plurals name="profile_search_more_queue">
+        <item quantity="one">Show %1$d more queue item</item>
+        <item quantity="other">Show %1$d more queue items</item>
+    </plurals>
+    <plurals name="profile_search_more_log">
+        <item quantity="one">Show %1$d more log entry</item>
+        <item quantity="other">Show %1$d more log entries</item>
+    </plurals>
+    <plurals name="profile_search_more_achievements">
+        <item quantity="one">Show %1$d more achievement</item>
+        <item quantity="other">Show %1$d more achievements</item>
+    </plurals>
+    <plurals name="achievement_books_read">
+        <item quantity="one">%1$d book finished</item>
+        <item quantity="other">%1$d books finished</item>
+    </plurals>
+    <plurals name="achievement_hours_read">
+        <item quantity="one">%1$d hour read</item>
+        <item quantity="other">%1$d hours read</item>
+    </plurals>
+    <plurals name="achievement_streak_days">
+        <item quantity="one">%1$d day streak</item>
+        <item quantity="other">%1$d day streak</item>
+    </plurals>
+    <plurals name="achievement_quotes_saved">
+        <item quantity="one">%1$d quote saved</item>
+        <item quantity="other">%1$d quotes saved</item>
+    </plurals>
+    <plurals name="achievement_queue_books">
+        <item quantity="one">%1$d book queued</item>
+        <item quantity="other">%1$d books queued</item>
+    </plurals>
 </resources>

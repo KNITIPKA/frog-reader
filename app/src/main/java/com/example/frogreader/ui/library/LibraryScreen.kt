@@ -2,6 +2,9 @@ package com.example.frogreader.ui.library
 
 import com.example.frogreader.ui.components.FrogSnackbarHost
 import com.example.frogreader.ui.theme.floatingSurface
+import com.example.frogreader.data.search.LibrarySearchRepository
+import com.example.frogreader.data.search.RankedLibraryBook
+import com.example.frogreader.data.search.SearchTextNormalizer
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -243,6 +246,7 @@ fun LibraryScreen(
     val readingQueue by viewModel.readingQueue.collectAsStateWithLifecycle()
     val viewMode by viewModel.viewMode.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
+    val searchedBooks by viewModel.searchedBooks.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
@@ -277,8 +281,9 @@ fun LibraryScreen(
     val heroBook = remember(books) {
         books.firstOrNull { it.lastOpenedAtMillis != null } ?: books.firstOrNull()
     }
-    val visibleEntries = remember(entries, books, query, heroBook) {
-        val filtered = filterEntries(entries, books, query)
+    val sqlRankedForQuery = searchedBooks?.takeIf { it.first == query }?.second
+    val visibleEntries = remember(entries, books, query, sqlRankedForQuery, heroBook) {
+        val filtered = filterEntries(entries, books, query, sqlRankedForQuery)
         if (searching) {
             filtered
         } else {
@@ -1019,40 +1024,64 @@ fun LibraryScreen(
 }
 
 /**
- * Case-insensitive match over shelf names and, for books, whatever [searchRank]
- * looks at — title and author first, then series and description.
+ * Word-prefix match over shelf names and, for books, SQLite FTS5 (`books_fts`) when
+ * [sqlRankedBooks] has settled for [query], or synchronous [LibrarySearchRepository.rankBook] on the typing
+ * frame before the background query arrives.
  *
- * Shelves and the books that answered best come first; the books found only by
- * their blurb follow, so a description match can never bury a title match.
- * Within each of those two groups the library's own order is kept.
+ * Shelves and title hits come first — whole-word matches ahead of word prefixes, then by the
+ * usual timestamp — keeping `Title > Author > Series > Description` so a blurb match can never
+ * bury a title match.
  */
 internal fun filterEntries(
     entries: List<LibraryEntry>,
     allBooks: List<Book>,
     query: String,
+    sqlRankedBooks: List<RankedLibraryBook>? = null,
 ): List<LibraryEntry> {
     val needle = query.trim()
     if (needle.isEmpty()) return entries
+    val tokens = SearchTextNormalizer.tokenize(needle)
+    if (tokens.isEmpty()) return emptyList()
 
     val shelves = entries.filterIsInstance<LibraryEntry.ShelfEntry>()
-        .filter { it.shelf.name.contains(needle, ignoreCase = true) }
-    val alreadyShown = shelves.flatMapTo(HashSet()) { shelf -> shelf.books.map { it.id } }
+        .mapNotNull { entry ->
+            val score = SearchTextNormalizer.matchScore(
+                listOf(SearchTextNormalizer.normalize(entry.shelf.name)),
+                tokens,
+            )
+            if (score > 0) score to entry else null
+        }
+    val alreadyShown = shelves.flatMapTo(HashSet()) { (_, shelf) -> shelf.books.map { it.id } }
+
     // Search reaches INTO shelves: a book you can't find is worse than a book
     // shown outside its shelf for the duration of a query.
-    val ranked = allBooks
-        .filter { it.id !in alreadyShown }
-        .mapNotNull { book -> searchRank(book, needle)?.let { book to it } }
+    val ranked: List<RankedLibraryBook> = if (sqlRankedBooks != null) {
+        sqlRankedBooks.filter { it.book.id !in alreadyShown }
+    } else {
+        allBooks
+            .filter { it.id !in alreadyShown }
+            .mapNotNull { book -> LibrarySearchRepository.rankBook(book, tokens) }
+    }
 
     // A shelf name is as direct a hit as a title, so shelves sit with the top
-    // group and are ordered against it by the usual timestamp.
-    val byTime = compareByDescending<LibraryEntry> { it.sortTs }.thenBy { it.id }
-    val direct = (shelves + ranked.filter { it.second <= 1 }.map { LibraryEntry.BookEntry(it.first) })
-        .sortedWith(byTime)
-    val indirect = ranked.filter { it.second > 1 }
-        .sortedBy { it.second }
-        .map { LibraryEntry.BookEntry(it.first) }
+    // group and are ordered against it by relevance, then the usual timestamp.
+    val topGroup = shelves.map { (score, entry) -> score to (entry as LibraryEntry) } +
+        ranked.filter { it.tier == 0 }.map { it.relevance to LibraryEntry.BookEntry(it.book) }
+    val titleEntries = topGroup
+        .sortedWith(
+            compareByDescending<Pair<Int, LibraryEntry>> { it.first }
+                .thenByDescending { it.second.sortTs }
+                .thenBy { it.second.id }
+        )
+        .map { it.second }
+    val otherEntries = ranked.filter { it.tier > 0 }
+        .sortedWith(
+            compareBy<RankedLibraryBook> { it.tier }
+                .thenByDescending { it.relevance }
+        )
+        .map { LibraryEntry.BookEntry(it.book) }
 
-    return direct + indirect
+    return titleEntries + otherEntries
 }
 
 // ----------------------------------------------------------------- header

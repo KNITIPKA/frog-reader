@@ -85,6 +85,7 @@ internal fun FrogHeaderContent(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
     searchEnabled: Boolean = true,
+    onSearchClick: (() -> Unit)? = null,
     controlColor: Color? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -104,6 +105,7 @@ internal fun FrogHeaderContent(
                 onQueryChange = onQueryChange,
                 hint = searchHint,
                 enabled = searchEnabled,
+                onClick = onSearchClick,
                 containerColor = controlColor,
                 modifier = Modifier.weight(1f),
             )
@@ -171,16 +173,26 @@ internal fun FrogSearchField(
     hint: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    onClick: (() -> Unit)? = null,
     containerColor: Color? = null,
 ) {
     val frog = LocalFrogColors.current
+
+    val interactionModifier = when {
+        enabled -> Modifier
+        onClick != null -> Modifier.clickable(
+            role = androidx.compose.ui.semantics.Role.Button,
+            onClick = onClick,
+        )
+        else -> Modifier.semantics(mergeDescendants = true) { disabled() }
+    }
 
     Row(
         modifier = modifier
             .height(44.dp)
             .clip(RoundedCornerShape(22.dp))
             .background(containerColor ?: frog.glass)
-            .then(if (enabled) Modifier else Modifier.semantics(mergeDescendants = true) { disabled() })
+            .then(interactionModifier)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),

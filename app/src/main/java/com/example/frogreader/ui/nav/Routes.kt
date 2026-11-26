@@ -15,6 +15,9 @@ data object LibraryRoute
 data object ProfileRoute
 
 @Serializable
+data object ProfileSearchRoute
+
+@Serializable
 // Stable serialized names preserve navigation state from before the UI rename.
 @SerialName("com.example.frogreader.ui.nav.QuotesBookmarksRoute")
 data object QuotesAndBookmarksRoute

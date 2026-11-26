@@ -11,10 +11,15 @@ import com.example.frogreader.data.model.ReadingProgress
 import com.example.frogreader.data.model.ReadingStatus
 import java.io.File
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -37,7 +42,7 @@ class BookRepositoryDiskCacheTest {
         progress = ReadingProgress(elementIndex = 17, scrollOffset = 23, fraction = 0.2f),
     )
     private val source: File get() = File(temporary.root, "books/${book.fileName}")
-    private val cache: ParsedContentCache get() = ParsedContentCache(File(temporary.root, "reader-content"))
+    private val cache: ChunkedContentCache get() = ChunkedContentCache(File(temporary.root, "reader-content"))
 
     @Before fun setup() {
         context = mock(Context::class.java)
@@ -84,7 +89,7 @@ class BookRepositoryDiskCacheTest {
         val fresh = BookRepository(context)
         assertEquals("Before 0.", paragraphs(fresh.loadContent(book)).first())
         fresh.awaitContentCacheWrites()
-        assertTrue(cache.load(book.id, source)!!.complete)
+        assertTrue(cache.load(book.id, source) != null)
         fresh.releaseContentCache()
     }
 
@@ -103,7 +108,7 @@ class BookRepositoryDiskCacheTest {
         val fresh = BookRepository(context)
         assertEquals("After_ 0.", paragraphs(fresh.loadContent(book)).first())
         fresh.awaitContentCacheWrites()
-        assertEquals("After_ 0.", paragraphs(cache.load(book.id, source)!!.content).first())
+        assertEquals("After_ 0.", paragraphs(cache.load(book.id, source)!!).first())
         fresh.releaseContentCache()
     }
 
@@ -115,7 +120,7 @@ class BookRepositoryDiskCacheTest {
         val imagePath = parsed.chapters.flatMap { it.elements }.filterIsInstance<ContentElement.Image>().single().path
         assertTrue(File(imagePath).isFile)
         val originalBytes = source.readBytes()
-        val storeBytes = StoreFixture.files(temporary.root).filter { it.isFile }.associate { it.name to it.readBytes() }
+        val storeBytes = StoreFixture.files(temporary.root).filter { it.isFile }.associateWith { it.readBytes() }
         first.releaseContentCache()
 
         val result = ReaderCacheBudget(
@@ -125,14 +130,14 @@ class BookRepositoryDiskCacheTest {
         assertFalse(File(imagePath).exists())
         assertFalse(cache.entryFile(book.id).exists())
         assertArrayEquals(originalBytes, source.readBytes())
-        storeBytes.forEach { (name, bytes) -> assertArrayEquals(bytes, File(temporary.root, name).readBytes()) }
+        storeBytes.forEach { (file, bytes) -> assertArrayEquals(bytes, file.readBytes()) }
 
         val fresh = BookRepository(context)
         val reparsed = fresh.loadContent(book)
         assertEquals("Before 0.", paragraphs(reparsed).first())
         assertTrue(File(imagePath).isFile)
         fresh.awaitContentCacheWrites()
-        assertTrue(cache.load(book.id, source)!!.complete)
+        assertTrue(cache.load(book.id, source) != null)
         fresh.releaseContentCache()
     }
 
@@ -150,8 +155,42 @@ class BookRepositoryDiskCacheTest {
         assertEquals("Before 0.", paragraphs(restored).first())
         assertTrue(File(imagePath).isFile)
         fresh.awaitContentCacheWrites()
-        assertTrue(cache.load(book.id, source)!!.complete)
+        assertTrue(cache.load(book.id, source) != null)
         fresh.releaseContentCache()
+    }
+
+    @Test fun `starting another book releases the previous full RAM model before decoding finishes`() = runTest {
+        writeEpub("Before")
+        val other = book.copy(id = "other-book", fileName = "other.epub", activeReadingLogId = null)
+        File(source.parentFile, other.fileName!!).writeText("Source for injected parser")
+        StoreFixture.seed(temporary.root, listOf(book, other))
+        val enteredOther = CountDownLatch(1)
+        val finishOther = CountDownLatch(1)
+        val firstBookParses = AtomicInteger()
+        val repository = BookRepository(context).apply {
+            contentParserForTests = { file, _, _, _, _ ->
+                val text = if (file.name == other.fileName) {
+                    enteredOther.countDown()
+                    check(finishOther.await(10, TimeUnit.SECONDS))
+                    "Other"
+                } else {
+                    "First ${firstBookParses.incrementAndGet()}"
+                }
+                BookContent(listOf(Chapter(null, listOf(ContentElement.Paragraph(AnnotatedString(text))))))
+            }
+        }
+        assertEquals("First 1", paragraphs(repository.loadContent(book)).single())
+        val pending = async(Dispatchers.Default) { repository.loadContent(other) }
+        try {
+            assertTrue(enteredOther.await(5, TimeUnit.SECONDS))
+            // Returning First 1 here would prove the old model remained retained
+            // throughout the other book's potentially large decode.
+            assertEquals("First 2", paragraphs(repository.loadContent(book)).single())
+        } finally {
+            finishOther.countDown()
+            pending.await()
+            repository.releaseContentCache()
+        }
     }
 
     private fun paragraphs(content: BookContent): List<String> = content.chapters.flatMap { it.elements }

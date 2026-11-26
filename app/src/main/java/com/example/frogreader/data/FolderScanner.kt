@@ -137,6 +137,7 @@ object FolderScanner {
     fun inferFormat(fileName: String): BookFormat? {
         val lower = fileName.lowercase()
         return when {
+            lower.endsWith(".pdf") -> BookFormat.PDF
             lower.endsWith(".txt") -> BookFormat.TXT
             lower.endsWith(".md") || lower.endsWith(".markdown") -> BookFormat.MD
             lower.endsWith(".epub") -> BookFormat.EPUB

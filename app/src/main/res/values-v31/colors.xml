@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- In values-v31, androidx.pdf overrides selection_handle_color to ?attr/colorPrimaryFixedDim.
+         Because FrogReader uses a Material light window theme rather than Material3 XML attributes,
+         that attribute resolves to 0x00000000 (transparent). Overriding it here restores
+         the forest-green accent on Android 12+ (API 31+). -->
+    <color name="selection_handle_color">#FF246B50</color>
+    <color name="pdf_viewer_selection_handles">#FF246B50</color>
+</resources>

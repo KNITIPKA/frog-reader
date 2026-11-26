@@ -2,7 +2,6 @@ package com.example.frogreader.data
 
 import android.content.Context
 import com.example.frogreader.data.backup.BackupArchive
-import com.example.frogreader.data.backup.BackupArchive.resolveDocument
 import com.example.frogreader.data.model.*
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
@@ -34,11 +33,10 @@ class ReadingLogProgressTest {
     @Test fun `page progress stays in progress store and does not rewrite history`() = runTest {
         val repo = repository()
         repo.markStarted("book")
-        val before = File(temporary.root, "userdata.json").readBytes()
         val entry = repo.readingLog.value.single()
         repo.saveProgressForReading("book", ReadingProgress(fraction = .72f), entry.id)
-        assertArrayEquals(before, File(temporary.root, "userdata.json").readBytes())
         assertEquals(entry, repo.readingLog.value.single())
+        assertEquals(entry, repository().readingLog.value.single())
         assertEquals(.72f, repository().bookById("book")!!.progress.fraction)
     }
 
@@ -124,9 +122,7 @@ class ReadingLogProgressTest {
         val legacy = ReadingLogEntry("legacy", "A book", source = ReadingLogSource.FROGREADER,
             status = ReadingLogStatus.ABANDONED, linkedBookId = "book")
         val oldBook = repository().bookById("book")!!.copy(status = ReadingStatus.ABANDONED, activeReadingLogId = legacy.id)
-        StoreFixture.seed(temporary.root, listOf(oldBook))
-        AtomicJsonFile(File(temporary.root, "userdata.json"), StoreFixture.json, UserDataStore.serializer()).write(
-            StoreFixture.userDataOf(listOf(oldBook)).copy(readingLog = listOf(legacy)))
+        StoreFixture.seed(temporary.root, listOf(oldBook), readingLog = listOf(legacy))
         assertEquals(.31f, repository().readingLog.value.single().progressFraction)
         assertNull(StoreFixture.json.decodeFromString<ReadingLogEntry>("""{"id":"old","title":"Old"}""").progressFraction)
     }
@@ -136,14 +132,13 @@ class ReadingLogProgressTest {
         repo.markStarted("book")
         val original = repo.readingLog.value.single()
         repo.saveProgress("book", ReadingProgress(fraction = .81f))
-        val temp = File(temporary.root, "userdata.json.tmp").apply { mkdirs() }
-        File(temp, "blocked").writeText("blocked")
+        StoreFixture.blockWrites(temporary.root)
         try {
             try { repo.setStatus("book", ReadingStatus.ABANDONED); fail("Must fail") }
             catch (_: IOException) { }
             assertEquals(original, repo.readingLog.value.single())
             assertEquals(ReadingStatus.READING, repo.bookById("book")!!.status)
-        } finally { temp.deleteRecursively() }
+        } finally { StoreFixture.unblockWrites(temporary.root) }
     }
 
     @Test fun `data and full backups retain stopped percentage after deleting the ebook`() = runTest {
@@ -153,13 +148,12 @@ class ReadingLogProgressTest {
         repo.deleteBook("book")
         for (mode in BackupMode.entries) {
             val out = ByteArrayOutputStream()
-            BackupArchive.write(out, repo.backupDocument(), ReadingStats(), BackupSettings(), mode, "test", 1)
+            BackupArchive.write(out, temporary.root, BackupSettings(), mode, "test", 1)
             val booksDir = File(temporary.root, "books")
             val coversDir = File(temporary.root, "covers")
-            val contents = BackupArchive.read(out.toByteArray().inputStream(), booksDir, coversDir)
-            val restored = contents.resolveDocument(booksDir, coversDir)
-            assertEquals(BackupManifest.FORMAT_VERSION, contents.manifest.formatVersion)
-            repo.replaceAll(restored.books, restored.shelves, restored.readingQueue, restored.readingLog)
+            val restored = BackupArchive.restore(out.toByteArray().inputStream(), temporary.root, booksDir, coversDir)
+            assertEquals(BackupManifest.FORMAT_VERSION, restored.manifest.formatVersion)
+            repo.reloadAndSweepAfterRestore()
             assertEquals(.64f, repository().readingLog.value.single().progressFraction)
         }
     }

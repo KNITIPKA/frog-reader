@@ -5,10 +5,13 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 enum class BookFormat {
-    EPUB, FB2, MOBI, TXT, MD;
+    EPUB, FB2, MOBI, TXT, MD, PDF;
 
     /** Plain text formats have no standard embedded book-metadata container. */
-    val supportsMetadataEditing: Boolean get() = this != TXT && this != MD
+    val supportsMetadataEditing: Boolean get() = this != TXT && this != MD && this != PDF
+
+    /** PDF descriptions/covers are library fields; personal annotations update a private PDF copy. */
+    val supportsLibraryMetadataEditing: Boolean get() = this == PDF || supportsMetadataEditing
 }
 
 /** Where the user stopped reading, plus an overall 0..1 fraction for the library card. */
@@ -27,6 +30,8 @@ data class ReadingProgress(
     val pagesLeftInChapter: Int = -1,
     /** Pages in the whole book at the last pagination; 0 = unknown. */
     val totalPages: Int = 0,
+    /** Typed coordinates; absent on legacy reflowable records. */
+    val documentLocation: DocumentLocation? = null,
 )
 
 /**
@@ -63,6 +68,7 @@ data class Bookmark(
     /** Set by the repository when the bookmark is stored; empty in transit. */
     val bookId: String = "",
     override val updatedAtMillis: Long = 0L,
+    val documentLocation: DocumentLocation? = null,
 ) : Timestamped<Bookmark> {
     override fun withUpdatedAt(millis: Long) = copy(updatedAtMillis = millis)
 }
@@ -97,6 +103,9 @@ data class Quote(
     override val updatedAtMillis: Long = 0L,
     /** Saved independently for overlapping quotes; older records keep their default color. */
     val color: QuoteColor = QuoteColor.DEFAULT,
+    val documentLocation: DocumentLocation? = null,
+    /** PDF-space rectangles for overlays/navigation and portable PDF highlight annotations. */
+    val pdfSelection: List<PdfTextBounds> = emptyList(),
 ) : Timestamped<Quote> {
     override fun withUpdatedAt(millis: Long) = copy(updatedAtMillis = millis)
 }
@@ -193,6 +202,12 @@ data class Book(
     val translators: List<String> = emptyList(),
     val description: String? = null,
     val language: String? = null,
+    /** False after the user removes or supplies PDF cover art. */
+    val generatePdfCover: Boolean = true,
+    /** Other embedded document properties, retained verbatim for the details screen. */
+    val additionalMetadata: Map<String, String> = emptyMap(),
+    /** Signature of the personal annotations embedded in the current private PDF generation. */
+    val pdfAnnotationFingerprint: String? = null,
 ) {
     /** Completion is explicit; a saved page position alone is not a finished reading. */
     val hasFinishedReading: Boolean get() = status == ReadingStatus.FINISHED || finishedAtMillis != null

@@ -153,14 +153,16 @@ class FirstLaunchRepositoryTest {
     }
 
     @Test
-    fun `empty libraries and recoverable backup files count as prior use`() {
+    fun `empty libraries and existing sqlite database files count as prior use`() {
         assertFalse(existingReaderFiles(folder.root))
         File(folder.root, "books").mkdirs()
         assertFalse(existingReaderFiles(folder.root))
-        val index = File(folder.root, "library.json.bak")
-        index.writeText("{}")
+        val db = File(folder.root, "databases/frogreader.db").apply {
+            parentFile!!.mkdirs()
+            writeText("sqlite")
+        }
         assertTrue(existingReaderFiles(folder.root))
-        index.delete()
+        db.delete()
         File(folder.root, "books/book.epub").writeText("content")
         assertTrue(existingReaderFiles(folder.root))
     }

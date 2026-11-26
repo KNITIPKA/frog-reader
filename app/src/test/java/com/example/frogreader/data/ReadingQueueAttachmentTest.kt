@@ -2,7 +2,6 @@ package com.example.frogreader.data
 
 import android.net.Uri
 import com.example.frogreader.data.backup.BackupArchive
-import com.example.frogreader.data.backup.BackupArchive.resolveDocument
 import com.example.frogreader.data.model.*
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -189,12 +188,10 @@ class ReadingQueueAttachmentTest {
         val book = repo.importBook(uri)
         repo.addLibraryBookToReadingQueue(book.id)
         val out = ByteArrayOutputStream()
-        BackupArchive.write(out, repo.backupDocument(), ReadingStats(), BackupSettings(), BackupMode.FULL, "test", 1,
-            bookFile = repo::bookFileFor, coverFile = repo::coverFileFor)
+        BackupArchive.write(out, root, BackupSettings(), BackupMode.FULL, "test", 1)
         booksDir.deleteRecursively()
-        val doc = BackupArchive.read(out.toByteArray().inputStream(), booksDir, coversDir)
-            .resolveDocument(booksDir, coversDir)
-        repo.replaceAll(doc.books, doc.shelves, doc.readingQueue)
+        BackupArchive.restore(out.toByteArray().inputStream(), root, booksDir, coversDir)
+        repo.reloadAndSweepAfterRestore()
         val restarted = repository()
         val opened = restarted.startReadingQueueEntry(restarted.readingQueue.value.single().id)
         assertEquals(book.id, opened.id)
@@ -246,12 +243,10 @@ class ReadingQueueAttachmentTest {
         val attachment = original.copy(coverFileName = cover.name)
         repo.saveReadingQueueEntry(null, "Later", "Author", "My note", attachment)
         val out = ByteArrayOutputStream()
-        BackupArchive.write(out, repo.backupDocument(), ReadingStats(), BackupSettings(), BackupMode.FULL, "test", 1,
-            bookFile = repo::bookFileFor, coverFile = repo::coverFileFor)
+        BackupArchive.write(out, root, BackupSettings(), BackupMode.FULL, "test", 1)
         booksDir.deleteRecursively(); coversDir.deleteRecursively()
-        val restored = BackupArchive.read(out.toByteArray().inputStream(), booksDir, coversDir)
-            .resolveDocument(booksDir, coversDir)
-        repo.replaceAll(restored.books, restored.shelves, restored.readingQueue)
+        BackupArchive.restore(out.toByteArray().inputStream(), root, booksDir, coversDir)
+        repo.reloadAndSweepAfterRestore()
         val restarted = repository()
         assertTrue(restarted.books.value.isEmpty())
         val entry = restarted.readingQueue.value.single()
@@ -264,10 +259,10 @@ class ReadingQueueAttachmentTest {
         val repo = repository()
         repo.saveReadingQueueEntry(null, "Later", "Author", "My note", repo.prepareReadingQueueAttachment(uri))
         val out = ByteArrayOutputStream()
-        BackupArchive.write(out, repo.backupDocument(), ReadingStats(), BackupSettings(), BackupMode.DATA, "test", 1)
+        BackupArchive.write(out, root, BackupSettings(), BackupMode.DATA, "test", 1)
         booksDir.deleteRecursively(); coversDir.deleteRecursively()
-        val doc = BackupArchive.read(out.toByteArray().inputStream(), booksDir, coversDir).resolveDocument(booksDir, coversDir)
-        repo.replaceAll(doc.books, doc.shelves, doc.readingQueue)
+        BackupArchive.restore(out.toByteArray().inputStream(), root, booksDir, coversDir)
+        repo.reloadAndSweepAfterRestore()
         val restored = repository().readingQueue.value.single()
         assertNull(restored.attachment!!.fileName)
         assertEquals("From the file", restored.attachment.title)

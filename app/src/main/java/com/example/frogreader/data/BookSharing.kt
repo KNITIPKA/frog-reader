@@ -14,6 +14,7 @@ import java.util.UUID
 internal data class BookTransferFormat(val extension: String, val mimeType: String)
 
 internal fun bookTransferFormat(format: BookFormat, nativeLabel: String?): BookTransferFormat = when (format) {
+    BookFormat.PDF -> BookTransferFormat("pdf", "application/pdf")
     BookFormat.TXT -> BookTransferFormat("txt", "text/plain")
     BookFormat.MD -> BookTransferFormat("md", "text/markdown")
     BookFormat.EPUB -> BookTransferFormat("epub", "application/epub+zip")
@@ -45,7 +46,7 @@ internal data class SharedBookFile(val file: File, val mimeType: String, val tit
 /** Shares a separate snapshot, so later edits/removal cannot change an attachment being sent. */
 internal object BookSharing {
     suspend fun prepare(repository: BookRepository, cacheDir: File, bookId: String): SharedBookFile = withContext(Dispatchers.IO) {
-        val book = repository.bookById(bookId) ?: throw IOException("Book no longer exists.")
+        val book = repository.ensurePdfAnnotations(bookId) ?: throw IOException("Book no longer exists.")
         val source = repository.bookFileFor(book) ?: throw IOException("Book file is missing.")
         val nativeLabel = runCatching { repository.metadataFileInfo(book).label }.getOrNull()
         val format = bookTransferFormat(book.format, nativeLabel)

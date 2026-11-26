@@ -3,44 +3,21 @@
    data_extraction_rules.xml instead, so any change here needs a matching change
    there.
 
-   Naming an <include> switches Auto Backup from "everything" to "only this", and
-   that is the entire point of this file: the default swept up filesDir, which
-   holds the book files themselves. Auto Backup has a 25 MB quota per app and
-   drops the WHOLE backup when it is exceeded, so a library of any size meant no
-   cloud backup at all — silently.
-
-   What is worth uploading is only what the user cannot get back: quotes, notes,
-   ratings, reading positions. That is a few hundred KB. Books are re-downloadable
-   and covers, extracted images and pagination are all regenerated from them.
+   Auto Backup has a 25 MB quota per app and drops the WHOLE backup when
+   exceeded, so only irreplaceable user data (the SQLite database, DataStore
+   preferences, and user-imported custom fonts) is included here.
 -->
 <full-backup-content>
-    <!-- Library metadata and shelves. -->
-    <include domain="file" path="library.json"/>
-    <!-- Irreplaceable: quotes, notes, bookmarks, ratings, reviews, statuses. -->
-    <include domain="file" path="userdata.json"/>
-    <!-- Reading positions. -->
-    <include domain="file" path="progress.json"/>
-    <!-- Per-day reading time. -->
-    <include domain="file" path="reading_stats.json"/>
-    <!-- DataStore Preferences: reader and app settings. -->
+    <!-- Primary SQLite database (books, shelves, quotes, bookmarks, queue, log, stats, achievements). -->
+    <include domain="file" path="databases/frogreader.db"/>
+    <include domain="file" path="databases/frogreader.db-wal"/>
+    <!-- DataStore Preferences: reader and app settings (including profile avatar). -->
     <include domain="file" path="datastore/"/>
+    <!-- User-imported custom fonts. -->
+    <include domain="file" path="fonts/"/>
 
-    <!-- The .tmp and .bak siblings of the files above are write-path scaffolding.
-         Restoring a half-written .tmp over a good file would be worse than
-         restoring nothing. -->
-    <exclude domain="file" path="library.json.tmp"/>
-    <exclude domain="file" path="library.json.bak"/>
-    <exclude domain="file" path="userdata.json.tmp"/>
-    <exclude domain="file" path="userdata.json.bak"/>
-    <exclude domain="file" path="progress.json.tmp"/>
-    <exclude domain="file" path="progress.json.bak"/>
-    <exclude domain="file" path="reading_stats.json.tmp"/>
-    <exclude domain="file" path="reading_stats.json.bak"/>
-
-    <!-- Deliberately NOT backed up, and each for its own reason:
-         books/, covers/, images/, pagination/, fonts/ — large and regenerable.
-         boot_hints — a cold-start theme hint, re-derived on first launch.
-         frog_scanned_folders — persisted SAF tree URIs. A URI permission belongs
-         to this install; restoring the URI onto a new device would leave a folder
-         the app is no longer allowed to read. -->
+    <!-- Transient SQLite shared-memory / rollback files must never be restored. -->
+    <exclude domain="file" path="databases/frogreader.db-shm"/>
+    <exclude domain="file" path="databases/frogreader.db-journal"/>
+    <exclude domain="file" path="databases/frogreader.db.pre_restore_bak"/>
 </full-backup-content>

@@ -21,8 +21,9 @@ internal data class FirstLaunchHistory(
 
 /** A stored empty library still proves prior use; backup copies count after an interrupted write. */
 internal fun existingReaderFiles(filesDir: File): Boolean =
-    listOf("library.json", "userdata.json", "progress.json", "reading_stats.json")
-        .any { name -> listOf(name, "$name.bak", "$name.tmp").any { File(filesDir, it).exists() } } ||
+    File(File(filesDir, "databases"), "frogreader.db").exists() ||
+        listOf("library.json", "userdata.json", "progress.json", "reading_stats.json")
+            .any { name -> listOf(name, "$name.bak", "$name.tmp").any { File(filesDir, it).exists() } } ||
         listOf("books", "fonts").any { File(filesDir, it).listFiles()?.isNotEmpty() == true }
 
 /** Merge the welcome's choices into the latest preferences, retaining unrelated changes. */

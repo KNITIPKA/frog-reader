@@ -6,33 +6,29 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * What a backup file contains.
+ * Metadata and settings models for FrogReader SQLite backup archives.
  *
- * Deliberately NOT the on-disk layout. Inside a backup a [Book] is one whole
- * object, with its quotes, its rating and its reading position together, even
- * though the app stores those in three separate documents. That indirection is
- * the point: splitting the store, reordering fields, or moving to a different
- * storage engine entirely does not invalidate backups already written, and a
- * backup can be read by a version of the app that lays its files out
- * differently.
- *
- * It also means the file is legible. Unzip it and library.json is a list of
- * books with their quotes attached — something a person can read, check, and if
- * it ever comes to it, repair by hand.
+ * Archive layout (format v4):
+ * - `manifest.json`        — written first so a reader can inspect metadata in O(1)
+ * - `database/frogreader.db` — self-contained compacted SQLite snapshot (`VACUUM INTO`)
+ * - `settings.json`        — reader and app settings (with portable `fonts/<name>` paths and avatar)
+ * - `fonts/<name>`         — user-imported custom fonts (included in both DATA and FULL modes)
+ * - `covers/<name>`        — Reading Log covers in every mode; book/queue covers in FULL mode
+ * - `books/<id>.<ext>`     — ebook and PDF files in FULL mode only
  */
 
 @Serializable
 enum class BackupMode {
-    /** Everything the user made. Hundreds of KB; small enough to send. */
+    /** User data, database, settings, custom fonts, and Reading Log photos. */
     DATA,
 
-    /** The same, plus the book files and their covers. */
+    /** Everything in [DATA], plus ebook/PDF files and library/queue covers. */
     FULL,
 }
 
 @Serializable
 data class BackupManifest(
-    /** Bumped only for a change old readers could not survive. */
+    /** Archive format version; v4 uses native SQLite (`database/frogreader.db`). */
     val formatVersion: Int = FORMAT_VERSION,
     val appVersion: String = "",
     val createdAtMillis: Long = 0L,
@@ -44,22 +40,9 @@ data class BackupManifest(
     val readingLogCount: Int = 0,
 ) {
     companion object {
-        // Version 2 adds TXT/MD enum values that version 1 readers cannot decode.
-        const val FORMAT_VERSION = 2
+        // Version 4 switches the archive payload to a native SQLite snapshot (`database/frogreader.db`).
+        const val FORMAT_VERSION = 4
     }
-}
-
-/** The library itself: whole books, and the shelves they sit in. */
-@Serializable
-data class BackupDocument(
-    val books: List<Book> = emptyList(),
-    val shelves: List<Shelf> = emptyList(),
-    @SerialName("readingList")
-    val readingQueue: List<ReadingQueueEntry> = emptyList(),
-    val readingLog: List<ReadingLogEntry> = emptyList(),
-) {
-    /** Assets include private reading-queue attachments, without exposing them as library books. */
-    val assetBooks: List<Book> get() = (books + readingQueue.mapNotNull { it.attachment }).distinctBy { it.id }
 }
 
 @Serializable

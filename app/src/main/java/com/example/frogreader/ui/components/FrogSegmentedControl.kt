@@ -179,7 +179,7 @@ internal fun FrogSegmentedControl(
                 }
             },
         ) {
-            SegmentContentRow(
+            SegmentContentRow( 
                 actualWeights, gapPx, rtl,
                 Modifier.fillMaxWidth().height(IntrinsicSize.Min).onSizeChanged { size = it },
             ) { index ->

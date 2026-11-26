@@ -1,7 +1,7 @@
 package com.example.frogreader.data
 
 import com.example.frogreader.data.backup.BackupArchive
-import com.example.frogreader.data.backup.BackupArchive.resolveDocument
+import com.example.frogreader.data.db.DatabaseManager
 import com.example.frogreader.data.model.*
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -38,7 +38,7 @@ class ReadingLogPersistenceTest {
         assertEquals(ReadingLogSource.PAPER, paper.source)
         assertNull(reopened.readingLog.value.first().finishedOn)
         assertTrue(reopened.books.value.isEmpty())
-        assertFalse(File(directory, "library.json").exists())
+        assertTrue(StoreFixture.booksOnDisk(directory).isEmpty())
     }
 
     @Test fun `invalid dates and impossible date ranges do not persist`() = runTest {
@@ -108,9 +108,9 @@ class ReadingLogPersistenceTest {
         val repo = BookRepository()
         repo.markStarted("log-book")
         assertTrue(repo.readingLog.value.single().lastOpenedAtMillis!! > 2)
-        val original = File(directory, "userdata.json").readBytes()
+        val beforeEntry = BookRepository().readingLog.value.single()
         repo.saveProgress("log-book", ReadingProgress(fraction = .4f))
-        assertArrayEquals(original, File(directory, "userdata.json").readBytes())
+        assertEquals(beforeEntry, BookRepository().readingLog.value.single())
     }
 
     @Test fun `logged rereading starts a fresh instance and preserves the old review and time`() = runTest {
@@ -227,7 +227,7 @@ class ReadingLogPersistenceTest {
         val previousReading = repo.deleteReadingLogEntry(old.id)?.previousReading
         repo.saveProgress("log-book", ReadingProgress(fraction = .2f))
         assertTrue(BookRepository().readingLog.value.isEmpty())
-        assertTrue(StoreFixture.tombstonesOnDisk(directory).containsKey(old.id))
+        assertNull(DatabaseManager.getDatabase(directory).readingListsDao().getLogEntryById(old.id))
         repo.restoreReadingLogEntry(old, 0, previousReading)
         assertEquals(old.id, repo.bookById("log-book")!!.activeReadingLogId)
         assertFalse(repo.bookById("log-book")!!.suppressReadingLog)
@@ -240,7 +240,7 @@ class ReadingLogPersistenceTest {
         repo.saveReadingLogEntry(ReadingLogEntry("D", "D"))
         repo.reorderReadingLog(listOf("C", "B", "C", "A", "missing"))
         assertEquals(listOf("C", "A", "D"), BookRepository().readingLog.value.map { it.id })
-        assertTrue(StoreFixture.tombstonesOnDisk(directory).containsKey("B"))
+        assertNull(DatabaseManager.getDatabase(directory).readingListsDao().getLogEntryById("B"))
     }
 
     @Test fun `partial date chronology persists both axes without changing manual order or hidden peers`() = runTest {
@@ -300,14 +300,13 @@ class ReadingLogPersistenceTest {
         val date = ReadingLogDate(2010)
         for (id in listOf("a", "b")) repo.saveReadingLogEntry(ReadingLogEntry(id, id, finishedOn = date))
         val old = repo.readingLog.value
-        val temp = File(directory, "userdata.json.tmp").apply { mkdirs() }
-        File(temp, "blocked").writeText("blocked")
+        StoreFixture.blockWrites(directory)
         try {
             try { repo.reorderReadingLogDateGroup(listOf("b", "a"), false, date); fail("Must fail") }
             catch (_: IOException) { }
             assertEquals(old, repo.readingLog.value)
             assertEquals(old, BookRepository().readingLog.value)
-        } finally { temp.deleteRecursively() }
+        } finally { StoreFixture.unblockWrites(directory) }
     }
 
     @Test fun `actual ebook format snapshots survive deletion and manual entries never inherit synthetic EPUB`() = runTest {
@@ -334,22 +333,20 @@ class ReadingLogPersistenceTest {
         assertEquals(listOf(id), BookRepository().readingLog.value.map { it.id })
     }
 
-    @Test fun `failed log write publishes nothing and corrupt userdata remains protected`() = runTest {
+    @Test fun `failed log write publishes nothing and corrupt database remains protected`() = runTest {
         val repo = BookRepository()
         repo.saveReadingLogEntry(ReadingLogEntry("", "A"))
         val old = repo.readingLog.value
-        val temp = File(directory, "userdata.json.tmp").apply { mkdirs() }
-        File(temp, "blocked").writeText("blocked")
+        StoreFixture.blockWrites(directory)
         try {
             try { repo.saveReadingLogEntry(ReadingLogEntry("", "B")); fail("Must fail") }
             catch (_: IOException) { }
             assertEquals(old, repo.readingLog.value)
-        } finally { temp.deleteRecursively() }
-        StoreFixture.clear(directory)
-        File(directory, "userdata.json").writeText("broken")
+        } finally { StoreFixture.unblockWrites(directory) }
+        StoreFixture.corruptDatabase(directory, ">>> CORRUPTED SQLITE <<<")
         try { BookRepository().saveReadingLogEntry(ReadingLogEntry("", "C")); fail("Must protect") }
         catch (_: LibraryIndexCorruptedException) { }
-        assertEquals("broken", File(directory, "userdata.json").readText())
+        assertEquals(">>> CORRUPTED SQLITE <<<", StoreFixture.databaseFile(directory).readText())
     }
 
     @Test fun `data and full backups retain log photos dates manual order and reviews`() = runTest {
@@ -365,17 +362,15 @@ class ReadingLogPersistenceTest {
         val expected = repo.readingLog.value
         for (mode in BackupMode.entries) {
             val out = ByteArrayOutputStream()
-            BackupArchive.write(out, repo.backupDocument(), ReadingStats(), BackupSettings(), mode, "test", 1,
-                logCoverFile = { repo.coverFileFor(it) })
+            BackupArchive.write(out, directory, BackupSettings(), mode, "test", 1)
             cover.delete()
-            val contents = BackupArchive.read(out.toByteArray().inputStream(), File(directory, "books"), cover.parentFile)
+            val restored = BackupArchive.restore(out.toByteArray().inputStream(), directory, File(directory, "books"), cover.parentFile)
             assertTrue(cover.exists())
-            assertEquals(2, contents.manifest.readingLogCount)
-            val resolved = contents.resolveDocument(File(directory, "books"), cover.parentFile!!)
-            repo.replaceAll(resolved.books, resolved.shelves, resolved.readingQueue, resolved.readingLog)
+            assertEquals(2, restored.manifest.readingLogCount)
+            repo.reloadAndSweepAfterRestore()
             assertEquals(expected.map { it.copy(updatedAtMillis = 0) },
                 BookRepository().readingLog.value.map { it.copy(updatedAtMillis = 0) })
-            assertEquals(cover.name, resolved.readingLog.last().coverFileName)
+            assertEquals(cover.name, BookRepository().readingLog.value.last().coverFileName)
         }
     }
 
@@ -390,10 +385,9 @@ class ReadingLogPersistenceTest {
         val expected = repo.readingLog.value.map { it.copy(updatedAtMillis = 0) }
         for (mode in BackupMode.entries) {
             val out = ByteArrayOutputStream()
-            BackupArchive.write(out, repo.backupDocument(), ReadingStats(), BackupSettings(), mode, "test", 1)
-            val contents = BackupArchive.read(out.toByteArray().inputStream(), File(directory, "books"), cover.parentFile)
-            val resolved = contents.resolveDocument(File(directory, "books"), cover.parentFile!!)
-            repo.replaceAll(resolved.books, resolved.shelves, resolved.readingQueue, resolved.readingLog)
+            BackupArchive.write(out, directory, BackupSettings(), mode, "test", 1)
+            BackupArchive.restore(out.toByteArray().inputStream(), directory, File(directory, "books"), cover.parentFile)
+            repo.reloadAndSweepAfterRestore()
             assertEquals(expected, BookRepository().readingLog.value.map { it.copy(updatedAtMillis = 0) })
         }
     }

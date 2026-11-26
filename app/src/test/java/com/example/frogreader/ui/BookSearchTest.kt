@@ -92,4 +92,15 @@ class BookSearchTest {
         // themselves; the book found only by its blurb comes after both.
         assertEquals(listOf("b:named", "s:s1", "b:blurb"), entries.map { it.id })
     }
+
+    @Test
+    fun testMultilingualScriptNormalizedSearchMatchesUkrainianArabicAndHebrew() {
+        val ukBook = book("uk", title = "П’ять хвилин тиші", author = "Сергій Жадан")
+        val arBook = book("ar", title = "كِتَابُ الزَّمَانِ", author = "طه حسين")
+        val heBook = book("he", title = "סֵפֶר הַזְּמַן")
+
+        assertEquals(listOf("uk"), searchBooks(listOf(ukBook, arBook, heBook), "п'ять").map { it.id })
+        assertEquals(listOf("ar"), searchBooks(listOf(ukBook, arBook, heBook), "كتاب الزمان").map { it.id })
+        assertEquals(listOf("he"), searchBooks(listOf(ukBook, arBook, heBook), "ספר הזמן").map { it.id })
+    }
 }

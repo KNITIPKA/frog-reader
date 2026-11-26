@@ -279,6 +279,18 @@ fun ImportPreviewScreen(
                 )
             }
 
+            if (staged.format == com.example.frogreader.data.model.BookFormat.PDF) {
+                val fields = linkedMapOf<String, String>()
+                if (metadata.genres.isNotEmpty()) fields[stringResource(R.string.details_genres)] = metadata.genres.joinToString(", ")
+                metadata.series?.let { fields[stringResource(R.string.details_series)] = listOfNotNull(it,
+                    metadata.seriesNumber?.toString()?.removeSuffix(".0")).joinToString(" · ") }
+                metadata.language?.let { fields[stringResource(R.string.details_language)] = it }
+                metadata.isbn?.let { fields[stringResource(R.string.details_isbn)] = it }
+                if (metadata.translators.isNotEmpty()) fields[stringResource(R.string.details_translators)] = metadata.translators.joinToString(", ")
+                fields.putAll(metadata.additionalMetadata)
+                EmbeddedMetadataSection(fields, Modifier.padding(horizontal = 24.dp, vertical = 12.dp))
+            }
+
             Spacer(Modifier.height(28.dp))
         }
 
