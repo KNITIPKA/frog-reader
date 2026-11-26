@@ -73,10 +73,14 @@ temporary local debug certificate (SHA-256
 `a93ff3d583a37246449213a267e9e4f4f4d78adb878e0202fb5b3abdf5458603`). Starting
 with **BETA 3**, Frog Reader uses a permanent external **PKCS12 RSA-4096**
 production release keystore (`CN=KNITIPKA`) compatible with Google Play and
-future in-place updates. Because Android enforces certificate continuity,
-upgrading from BETA 2 or earlier to BETA 3 requires exporting a backup in-app,
-uninstalling the older debug-signed beta, installing BETA 3, and restoring the
-backup. See [Android app signing](https://developer.android.com/studio/publish/app-signing).
+future in-place updates. Because Android enforces certificate continuity and
+BETA 3 switches from pre-SQLite storage/backups to Room 3 + SQLite backup
+format v4, moving from BETA 2 or earlier to BETA 3 requires a clean reinstall:
+uninstall the older debug-signed beta, install BETA 3, and re-import your
+original ebook/PDF files (pre-SQLite BETA 2 format v2 backups cannot be
+restored directly into BETA 3). From BETA 3 onward, both in-place updates and
+format v4 SQLite backup restores work seamlessly. See
+[Android app signing](https://developer.android.com/studio/publish/app-signing).
 
 ## Distribution
 

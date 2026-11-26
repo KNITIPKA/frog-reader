@@ -2,14 +2,14 @@
 
 ## BETA 3 — 2026-11-26
 
-Third beta release, introducing unified Room 3 + SQLite FTS5 storage, native PDF reading, and the native Rust reading engine (`frogreader-core`). The Android release label is **BETA 3**, version code **7**, requiring Android 9.0+ (`minSdk 28`). Because BETA 3 transitions to a permanent production signing key, upgrading from earlier debug-signed beta builds requires exporting a backup first and performing a clean reinstall.
+Third beta release, introducing unified Room 3 + SQLite FTS5 storage, native PDF reading, and the native Rust reading engine (`frogreader-core`). The Android release label is **BETA 3**, version code **7**, requiring Android 9.0+ (`minSdk 28`). Moving from BETA 2 or earlier to BETA 3 requires a clean reinstall due to both the new permanent RSA-4096 signing certificate and the switch from pre-SQLite storage/backups to Room 3 + SQLite backup format v4; pre-SQLite BETA 2 (format v2) backups cannot be restored directly—re-import your original ebook/PDF files. From BETA 3 onward, both in-place updates and format v4 SQLite backup restores work seamlessly.
 
 ### Storage, database and backups
 
 - Migrated all library metadata, reading progress, shelves, quotes, bookmarks, Reading Queue, Reading Log, daily reading stats, achievement progress, and search indexes into a single native SQLite 3.50+ database (`files/databases/frogreader.db`) via **Room 3 (`androidx.room3`)** and **`BundledSQLiteDriver`** (`WAL` mode, foreign keys enforced, exported schemas).
 - Added FTS5 instant full-text search across the library, quotes, bookmarks, and Reading Log using stable `doc_id` mappings that survive compaction.
 - Switched `BookRepository` to ACID minimal-diff writes inside `withWriteTransaction` blocks through `DatabaseManager`.
-- Upgraded backups to **format version 4**: embeds a compacted, journal-free SQLite snapshot (`VACUUM INTO`), relativized custom font paths in `settings.json`, covers, and optional book files; restore validates staged snapshots with `PRAGMA quick_check`, `PRAGMA foreign_key_check`, and Room schema checks before swapping with `.pre_restore_bak` rollback protection.
+- Upgraded backups to **format version 4**: embeds a compacted, journal-free SQLite snapshot (`VACUUM INTO`), relativized custom font paths in `settings.json`, covers, and optional book files; restore validates staged snapshots with `PRAGMA quick_check`, `PRAGMA foreign_key_check`, and Room schema checks before swapping with `.pre_restore_bak` rollback protection. Pre-SQLite backups (`formatVersion < 4`, such as BETA 2 format v2) are rejected and cannot be restored into BETA 3; from BETA 3 onward, format v4 SQLite backup restores work seamlessly.
 
 ### Native PDF support
 
@@ -28,7 +28,7 @@ Third beta release, introducing unified Room 3 + SQLite FTS5 storage, native PDF
 
 ### Signing, packaging and distribution
 
-- Switched to a permanent RSA-4096 PKCS12 release signing key compatible with Google Play and future in-place updates (upgrading from older debug-signed beta builds requires exporting a backup and doing a clean reinstall).
+- Switched to a permanent RSA-4096 PKCS12 release signing key compatible with Google Play and future in-place updates. Moving from BETA 2 or earlier to BETA 3 requires a clean reinstall (pre-SQLite BETA 2 format v2 backups cannot be restored into BETA 3—re-import original ebook/PDF files); from BETA 3 onward, both in-place updates and format v4 SQLite backup restores work seamlessly.
 - Added F-Droid and reproducible source build readiness: `dependenciesInfo` is excluded from both APKs and AABs, and release builds default to unsigned when external signing credentials are not supplied.
 - Unified the application as **Frog Reader** (`knitipka.frogreader`), retiring the temporary `-PrustEngineApp=true` / `.rust` parallel app split and removing stray partial locale overlays.
 
